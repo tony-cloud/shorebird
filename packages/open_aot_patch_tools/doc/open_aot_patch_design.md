@@ -3,6 +3,12 @@
 This package produces compact, flavor-aware AOT patch artifacts without relying
 on `DART_DYNAMIC_MODULES` or the Dart bytecode interpreter.
 
+The public-source boundary is documented in
+`../../../OPEN_SOURCE_REPLACEMENTS.md`. The Shorebird runtime updater itself is
+public at `shorebirdtech/updater`; the closed replacement work in this checkout
+targets the hosted management/auth/console services and the independent compact
+AOT patch generation flow.
+
 ## Runtime Model
 
 Patches are AOT snapshot artifacts. The engine selects patched isolate snapshot
@@ -36,6 +42,20 @@ specific transition such as `free -> pro` rather than a generic pro artifact.
 `verify --artifact-sha256=<hash>` adds hash pinning for the whole encrypted
 delivery artifact, which should be used alongside transport security or a
 separate signing layer.
+
+Limited offline licenses should set `offline_expires_at` in the patch metadata.
+That timestamp is part of the AES-GCM authenticated metadata. Devices must
+refuse to install or reconstruct an expired patch, and an already-installed
+patch must be removed at startup once the timestamp passes unless the server
+has already supplied a newer valid patch.
+
+The management server remains Shorebird-compatible by keeping the standard
+`patch_available`, `patch`, and `rolled_back_patch_numbers` response shape.
+When an installed limited-offline patch has expired and no newer valid patch is
+available, the server returns `patch_available: false` and includes that patch
+number in `rolled_back_patch_numbers`. The open updater can also read the
+optional `remove_patch` object, which contains the same patch number,
+`reason: "offline_expired"`, and `offline_expires_at`.
 
 ## Compact Payloads
 
@@ -102,6 +122,7 @@ dart run open_aot_patch_tools link \
   --target-os=ios \
   --target-arch=arm64 \
   --obfuscation-map-hash=<sha256-of-base-obfuscation-map> \
+  --offline-expires-at=2030-01-01T00:00:00Z \
   --full-snapshot=true
 ```
 

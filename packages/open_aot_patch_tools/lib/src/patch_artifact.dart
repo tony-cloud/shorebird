@@ -36,6 +36,7 @@ class PatchMetadata {
     this.baseFlavorId,
     this.baseLicenseType,
     this.obfuscationMapHash,
+    this.offlineExpiresAt,
   });
 
   /// Reads metadata from the JSON representation used by patch artifacts.
@@ -52,6 +53,7 @@ class PatchMetadata {
     targetOs: _string(json, 'target_os'),
     targetArch: _string(json, 'target_arch'),
     obfuscationMapHash: json['obfuscation_map_hash'] as String?,
+    offlineExpiresAt: _optionalIso8601UtcString(json, 'offline_expires_at'),
   );
 
   /// Stable application identifier.
@@ -90,6 +92,23 @@ class PatchMetadata {
   /// Optional hash of the obfuscation map used by base and patch builds.
   final String? obfuscationMapHash;
 
+  /// Optional UTC timestamp after which an installed offline patch must be
+  /// removed if no newer patch is available.
+  final String? offlineExpiresAt;
+
+  /// Parsed [offlineExpiresAt], or null when this patch has no offline limit.
+  DateTime? get offlineExpiresAtDateTime => offlineExpiresAt == null
+      ? null
+      : DateTime.parse(offlineExpiresAt!).toUtc();
+
+  /// Returns true when the offline validity window has expired.
+  bool isOfflineExpired({DateTime? now}) {
+    final expiresAt = offlineExpiresAtDateTime;
+    if (expiresAt == null) return false;
+    final checkedAt = (now ?? DateTime.now().toUtc()).toUtc();
+    return !checkedAt.isBefore(expiresAt);
+  }
+
   /// Converts this metadata to the stable JSON map used as AES-GCM AAD.
   Map<String, Object?> toJson() => {
     'app_id': appId,
@@ -104,6 +123,7 @@ class PatchMetadata {
     'target_os': targetOs,
     'target_arch': targetArch,
     if (obfuscationMapHash != null) 'obfuscation_map_hash': obfuscationMapHash,
+    if (offlineExpiresAt != null) 'offline_expires_at': offlineExpiresAt,
   };
 }
 
@@ -368,6 +388,8 @@ void verifyMetadata(
   required String licenseType,
   String? baseFlavorId,
   String? baseLicenseType,
+  DateTime? now,
+  bool allowExpired = false,
 }) {
   if (baseFlavorId != null && metadata.baseFlavorId != baseFlavorId) {
     throw StateError(
@@ -391,7 +413,19 @@ void verifyMetadata(
       'Patch license "${metadata.licenseType}" does not match "$licenseType".',
     );
   }
+  if (!allowExpired && metadata.isOfflineExpired(now: now)) {
+    throw StateError(
+      'Patch offline license expired at ${metadata.offlineExpiresAt}.',
+    );
+  }
 }
+
+/// Returns true when a locally installed patch must be removed before startup
+/// because its offline license validity has expired.
+bool shouldRemoveInstalledPatchOffline(
+  PatchMetadata metadata, {
+  DateTime? now,
+}) => metadata.isOfflineExpired(now: now);
 
 /// Reconstructs final patch snapshot bytes from a compact payload.
 List<int> reconstructPatchSnapshot({
@@ -476,6 +510,23 @@ String _string(Map<String, Object?> json, String key) {
     throw FormatException('Expected non-empty string field "$key".');
   }
   return value;
+}
+
+String? _optionalIso8601UtcString(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is! String || value.isEmpty) {
+    throw FormatException('Expected non-empty string field "$key".');
+  }
+  return _normalizeIso8601Utc(value, key);
+}
+
+String _normalizeIso8601Utc(String value, String name) {
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    throw FormatException('Expected ISO-8601 UTC timestamp for "$name".');
+  }
+  return parsed.toUtc().toIso8601String();
 }
 
 _CompactPayload _compactPayload(

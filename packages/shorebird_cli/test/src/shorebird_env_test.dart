@@ -11,6 +11,7 @@ import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/shorebird_cli_command_runner.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
+import 'package:shorebird_cli/src/user_config.dart';
 import 'package:test/test.dart';
 
 import 'mocks.dart';
@@ -21,6 +22,7 @@ void main() {
     late Platform platform;
     late Directory shorebirdRoot;
     late Uri platformScript;
+    late UserConfig userConfig;
     late ShorebirdEnv shorebirdEnv;
 
     R runWithOverrides<R>(R Function() body) {
@@ -29,6 +31,7 @@ void main() {
         values: {
           platformRef.overrideWith(() => platform),
           isJsonModeRef.overrideWith(() => false),
+          userConfigRef.overrideWith(() => userConfig),
         },
       );
     }
@@ -42,6 +45,11 @@ void main() {
         ..createSync(recursive: true)
         ..writeAsStringSync(flutterRevision, flush: true);
       platform = MockPlatform();
+      userConfig = UserConfig(
+        file: File(
+          p.join(Directory.systemTemp.createTempSync().path, 'config.json'),
+        ),
+      );
       shorebirdEnv = runWithOverrides(ShorebirdEnv.new);
 
       when(() => platform.environment).thenReturn(const {});
@@ -791,6 +799,47 @@ base_url: https://example.com''');
             getCurrentDirectory: () => directory,
           ),
           equals(Uri.parse('https://example.com')),
+        );
+      });
+
+      test('falls back to user config', () {
+        userConfig.setHostedUri(Uri.parse('https://config.example.com'));
+
+        expect(
+          runWithOverrides(() => shorebirdEnv.hostedUri),
+          equals(Uri.parse('https://config.example.com')),
+        );
+      });
+
+      test('prefers env over shorebird.yaml and user config', () {
+        final directory = Directory.systemTemp.createTempSync();
+        File(p.join(directory.path, 'shorebird.yaml')).writeAsStringSync('''
+app_id: test-id
+base_url: https://yaml.example.com''');
+        userConfig.setHostedUri(Uri.parse('https://config.example.com'));
+        when(
+          () => platform.environment,
+        ).thenReturn({'SHOREBIRD_HOSTED_URL': 'https://env.example.com'});
+
+        expect(
+          IOOverrides.runZoned(
+            () => runWithOverrides(() => shorebirdEnv.hostedUri),
+            getCurrentDirectory: () => directory,
+          ),
+          equals(Uri.parse('https://env.example.com')),
+        );
+      });
+
+      test('persists hosted url from env to user config', () {
+        when(
+          () => platform.environment,
+        ).thenReturn({'SHOREBIRD_HOSTED_URL': 'https://env.example.com'});
+
+        runWithOverrides(shorebirdEnv.persistHostedUriFromEnvironment);
+
+        expect(
+          userConfig.hostedUri,
+          equals(Uri.parse('https://env.example.com')),
         );
       });
 

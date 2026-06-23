@@ -144,6 +144,7 @@ environment:
         () => shorebirdEnv.getPubspecYaml(),
       ).thenReturn(Pubspec.parse(pubspecYamlContent));
       when(() => shorebirdEnv.hasShorebirdYaml).thenReturn(false);
+      when(() => shorebirdEnv.hostedUri).thenReturn(null);
       when(() => shorebirdEnv.pubspecContainsShorebirdYaml).thenReturn(false);
       when(() => shorebirdEnv.canAcceptUserInput).thenReturn(true);
       when(
@@ -784,6 +785,27 @@ flavors:
         ),
       );
     });
+
+    test(
+      'adds base_url to shorebird.yaml when self-hosted url is available',
+      () async {
+        when(
+          () => shorebirdEnv.hostedUri,
+        ).thenReturn(Uri.parse('https://updates.example.com'));
+
+        await runWithOverrides(command.run);
+
+        verify(
+          () => shorebirdYamlFile.writeAsStringSync(
+            any(
+              that: contains('''
+app_id: $appId
+base_url: https://updates.example.com'''),
+            ),
+          ),
+        );
+      },
+    );
 
     group('creates shorebird.yaml for an app with flavors', () {
       test('android only', () async {

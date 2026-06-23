@@ -45,6 +45,7 @@ void _link(Map<String, String> options) {
     targetOs: _required(options, 'target-os'),
     targetArch: _required(options, 'target-arch'),
     obfuscationMapHash: options['obfuscation-map-hash'],
+    offlineExpiresAt: _optionalIso8601Utc(options['offline-expires-at']),
   );
   final artifact = linkArtifacts(
     baseSnapshot: base,
@@ -85,6 +86,8 @@ void _verify(Map<String, String> options) {
     baseLicenseType: options['base-license-type'],
     flavorId: _required(options, 'flavor-id'),
     licenseType: _required(options, 'license-type'),
+    now: _optionalDateTime(options['now']),
+    allowExpired: _boolOption(options, 'allow-expired'),
   );
   final decrypted = encrypted.decrypt(readKey(_required(options, 'key-hex')));
   final basePath = options['base'];
@@ -129,6 +132,7 @@ void _dumpBlobs(Map<String, String> options) {
     final format = json['format'];
     if (format == artifactFormat) {
       final artifact = PatchArtifact.fromJson(json);
+      _checkOfflineExpiry(artifact.metadata, options);
       final reconstructed = _maybeReconstruct(
         artifact,
         basePath: options['base'],
@@ -167,6 +171,7 @@ void _dumpBlobs(Map<String, String> options) {
       final keyHex = options['key-hex'];
       if (keyHex != null) {
         final decrypted = encrypted.decrypt(readKey(keyHex));
+        _checkOfflineExpiry(encrypted.metadata, options);
         final reconstructed = _maybeReconstruct(
           decrypted,
           basePath: options['base'],
@@ -190,7 +195,10 @@ void _dumpBlobs(Map<String, String> options) {
     } else {
       throw const FormatException('not an open AOT patch artifact');
     }
-  } on Object {
+  } on FormatException {
+    if (options['key-hex'] != null || options['output'] != null) {
+      rethrow;
+    }
     report = {
       'path': input.path,
       'format': 'raw',
@@ -199,6 +207,20 @@ void _dumpBlobs(Map<String, String> options) {
     };
   }
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(report));
+}
+
+void _checkOfflineExpiry(
+  PatchMetadata metadata,
+  Map<String, String> options,
+) {
+  if (_boolOption(options, 'allow-expired')) {
+    return;
+  }
+  if (metadata.isOfflineExpired(now: _optionalDateTime(options['now']))) {
+    throw StateError(
+      'Patch offline license expired at ${metadata.offlineExpiresAt}.',
+    );
+  }
 }
 
 List<int>? _maybeReconstruct(
@@ -312,13 +334,27 @@ bool _boolOption(
   return value == 'true' || value == '1' || value == 'yes';
 }
 
+DateTime? _optionalDateTime(String? value) {
+  if (value == null || value.isEmpty) return null;
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    throw ArgumentError('Expected ISO-8601 timestamp, got $value');
+  }
+  return parsed.toUtc();
+}
+
+String? _optionalIso8601Utc(String? value) {
+  final parsed = _optionalDateTime(value);
+  return parsed?.toIso8601String();
+}
+
 void _usage() {
   stdout.writeln('''
 Usage:
-  open_aot_patch_tools dump-blobs --input=<file> [--key-hex=<64 hex chars>] [--base=<file>] [--output=<vmcode>]
+  open_aot_patch_tools dump-blobs --input=<file> [--key-hex=<64 hex chars>] [--base=<file>] [--output=<vmcode>] [--now=<iso8601>] [--allow-expired=true]
   open_aot_patch_tools compile-patch --gen-snapshot=<path> --kernel=<dill> --output=<file> [--snapshot-kind=app-aot-elf|app-aot-macho-dylib|app-aot-assembly] [--macho-object=<file>] [--obfuscate=true] [--load-obfuscation-map=<file>] [--save-obfuscation-map=<file>]
-  open_aot_patch_tools link --base=<file> --patch=<file> --output=<file> --app-id=<id> --app-build-id=<id> --flavor-id=<id> --license-type=<type> --sdk-hash=<hash> --target-os=<os> --target-arch=<arch> [--base-flavor-id=<id>] [--base-license-type=<type>] [--obfuscation-map-hash=<sha256>] [--full-snapshot=true]
+  open_aot_patch_tools link --base=<file> --patch=<file> --output=<file> --app-id=<id> --app-build-id=<id> --flavor-id=<id> --license-type=<type> --sdk-hash=<hash> --target-os=<os> --target-arch=<arch> [--base-flavor-id=<id>] [--base-license-type=<type>] [--obfuscation-map-hash=<sha256>] [--offline-expires-at=<iso8601>] [--full-snapshot=true]
   open_aot_patch_tools encrypt --input=<file> --output=<file> --key-id=<id> --key-hex=<64 hex chars> --nonce-hex=<24 hex chars>
-  open_aot_patch_tools verify --input=<file> --key-hex=<64 hex chars> --flavor-id=<id> --license-type=<type> [--base=<file>] [--artifact-sha256=<sha256>] [--base-flavor-id=<id>] [--base-license-type=<type>]
+  open_aot_patch_tools verify --input=<file> --key-hex=<64 hex chars> --flavor-id=<id> --license-type=<type> [--base=<file>] [--artifact-sha256=<sha256>] [--base-flavor-id=<id>] [--base-license-type=<type>] [--now=<iso8601>] [--allow-expired=true]
 ''');
 }

@@ -10,6 +10,7 @@ import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/shorebird_cli_command_runner.dart';
+import 'package:shorebird_cli/src/user_config.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 
 /// Exception thrown when the Shorebird cache appears to be corrupted.
@@ -278,11 +279,24 @@ class ShorebirdEnv {
     try {
       final baseUrl =
           platform.environment['SHOREBIRD_HOSTED_URL'] ??
-          getShorebirdYaml()?.baseUrl;
-      return baseUrl == null ? null : Uri.tryParse(baseUrl);
+          getShorebirdYaml()?.baseUrl ??
+          userConfig.hostedUri?.toString();
+      return _parseHostedUri(baseUrl);
     } on Exception {
       return null;
     }
+  }
+
+  /// Saves SHOREBIRD_HOSTED_URL into the CLI user config when it is set.
+  void persistHostedUriFromEnvironment() {
+    final uri = _parseHostedUri(platform.environment['SHOREBIRD_HOSTED_URL']);
+    if (uri == null) return;
+    userConfig.setHostedUri(uri);
+  }
+
+  Uri? _parseHostedUri(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    return Uri.tryParse(value.trim());
   }
 
   /// Whether the CLI can accept user input via stdin.

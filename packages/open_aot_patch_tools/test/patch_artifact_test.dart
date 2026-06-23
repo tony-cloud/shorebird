@@ -75,7 +75,7 @@ void main() {
   ];
   const nonce = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
-  PatchMetadata metadata() => const PatchMetadata(
+  PatchMetadata metadata({String? offlineExpiresAt}) => PatchMetadata(
     appId: 'app.test',
     appBuildId: '1.0.0+1',
     baseFlavorId: 'free',
@@ -88,6 +88,7 @@ void main() {
     targetOs: 'windows',
     targetArch: 'x64',
     obfuscationMapHash: 'obfuscated',
+    offlineExpiresAt: offlineExpiresAt,
   );
 
   test('encrypts and decrypts flavor-aware patch payloads', () {
@@ -177,6 +178,51 @@ void main() {
         licenseType: 'pro',
       ),
       throwsStateError,
+    );
+  });
+
+  test('offline expiry is authenticated metadata and enforced', () {
+    final expiresAt = DateTime.utc(2030).toIso8601String();
+    final expiredAt = DateTime.utc(2031);
+    final artifact = linkArtifacts(
+      baseSnapshot: utf8.encode('free'),
+      patchSnapshot: utf8.encode('pro'),
+      metadata: metadata(offlineExpiresAt: expiresAt),
+    );
+    final encrypted = encryptArtifact(
+      artifact: artifact,
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    expect(encrypted.metadata.toJson()['offline_expires_at'], expiresAt);
+    expect(
+      shouldRemoveInstalledPatchOffline(
+        encrypted.metadata,
+        now: DateTime.utc(2029),
+      ),
+      isFalse,
+    );
+    expect(
+      shouldRemoveInstalledPatchOffline(encrypted.metadata, now: expiredAt),
+      isTrue,
+    );
+    expect(
+      () => verifyMetadata(
+        encrypted.metadata,
+        flavorId: 'pro',
+        licenseType: 'pro',
+        now: expiredAt,
+      ),
+      throwsStateError,
+    );
+    verifyMetadata(
+      encrypted.metadata,
+      flavorId: 'pro',
+      licenseType: 'pro',
+      now: expiredAt,
+      allowExpired: true,
     );
   });
 
@@ -288,9 +334,14 @@ void main() {
         '--target-os=windows',
         '--target-arch=x64',
         '--full-snapshot=true',
+        '--offline-expires-at=2030-01-01T00:00:00Z',
       ]);
       final fullArtifactJson = readJsonFile(artifactFile);
       expect(fullArtifactJson['payload_kind'], payloadKindFullSnapshot);
+      expect(
+        (fullArtifactJson['metadata'] as Map)['offline_expires_at'],
+        '2030-01-01T00:00:00.000Z',
+      );
 
       await _runTool([
         'encrypt',
@@ -311,6 +362,19 @@ void main() {
         '--flavor-id=pro',
         '--license-type=pro',
         '--base=${baseFile.path}',
+        '--now=2029-01-01T00:00:00Z',
+      ]);
+
+      await _runToolExpectFailure([
+        'verify',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--base=${baseFile.path}',
+        '--now=2031-01-01T00:00:00Z',
       ]);
 
       await _runToolExpectFailure([
@@ -331,6 +395,7 @@ void main() {
         '--key-hex=$keyHex',
         '--base=${baseFile.path}',
         '--output=${reconstructedFile.path}',
+        '--now=2029-01-01T00:00:00Z',
       ]);
       final dumpJson = (jsonDecode(dump.stdout as String) as Map)
           .cast<String, Object?>();
@@ -340,6 +405,15 @@ void main() {
       );
       expect(dumpJson['reconstructed_patch_sha256'], sha256Hex(patchBytes));
       expect(reconstructedFile.readAsBytesSync(), patchBytes);
+
+      await _runToolExpectFailure([
+        'dump-blobs',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--base=${baseFile.path}',
+        '--output=${reconstructedFile.path}',
+        '--now=2031-01-01T00:00:00Z',
+      ]);
     } finally {
       tempDir.deleteSync(recursive: true);
     }

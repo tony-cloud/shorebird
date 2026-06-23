@@ -142,6 +142,8 @@ class ShorebirdCliCommandRunner extends CompletionCommandRunner<int> {
         logger.level = Level.verbose;
       }
 
+      shorebirdEnv.persistHostedUriFromEnvironment();
+
       final process = ShorebirdProcess();
       final shorebirdArtifacts = engineConfig.localEngineSrcPath != null
           ? const ShorebirdLocalEngineArtifacts()

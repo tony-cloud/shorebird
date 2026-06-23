@@ -99,6 +99,20 @@ void main() {
       });
     });
 
+    test(
+      'persists hosted uri from environment before running command',
+      () async {
+        commandRunner.addCommand(_TestCommand(ExitCode.success));
+
+        final result = await runWithOverrides(
+          () => commandRunner.run(['test']),
+        );
+
+        expect(result, equals(ExitCode.success.code));
+        verify(() => shorebirdEnv.persistHostedUriFromEnvironment()).called(1);
+      },
+    );
+
     test('handles FormatException', () async {
       const exception = FormatException('oops!');
       var isFirstInvocation = true;

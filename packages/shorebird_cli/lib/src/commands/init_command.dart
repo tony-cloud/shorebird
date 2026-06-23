@@ -177,6 +177,7 @@ Please make sure you are running "shorebird init" from within your Flutter proje
 
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
     final existingFlavors = shorebirdYaml?.flavors;
+    final hostedBaseUrl = shorebirdEnv.hostedUri?.toString();
     Set<String> newFlavors;
     if (existingFlavors != null) {
       final existingFlavorNames = existingFlavors.keys.toSet();
@@ -224,6 +225,7 @@ Please make sure you are running "shorebird init" from within your Flutter proje
         projectRoot: projectRoot,
         appId: shorebirdYaml.appId,
         flavors: flavorsToAppIds,
+        baseUrl: shorebirdYaml.baseUrl ?? hostedBaseUrl,
       );
       updateShorebirdYamlProgress.complete('Flavors added to shorebird.yaml');
       return ExitCode.success.code;
@@ -315,6 +317,7 @@ Please make sure you are running "shorebird init" from within your Flutter proje
       projectRoot: projectRoot,
       appId: appId,
       flavors: flavors,
+      baseUrl: hostedBaseUrl,
     );
 
     if (!shorebirdEnv.pubspecContainsShorebirdYaml) {
@@ -368,6 +371,7 @@ For more information about Shorebird, visit ${link(uri: Uri.parse('https://shore
     required String appId,
     required Directory projectRoot,
     Map<String, String>? flavors,
+    String? baseUrl,
   }) {
     const content =
         '''
@@ -389,13 +393,14 @@ app_id:
 
     final editor = YamlEditor(content)..update(['app_id'], appId);
 
+    if (baseUrl != null) editor.update(['base_url'], baseUrl);
     if (flavors != null) editor.update(['flavors'], flavors);
 
     shorebirdEnv
         .getShorebirdYamlFile(cwd: projectRoot)
         .writeAsStringSync(editor.toString());
 
-    return ShorebirdYaml(appId: appId);
+    return ShorebirdYaml(appId: appId, baseUrl: baseUrl);
   }
 
   void _logAvailableOrganizations(
