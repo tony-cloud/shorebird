@@ -1,0 +1,397 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
+import 'package:test/test.dart';
+
+void main() {
+  const key = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+  ];
+  const wrongKey = [
+    31,
+    30,
+    29,
+    28,
+    27,
+    26,
+    25,
+    24,
+    23,
+    22,
+    21,
+    20,
+    19,
+    18,
+    17,
+    16,
+    15,
+    14,
+    13,
+    12,
+    11,
+    10,
+    9,
+    8,
+    7,
+    6,
+    5,
+    4,
+    3,
+    2,
+    1,
+    0,
+  ];
+  const nonce = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+  PatchMetadata metadata() => const PatchMetadata(
+    appId: 'app.test',
+    appBuildId: '1.0.0+1',
+    baseFlavorId: 'free',
+    baseLicenseType: 'free',
+    flavorId: 'pro',
+    licenseType: 'pro',
+    sdkHash: 'sdk',
+    baseSnapshotHash: 'base',
+    patchSnapshotHash: 'patch',
+    targetOs: 'windows',
+    targetArch: 'x64',
+    obfuscationMapHash: 'obfuscated',
+  );
+
+  test('encrypts and decrypts flavor-aware patch payloads', () {
+    final base = utf8.encode('free');
+    final patch = utf8.encode('pro');
+    final artifact = linkArtifacts(
+      baseSnapshot: base,
+      patchSnapshot: patch,
+      metadata: metadata(),
+    );
+    final encrypted = encryptArtifact(
+      artifact: artifact,
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    verifyMetadata(encrypted.metadata, flavorId: 'pro', licenseType: 'pro');
+    verifyMetadata(
+      encrypted.metadata,
+      baseFlavorId: 'free',
+      baseLicenseType: 'free',
+      flavorId: 'pro',
+      licenseType: 'pro',
+    );
+    expect(encrypted.decrypt(key).reconstruct(base), patch);
+  });
+
+  test('wrong AES key fails before payload is accepted', () {
+    final artifact = linkArtifacts(
+      baseSnapshot: utf8.encode('free'),
+      patchSnapshot: utf8.encode('pro'),
+      metadata: metadata(),
+    );
+    final encrypted = encryptArtifact(
+      artifact: artifact,
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    expect(() => encrypted.decrypt(wrongKey), throwsFormatException);
+  });
+
+  test('wrong flavor metadata is rejected', () {
+    final artifact = linkArtifacts(
+      baseSnapshot: utf8.encode('free'),
+      patchSnapshot: utf8.encode('pro'),
+      metadata: metadata(),
+    );
+    final encrypted = encryptArtifact(
+      artifact: artifact,
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    expect(
+      () => verifyMetadata(
+        encrypted.metadata,
+        flavorId: 'free',
+        licenseType: 'pro',
+      ),
+      throwsStateError,
+    );
+  });
+
+  test('wrong base flavor metadata is rejected', () {
+    final artifact = linkArtifacts(
+      baseSnapshot: utf8.encode('free'),
+      patchSnapshot: utf8.encode('pro'),
+      metadata: metadata(),
+    );
+    final encrypted = encryptArtifact(
+      artifact: artifact,
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    expect(
+      () => verifyMetadata(
+        encrypted.metadata,
+        baseFlavorId: 'enterprise',
+        baseLicenseType: 'free',
+        flavorId: 'pro',
+        licenseType: 'pro',
+      ),
+      throwsStateError,
+    );
+  });
+
+  test('artifact json round trips', () {
+    final base = utf8.encode('free');
+    final patch = utf8.encode('pro');
+    final artifact = linkArtifacts(
+      baseSnapshot: base,
+      patchSnapshot: patch,
+      metadata: metadata(),
+    );
+    final decoded = PatchArtifact.fromJson(
+      (jsonDecode(jsonEncode(artifact.toJson())) as Map).cast(),
+    );
+
+    expect(decoded.metadata.flavorId, 'pro');
+    expect(decoded.reconstruct(base), patch);
+  });
+
+  test('artifact json rejects payload hash mismatch', () {
+    final artifact = linkArtifacts(
+      baseSnapshot: utf8.encode('free'),
+      patchSnapshot: utf8.encode('pro'),
+      metadata: metadata(),
+    ).toJson()..['payload_sha256'] = 'not-the-real-hash';
+
+    expect(() => PatchArtifact.fromJson(artifact), throwsFormatException);
+  });
+
+  test('binary diff payload reconstructs patch snapshot', () {
+    final base = List<int>.filled(1024, 7);
+    final patch = List<int>.of(base)
+      ..[512] = 9
+      ..[513] = 10;
+    final artifact = linkArtifacts(
+      baseSnapshot: base,
+      patchSnapshot: patch,
+      metadata: metadata(),
+    );
+
+    expect(artifact.payloadKind, payloadKindBinaryDiff);
+    expect(artifact.payload.length, lessThan(patch.length));
+    expect(artifact.reconstruct(base), patch);
+  });
+
+  test('full snapshot mode keeps payload directly loadable', () {
+    final base = List<int>.filled(1024, 7);
+    final patch = List<int>.of(base)..[512] = 9;
+    final artifact = linkArtifacts(
+      baseSnapshot: base,
+      patchSnapshot: patch,
+      metadata: metadata(),
+      forceFullSnapshot: true,
+    );
+
+    expect(artifact.payloadKind, payloadKindFullSnapshot);
+    expect(artifact.payload, patch);
+    expect(artifact.reconstruct(base), patch);
+  });
+
+  test('cli links encrypts verifies and dumps compact patch', () async {
+    final tempDir = Directory.systemTemp.createTempSync(
+      'open_aot_patch_tools.',
+    );
+    try {
+      final baseFile = File('${tempDir.path}/base.vmcode')
+        ..writeAsBytesSync(List<int>.filled(1024, 7));
+      final patchBytes = List<int>.filled(1024, 7)..[512] = 9;
+      final patchFile = File('${tempDir.path}/patch.vmcode')
+        ..writeAsBytesSync(patchBytes);
+      final artifactFile = File('${tempDir.path}/patch.json');
+      final encryptedFile = File('${tempDir.path}/patch.enc.json');
+      final reconstructedFile = File('${tempDir.path}/reconstructed.vmcode');
+      const keyHex =
+          '000102030405060708090a0b0c0d0e0f'
+          '101112131415161718191a1b1c1d1e1f';
+      const nonceHex = '000102030405060708090a0b';
+
+      await _runTool([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=windows',
+        '--target-arch=x64',
+      ]);
+      final artifactJson = readJsonFile(artifactFile);
+      expect(artifactJson['payload_kind'], payloadKindBinaryDiff);
+
+      await _runTool([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=windows',
+        '--target-arch=x64',
+        '--full-snapshot=true',
+      ]);
+      final fullArtifactJson = readJsonFile(artifactFile);
+      expect(fullArtifactJson['payload_kind'], payloadKindFullSnapshot);
+
+      await _runTool([
+        'encrypt',
+        '--input=${artifactFile.path}',
+        '--output=${encryptedFile.path}',
+        '--key-id=test-key',
+        '--key-hex=$keyHex',
+        '--nonce-hex=$nonceHex',
+      ]);
+
+      await _runTool([
+        'verify',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--artifact-sha256=${sha256Hex(encryptedFile.readAsBytesSync())}',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--base=${baseFile.path}',
+      ]);
+
+      await _runToolExpectFailure([
+        'verify',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--artifact-sha256=bad',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--base=${baseFile.path}',
+      ]);
+
+      final dump = await _runTool([
+        'dump-blobs',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--base=${baseFile.path}',
+        '--output=${reconstructedFile.path}',
+      ]);
+      final dumpJson = (jsonDecode(dump.stdout as String) as Map)
+          .cast<String, Object?>();
+      expect(
+        dumpJson['artifact_sha256'],
+        sha256Hex(encryptedFile.readAsBytesSync()),
+      );
+      expect(dumpJson['reconstructed_patch_sha256'], sha256Hex(patchBytes));
+      expect(reconstructedFile.readAsBytesSync(), patchBytes);
+    } finally {
+      tempDir.deleteSync(recursive: true);
+    }
+  });
+}
+
+Future<ProcessResult> _runTool(List<String> args) async {
+  final packageDir = _packageDir();
+  final result = await Process.run(
+    Platform.resolvedExecutable,
+    ['bin/open_aot_patch_tools.dart', ...args],
+    workingDirectory: packageDir.path,
+  );
+  if (result.exitCode != 0) {
+    final output = [
+      result.exitCode,
+      'stdout:',
+      result.stdout,
+      'stderr:',
+      result.stderr,
+    ].join('\n');
+    fail('open_aot_patch_tools ${args.join(' ')} failed with $output');
+  }
+  return result;
+}
+
+Future<ProcessResult> _runToolExpectFailure(List<String> args) async {
+  final packageDir = _packageDir();
+  final result = await Process.run(
+    Platform.resolvedExecutable,
+    ['bin/open_aot_patch_tools.dart', ...args],
+    workingDirectory: packageDir.path,
+  );
+  if (result.exitCode == 0) {
+    fail('open_aot_patch_tools ${args.join(' ')} unexpectedly succeeded');
+  }
+  return result;
+}
+
+Directory _packageDir() {
+  final direct = Directory.current;
+  if (File('${direct.path}/bin/open_aot_patch_tools.dart').existsSync()) {
+    return direct;
+  }
+  final workspaceMember = Directory(
+    '${direct.path}/packages/open_aot_patch_tools',
+  );
+  final workspaceTool = File(
+    '${workspaceMember.path}/bin/open_aot_patch_tools.dart',
+  );
+  if (workspaceTool.existsSync()) {
+    return workspaceMember;
+  }
+  fail('Unable to locate open_aot_patch_tools package directory.');
+}
