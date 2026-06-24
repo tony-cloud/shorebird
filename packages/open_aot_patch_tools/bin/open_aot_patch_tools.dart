@@ -32,6 +32,8 @@ void main(List<String> args) {
 void _link(Map<String, String> options) {
   final base = File(_required(options, 'base')).readAsBytesSync();
   final patch = File(_required(options, 'patch')).readAsBytesSync();
+  final targetOs = _required(options, 'target-os');
+  final runtimeMode = _runtimeModeForLink(options, targetOs);
   final metadata = PatchMetadata(
     appId: _required(options, 'app-id'),
     appBuildId: _required(options, 'app-build-id'),
@@ -42,8 +44,9 @@ void _link(Map<String, String> options) {
     sdkHash: _required(options, 'sdk-hash'),
     baseSnapshotHash: sha256Hex(base),
     patchSnapshotHash: sha256Hex(patch),
-    targetOs: _required(options, 'target-os'),
+    targetOs: targetOs,
     targetArch: _required(options, 'target-arch'),
+    runtimeMode: runtimeMode,
     obfuscationMapHash: options['obfuscation-map-hash'],
     offlineExpiresAt: _optionalIso8601Utc(options['offline-expires-at']),
   );
@@ -56,6 +59,24 @@ void _link(Map<String, String> options) {
   File(_required(options, 'output')).writeAsStringSync(
     const JsonEncoder.withIndent('  ').convert(artifact.toJson()),
   );
+}
+
+String _runtimeModeForLink(Map<String, String> options, String targetOs) {
+  final runtimeMode = options['runtime-mode'];
+  if (targetOs == 'ios' && (runtimeMode == null || runtimeMode.isEmpty)) {
+    throw ArgumentError(
+      'Missing --runtime-mode for iOS. Use '
+      '--runtime-mode=$runtimeModeDartBytecodeInterpreter for App Store-safe '
+      'interpreter patches, or explicitly pass '
+      '--runtime-mode=$runtimeModeNativeAot for development-only native AOT '
+      'artifacts.',
+    );
+  }
+  final resolved = runtimeMode ?? runtimeModeNativeAot;
+  if (!knownRuntimeModes.contains(resolved)) {
+    throw ArgumentError('Unsupported --runtime-mode=$resolved');
+  }
+  return resolved;
 }
 
 void _encrypt(Map<String, String> options) {
@@ -86,6 +107,7 @@ void _verify(Map<String, String> options) {
     baseLicenseType: options['base-license-type'],
     flavorId: _required(options, 'flavor-id'),
     licenseType: _required(options, 'license-type'),
+    requireIosAppStoreSafe: _boolOption(options, 'require-ios-app-store-safe'),
     now: _optionalDateTime(options['now']),
     allowExpired: _boolOption(options, 'allow-expired'),
   );
@@ -353,8 +375,8 @@ void _usage() {
 Usage:
   open_aot_patch_tools dump-blobs --input=<file> [--key-hex=<64 hex chars>] [--base=<file>] [--output=<vmcode>] [--now=<iso8601>] [--allow-expired=true]
   open_aot_patch_tools compile-patch --gen-snapshot=<path> --kernel=<dill> --output=<file> [--snapshot-kind=app-aot-elf|app-aot-macho-dylib|app-aot-assembly] [--macho-object=<file>] [--obfuscate=true] [--load-obfuscation-map=<file>] [--save-obfuscation-map=<file>]
-  open_aot_patch_tools link --base=<file> --patch=<file> --output=<file> --app-id=<id> --app-build-id=<id> --flavor-id=<id> --license-type=<type> --sdk-hash=<hash> --target-os=<os> --target-arch=<arch> [--base-flavor-id=<id>] [--base-license-type=<type>] [--obfuscation-map-hash=<sha256>] [--offline-expires-at=<iso8601>] [--full-snapshot=true]
+  open_aot_patch_tools link --base=<file> --patch=<file> --output=<file> --app-id=<id> --app-build-id=<id> --flavor-id=<id> --license-type=<type> --sdk-hash=<hash> --target-os=<os> --target-arch=<arch> [--runtime-mode=native-aot|dart-bytecode-interpreter] [--base-flavor-id=<id>] [--base-license-type=<type>] [--obfuscation-map-hash=<sha256>] [--offline-expires-at=<iso8601>] [--full-snapshot=true]
   open_aot_patch_tools encrypt --input=<file> --output=<file> --key-id=<id> --key-hex=<64 hex chars> --nonce-hex=<24 hex chars>
-  open_aot_patch_tools verify --input=<file> --key-hex=<64 hex chars> --flavor-id=<id> --license-type=<type> [--base=<file>] [--artifact-sha256=<sha256>] [--base-flavor-id=<id>] [--base-license-type=<type>] [--now=<iso8601>] [--allow-expired=true]
+  open_aot_patch_tools verify --input=<file> --key-hex=<64 hex chars> --flavor-id=<id> --license-type=<type> [--base=<file>] [--artifact-sha256=<sha256>] [--base-flavor-id=<id>] [--base-license-type=<type>] [--require-ios-app-store-safe=true] [--now=<iso8601>] [--allow-expired=true]
 ''');
 }

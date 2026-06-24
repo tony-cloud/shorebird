@@ -20,6 +20,21 @@ const payloadKindFullSnapshot = 'full-snapshot';
 /// Payload kind used when the artifact stores an open binary diff.
 const payloadKindBinaryDiff = 'binary-diff-v1';
 
+/// Runtime mode used by today's open patch loader. The payload contains native
+/// AOT snapshot instructions and therefore needs executable mapping at runtime.
+const runtimeModeNativeAot = 'native-aot';
+
+/// Runtime mode for App Store-safe iOS payloads interpreted by Dart VM code
+/// already present in the app. The current open runtime requires these
+/// artifacts to carry a directly loadable full bytecode snapshot.
+const runtimeModeDartBytecodeInterpreter = 'dart-bytecode-interpreter';
+
+/// Runtime modes understood by this artifact format.
+const knownRuntimeModes = {
+  runtimeModeNativeAot,
+  runtimeModeDartBytecodeInterpreter,
+};
+
 /// Compatibility metadata bound to a compact AOT patch artifact.
 class PatchMetadata {
   /// Creates patch metadata for one application build and flavor.
@@ -33,6 +48,7 @@ class PatchMetadata {
     required this.patchSnapshotHash,
     required this.targetOs,
     required this.targetArch,
+    this.runtimeMode = runtimeModeNativeAot,
     this.baseFlavorId,
     this.baseLicenseType,
     this.obfuscationMapHash,
@@ -52,6 +68,7 @@ class PatchMetadata {
     patchSnapshotHash: _string(json, 'patch_snapshot_hash'),
     targetOs: _string(json, 'target_os'),
     targetArch: _string(json, 'target_arch'),
+    runtimeMode: json['runtime_mode'] as String? ?? runtimeModeNativeAot,
     obfuscationMapHash: json['obfuscation_map_hash'] as String?,
     offlineExpiresAt: _optionalIso8601UtcString(json, 'offline_expires_at'),
   );
@@ -89,6 +106,12 @@ class PatchMetadata {
   /// Target CPU architecture, for example `x64` or `arm64`.
   final String targetArch;
 
+  /// Runtime execution mode required by this patch payload.
+  ///
+  /// Existing artifacts without this field are treated as
+  /// [runtimeModeNativeAot] for backward compatibility.
+  final String runtimeMode;
+
   /// Optional hash of the obfuscation map used by base and patch builds.
   final String? obfuscationMapHash;
 
@@ -109,6 +132,24 @@ class PatchMetadata {
     return !checkedAt.isBefore(expiresAt);
   }
 
+  /// Whether this payload requires mapping newly supplied native instructions
+  /// as executable memory at runtime.
+  bool get requiresRuntimeExecutableMapping {
+    _checkKnownRuntimeMode(runtimeMode);
+    return runtimeMode == runtimeModeNativeAot;
+  }
+
+  /// Whether this artifact is safe to install in an iOS App Store build under
+  /// the current open runtime model.
+  ///
+  /// The current native-AOT iOS loader is useful for development and local
+  /// device testing, but it is not App Store-safe because it executes newly
+  /// supplied native snapshot text from the app data container.
+  bool get isIosAppStoreSafe {
+    _checkKnownRuntimeMode(runtimeMode);
+    return targetOs != 'ios' || !requiresRuntimeExecutableMapping;
+  }
+
   /// Converts this metadata to the stable JSON map used as AES-GCM AAD.
   Map<String, Object?> toJson() => {
     'app_id': appId,
@@ -122,6 +163,7 @@ class PatchMetadata {
     'patch_snapshot_hash': patchSnapshotHash,
     'target_os': targetOs,
     'target_arch': targetArch,
+    'runtime_mode': runtimeMode,
     if (obfuscationMapHash != null) 'obfuscation_map_hash': obfuscationMapHash,
     if (offlineExpiresAt != null) 'offline_expires_at': offlineExpiresAt,
   };
@@ -320,7 +362,11 @@ PatchArtifact linkArtifacts({
   required PatchMetadata metadata,
   bool forceFullSnapshot = false,
 }) {
-  final compact = forceFullSnapshot
+  _checkKnownRuntimeMode(metadata.runtimeMode);
+  final mustUseFullSnapshot =
+      forceFullSnapshot ||
+      metadata.runtimeMode == runtimeModeDartBytecodeInterpreter;
+  final compact = mustUseFullSnapshot
       ? _CompactPayload(
           kind: payloadKindFullSnapshot,
           payload: List<int>.of(patchSnapshot),
@@ -388,9 +434,11 @@ void verifyMetadata(
   required String licenseType,
   String? baseFlavorId,
   String? baseLicenseType,
+  bool requireIosAppStoreSafe = false,
   DateTime? now,
   bool allowExpired = false,
 }) {
+  _checkKnownRuntimeMode(metadata.runtimeMode);
   if (baseFlavorId != null && metadata.baseFlavorId != baseFlavorId) {
     throw StateError(
       'Patch base flavor "${metadata.baseFlavorId}" does not match '
@@ -417,6 +465,19 @@ void verifyMetadata(
     throw StateError(
       'Patch offline license expired at ${metadata.offlineExpiresAt}.',
     );
+  }
+  if (requireIosAppStoreSafe && !metadata.isIosAppStoreSafe) {
+    throw StateError(
+      'Patch runtime mode "${metadata.runtimeMode}" for target_os '
+      '"${metadata.targetOs}" requires runtime executable mapping and is not '
+      'safe for iOS App Store delivery.',
+    );
+  }
+}
+
+void _checkKnownRuntimeMode(String runtimeMode) {
+  if (!knownRuntimeModes.contains(runtimeMode)) {
+    throw StateError('Unsupported patch runtime mode "$runtimeMode".');
   }
 }
 

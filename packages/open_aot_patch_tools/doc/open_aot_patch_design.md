@@ -1,7 +1,10 @@
 # Open AOT Patch Design
 
-This package produces compact, flavor-aware AOT patch artifacts without relying
-on `DART_DYNAMIC_MODULES` or the Dart bytecode interpreter.
+This package produces compact, flavor-aware patch artifacts without relying on
+`DART_DYNAMIC_MODULES`. Native AOT artifacts are still useful for host,
+Android, macOS, and development-device iOS validation, but iOS App Store patch
+delivery must use a no-DDM interpreter runtime mode instead of downloaded native
+snapshot text.
 
 The public-source boundary is documented in
 `../../../OPEN_SOURCE_REPLACEMENTS.md`. The Shorebird runtime updater itself is
@@ -11,16 +14,21 @@ AOT patch generation flow.
 
 ## Runtime Model
 
-Patches are AOT snapshot artifacts. The engine selects patched isolate snapshot
-data and instructions before isolate startup, matching Flutter's existing
-snapshot mapping flow. The VM data and VM instructions remain from the base
-runtime.
+The artifact metadata names the runtime mode required by the patch payload:
+
+- `native-aot`: patched isolate snapshot data/instructions are selected before
+  isolate startup, matching Flutter's existing snapshot mapping flow. VM data
+  and VM instructions remain from the base runtime.
+- `dart-bytecode-interpreter`: iOS App Store-safe payloads are data consumed by
+  already-reviewed VM interpreter code. This is not `DART_DYNAMIC_MODULES`, and
+  the VM must reject dynamic-module payloads for this project.
 
 This keeps the design compatible with iOS constraints:
 
 - no JIT dependency
-- no writable executable memory requirement
-- no KBC interpreter dependency
+- no writable executable memory requirement for App Store payloads
+- no downloaded native snapshot text in App Store payloads
+- no `DART_DYNAMIC_MODULES`
 - patch metadata must bind the artifact to platform, architecture, SDK hash,
   app build id, flavor/license id, base snapshot hash, patch snapshot hash, and
   obfuscation map hash when obfuscation is used
@@ -59,17 +67,26 @@ optional `remove_patch` object, which contains the same patch number,
 
 ## Compact Payloads
 
-By default, `link` chooses the smallest v1 payload representation:
+For native-AOT artifacts, `link` chooses the smallest v1 payload
+representation by default:
 
 - `empty` when base and patch snapshots are identical
 - `binary-diff-v1` when changed byte ranges are smaller than the full patch
 - `full-snapshot` when a diff would be larger
 
-For runtime handoff tests and simple embedders, pass
+For native-AOT runtime handoff tests and simple embedders, pass
 `link --full-snapshot=true`. This forces the encrypted payload to decrypt to a
 directly loadable `.vmcode` file. That file can be supplied as the first
 application library path and mapped by the engine patch cache before isolate
-startup.
+startup on platforms where native patch execution is allowed. Do not use this
+native-AOT handoff for iOS App Store delivery.
+
+For `dart-bytecode-interpreter` artifacts, the linker always emits
+`full-snapshot` payloads. The current open runtime has no compact-diff
+reconstruction bridge inside the VM, so interpreter patches must decrypt to
+bytecode data. Product iOS now has an initial AOT-safe replacement mapper for
+bytecode that describes already-loaded libraries/classes/functions; broader
+payload shapes still need compiler and runtime work.
 
 The binary diff format is deterministic and reconstructs the full patched
 snapshot from the base snapshot before runtime loading. Future SDK-integrated
@@ -77,9 +94,9 @@ linkers can replace this with changed isolate code/data sections while keeping
 the same metadata and encryption envelope.
 
 `dump-blobs --key-hex=<key> --base=<base.vmcode> --output=<patch.vmcode>` is
-the open updater handoff: it decrypts the delivery artifact, reconstructs the
-loadable VM-code payload, verifies the reconstructed hash against metadata, and
-writes the file that the engine patch cache can map before isolate startup.
+the native-AOT updater handoff: it decrypts the delivery artifact, reconstructs
+the loadable VM-code payload, verifies the reconstructed hash against metadata,
+and writes the file that the engine patch cache can map before isolate startup.
 
 The host proof app is `testapps/license_flavor_patch_test`. Run:
 
@@ -92,11 +109,26 @@ base obfuscation map for the patch build, encrypts the patch artifact, verifies
 wrong-key and wrong-flavor failures, reconstructs the patched `.vmcode`, and
 runs it to confirm `license:pro` and `pro-feature:enabled`.
 
-## iOS JIT-Disabled Handoff
+## iOS App Store Handoff
 
-iOS release/profile patch artifacts should be generated as Mach-O AOT snapshot
-objects, not bytecode and not dynamic modules. Build the patch snapshot on
-macOS with the iOS `gen_snapshot` that matches the app's Flutter/Dart SDK:
+`DART_DYNAMIC_MODULES` must not be enabled for this project. It adds the dynamic
+module interpreter surface and can package code that should not ship in the
+target app.
+
+The native Mach-O `.vmcode` path is development-only on iOS. It proves the base
+snapshot metadata, updater state machine, and flavor/license transition, but it
+still maps downloaded native snapshot text as executable memory. A physical
+device accepts that only when the payload is signed appropriately, and that is
+not the App Store patch route.
+
+The App Store route follows Shorebird's public architecture shape: the updater
+selects a patch before Dart starts, then the Dart SDK installs a payload that is
+interpreted by VM code already present in the app. The payload runtime mode is
+`dart-bytecode-interpreter`; it is explicitly separate from
+`DART_DYNAMIC_MODULES`.
+
+For native development-device checks, build the patch snapshot on macOS with the
+iOS `gen_snapshot` that matches the app's Flutter/Dart SDK:
 
 ```sh
 dart run open_aot_patch_tools compile-patch \
@@ -121,34 +153,97 @@ dart run open_aot_patch_tools link \
   --sdk-hash=<flutter-engine-or-dart-sdk-hash> \
   --target-os=ios \
   --target-arch=arm64 \
+  --runtime-mode=native-aot \
   --obfuscation-map-hash=<sha256-of-base-obfuscation-map> \
   --offline-expires-at=2030-01-01T00:00:00Z \
   --full-snapshot=true
 ```
 
-The encrypted artifact is delivered the same way as the Windows host proof:
-`encrypt` wraps it with AES-256-GCM, and the app-owned updater/key callback must
-validate metadata before decrypting. After decryption, use
-`dump-blobs --key-hex=<key> --base=build/base.vmcode --output=patch.vmcode` to
-write the loadable patch file into the updater's next-boot patch location.
+For App Store-safe iOS artifacts, the linker must use:
+
+```sh
+dart run open_aot_patch_tools link \
+  --base=build/base.interp \
+  --patch=build/patch.interp \
+  --output=build/patch.json \
+  --app-id=com.example.licenseFlavorPatchTest \
+  --app-build-id=ios-build-123 \
+  --base-flavor-id=free \
+  --base-license-type=free \
+  --flavor-id=pro \
+  --license-type=pro \
+  --sdk-hash=<flutter-engine-or-dart-sdk-hash> \
+  --target-os=ios \
+  --target-arch=arm64 \
+  --runtime-mode=dart-bytecode-interpreter \
+  --obfuscation-map-hash=<sha256-of-base-obfuscation-map> \
+  --offline-expires-at=2030-01-01T00:00:00Z
+```
+
+`--full-snapshot=true` is not needed for `dart-bytecode-interpreter`; it is
+forced by the linker and enforced by `Dart_InstallAotPatch`.
+
+The encrypted artifact is delivered the same way as the host proof: `encrypt`
+wraps it with AES-256-GCM, and the app-owned updater/key callback must validate
+metadata before decrypting. `Dart_InstallAotPatch` rejects iOS native-AOT
+artifacts, rejects any dynamic-modules runtime mode, and rejects compact
+interpreter payloads before payload installation.
+
+The open Flutter engine bridge can now pass the encrypted artifact selected by
+the updater into `Dart_InstallAotPatch`, then hand the decrypted bytecode to
+`Dart_ReloadBytecodePatch`. This bridge is intentionally no-DDM and never adds
+interpreter patches to native `application_library_paths`. In product iOS AOT,
+`Dart_ReloadBytecodePatch` uses the no-DDM bytecode replacement mapper instead
+of stock VM reload: it reads the bytecode component as data, resolves existing
+libraries/classes/functions from the signed base snapshot, and switches matched
+functions to the VM's signed `InterpretCall` stub with attached bytecode. This
+does not enable `DART_DYNAMIC_MODULES` and does not map downloaded executable
+memory.
+
+For local encrypted interpreter tests, `shorebird.yaml` may provide a
+development AES key and expected metadata:
+
+```yaml
+aot_patch_key_id: test-key
+aot_patch_key_hex: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+aot_patch_base_flavor_id: free
+aot_patch_base_license_type: free
+aot_patch_flavor_id: pro
+aot_patch_license_type: pro
+aot_patch_sdk_hash: <flutter-engine-or-dart-sdk-hash>
+aot_patch_base_snapshot_hash: <sha256-of-base-bytecode-snapshot>
+```
+
+Embedding a symmetric key in `shorebird.yaml` is a development bridge, not the
+final production key strategy. The production replacement should supply the AES
+key through an app-owned callback or platform key source while keeping the same
+VM validation and bytecode reload path.
 
 The Flutter engine patch cache is prepared for this handoff:
 
-- `shorebird_enable_aot_patching` defaults on for iOS, while the legacy
-  `SHOREBIRD_USE_INTERPRETER` path is opt-in and disabled by default.
-- The first `.vmcode` application library path is treated as the patch. For iOS
-  it may contain a raw Mach-O snapshot or a compact linker header followed by a
-  Mach-O snapshot.
-- VM snapshot symbols continue to resolve from the signed base App.framework;
-  only isolate data and isolate instructions are replaced by the patch.
-- The loader uses Dart's Mach-O snapshot loader on Apple platforms, so the VM
-  does not need JIT, writable executable memory, KBC, or `DART_DYNAMIC_MODULES`.
+- `dart_enable_aot_patching` is enabled for iOS without enabling
+  `dart_dynamic_modules`.
+- `shorebird_use_interpreter` is enabled for iOS and the native
+  `shorebird_enable_aot_patching` snapshot loader is disabled.
+- Interpreter patch paths are not inserted into `application_library_paths`;
+  that list is reserved for native snapshot symbol lookup.
+- Encrypted interpreter artifacts are decrypted to data and handed to the VM
+  patch API; no downloaded native text is mapped executable.
+- Product iOS includes the first no-DDM function replacement mapper for changed
+  existing functions. New libraries/classes/top-level helpers and compact
+  interpreter reconstruction remain future work.
+- VM snapshot symbols continue to resolve from the signed base App.framework.
 
 The macOS device/simulator verification pass should build the same
-`license_flavor_patch_test` flavor pair with `--target-os=ios` and
-`--target-arch=arm64`, install the encrypted `free -> pro` patch, confirm the
-status label changes to `license:pro` / `pro-feature:enabled`, and confirm
-wrong-key and wrong-flavor artifacts fail before the isolate starts.
+`license_flavor_patch_test` flavor pair with `--target-os=ios`,
+`--target-arch=arm64`, and `--runtime-mode=dart-bytecode-interpreter`, install
+the encrypted `free -> pro` patch, confirm the status label changes to
+`license:pro` / `pro-feature:enabled`, and confirm wrong-key and wrong-flavor
+artifacts fail before the isolate starts. The current open runtime has the
+metadata, SDK safety gate, encrypted artifact-to-bytecode handoff, no-DDM VM API
+guard, and initial product-AOT replacement mapper; the compatible interpreter
+payload compiler, production key callback, compact interpreter reconstruction,
+and real-device behavior verification remain the next implementation steps.
 
 ## Obfuscation
 

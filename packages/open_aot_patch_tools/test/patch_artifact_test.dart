@@ -75,7 +75,11 @@ void main() {
   ];
   const nonce = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
-  PatchMetadata metadata({String? offlineExpiresAt}) => PatchMetadata(
+  PatchMetadata metadata({
+    String? offlineExpiresAt,
+    String targetOs = 'windows',
+    String runtimeMode = runtimeModeNativeAot,
+  }) => PatchMetadata(
     appId: 'app.test',
     appBuildId: '1.0.0+1',
     baseFlavorId: 'free',
@@ -85,8 +89,9 @@ void main() {
     sdkHash: 'sdk',
     baseSnapshotHash: 'base',
     patchSnapshotHash: 'patch',
-    targetOs: 'windows',
+    targetOs: targetOs,
     targetArch: 'x64',
+    runtimeMode: runtimeMode,
     obfuscationMapHash: 'obfuscated',
     offlineExpiresAt: offlineExpiresAt,
   );
@@ -283,6 +288,73 @@ void main() {
     expect(artifact.reconstruct(base), patch);
   });
 
+  test('interpreter runtime keeps payload directly loadable', () {
+    final base = List<int>.filled(1024, 7);
+    final patch = List<int>.of(base)..[512] = 9;
+    final artifact = linkArtifacts(
+      baseSnapshot: base,
+      patchSnapshot: patch,
+      metadata: metadata(
+        targetOs: 'ios',
+        runtimeMode: runtimeModeDartBytecodeInterpreter,
+      ),
+    );
+
+    expect(artifact.payloadKind, payloadKindFullSnapshot);
+    expect(artifact.payload, patch);
+    expect(artifact.reconstruct(base), patch);
+  });
+
+  test('iOS native AOT metadata is not App Store-safe', () {
+    final iosNative = metadata(targetOs: 'ios');
+
+    expect(iosNative.runtimeMode, runtimeModeNativeAot);
+    expect(iosNative.requiresRuntimeExecutableMapping, isTrue);
+    expect(iosNative.isIosAppStoreSafe, isFalse);
+    expect(
+      () => verifyMetadata(
+        iosNative,
+        flavorId: 'pro',
+        licenseType: 'pro',
+        requireIosAppStoreSafe: true,
+      ),
+      throwsStateError,
+    );
+  });
+
+  test('iOS interpreter metadata satisfies the App Store safety gate', () {
+    final iosInterpreter = metadata(
+      targetOs: 'ios',
+      runtimeMode: runtimeModeDartBytecodeInterpreter,
+    );
+
+    expect(iosInterpreter.requiresRuntimeExecutableMapping, isFalse);
+    expect(iosInterpreter.isIosAppStoreSafe, isTrue);
+    verifyMetadata(
+      iosInterpreter,
+      flavorId: 'pro',
+      licenseType: 'pro',
+      requireIosAppStoreSafe: true,
+    );
+  });
+
+  test('dynamic modules runtime metadata is rejected', () {
+    final dynamicModules = metadata(runtimeMode: 'dart-dynamic-modules');
+
+    expect(
+      () => verifyMetadata(
+        dynamicModules,
+        flavorId: 'pro',
+        licenseType: 'pro',
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => dynamicModules.requiresRuntimeExecutableMapping,
+      throwsStateError,
+    );
+  });
+
   test('cli links encrypts verifies and dumps compact patch', () async {
     final tempDir = Directory.systemTemp.createTempSync(
       'open_aot_patch_tools.',
@@ -339,7 +411,7 @@ void main() {
       final fullArtifactJson = readJsonFile(artifactFile);
       expect(fullArtifactJson['payload_kind'], payloadKindFullSnapshot);
       expect(
-        (fullArtifactJson['metadata'] as Map)['offline_expires_at'],
+        (fullArtifactJson['metadata']! as Map)['offline_expires_at'],
         '2030-01-01T00:00:00.000Z',
       );
 
@@ -387,6 +459,125 @@ void main() {
         '--flavor-id=pro',
         '--license-type=pro',
         '--base=${baseFile.path}',
+      ]);
+
+      await _runTool([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=ios',
+        '--target-arch=arm64',
+        '--runtime-mode=$runtimeModeNativeAot',
+        '--full-snapshot=true',
+      ]);
+      await _runTool([
+        'encrypt',
+        '--input=${artifactFile.path}',
+        '--output=${encryptedFile.path}',
+        '--key-id=test-key',
+        '--key-hex=$keyHex',
+        '--nonce-hex=$nonceHex',
+      ]);
+      await _runToolExpectFailure([
+        'verify',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--base=${baseFile.path}',
+        '--require-ios-app-store-safe=true',
+      ]);
+
+      await _runToolExpectFailure([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=ios',
+        '--target-arch=arm64',
+        '--runtime-mode=dart-dynamic-modules',
+        '--full-snapshot=true',
+      ]);
+
+      await _runTool([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=ios',
+        '--target-arch=arm64',
+        '--runtime-mode=$runtimeModeDartBytecodeInterpreter',
+      ]);
+      final interpreterArtifactJson = readJsonFile(artifactFile);
+      expect(interpreterArtifactJson['payload_kind'], payloadKindFullSnapshot);
+      await _runTool([
+        'encrypt',
+        '--input=${artifactFile.path}',
+        '--output=${encryptedFile.path}',
+        '--key-id=test-key',
+        '--key-hex=$keyHex',
+        '--nonce-hex=$nonceHex',
+      ]);
+      await _runTool([
+        'verify',
+        '--input=${encryptedFile.path}',
+        '--key-hex=$keyHex',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--base=${baseFile.path}',
+        '--require-ios-app-store-safe=true',
+      ]);
+
+      await _runTool([
+        'link',
+        '--base=${baseFile.path}',
+        '--patch=${patchFile.path}',
+        '--output=${artifactFile.path}',
+        '--app-id=app.test',
+        '--app-build-id=1.0.0+1',
+        '--base-flavor-id=free',
+        '--base-license-type=free',
+        '--flavor-id=pro',
+        '--license-type=pro',
+        '--sdk-hash=sdk',
+        '--target-os=windows',
+        '--target-arch=x64',
+        '--full-snapshot=true',
+        '--offline-expires-at=2030-01-01T00:00:00Z',
+      ]);
+      await _runTool([
+        'encrypt',
+        '--input=${artifactFile.path}',
+        '--output=${encryptedFile.path}',
+        '--key-id=test-key',
+        '--key-hex=$keyHex',
+        '--nonce-hex=$nonceHex',
       ]);
 
       final dump = await _runTool([
