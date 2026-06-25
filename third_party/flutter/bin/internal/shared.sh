@@ -219,7 +219,7 @@ function shared::execute() {
     >&2 echo "Error: The shorebird directory is not a clone of the GitHub project."
     >&2 echo "       The shorebird tools requires Git in order to operate properly;"
     >&2 echo "       to install Shorebird, see the instructions at:"
-    >&2 echo "       https://github.com/shorebirdtech/shorebird"
+    >&2 echo "       https://git.tonycloud.org/flutter/shorebird"
     exit 1
   fi
 

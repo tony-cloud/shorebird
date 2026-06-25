@@ -48,7 +48,7 @@ are configured to use local/self-hosted origins when no override is supplied:
 | API/auth server | `http://localhost:8080` |
 | OpenAPI contract | `http://localhost:8080/openapi.yaml` and `../shorebird-server/internal/api/handlers/openapi.yaml` |
 | CLI patch-tool artifact mirror | `http://localhost:8080/artifacts` |
-| Flutter engine/Maven artifact mirror | `http://localhost:8080/download.flutter.io` |
+| Flutter engine/Dart SDK/Maven artifact mirror | `http://localhost:8080/download.flutter.io` |
 | Web console | self-hosted `shorebird-server/web` dashboard |
 
 Override these values with `SHOREBIRD_HOSTED_URL`,
