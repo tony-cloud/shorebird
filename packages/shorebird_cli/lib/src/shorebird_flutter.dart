@@ -32,7 +32,7 @@ class ShorebirdFlutter {
 
   /// The Shorebird Flutter fork git URL.
   static const String defaultFlutterGitUrl =
-      'https://git.tonycloud.org/flutter/flutter.git';
+      'https://github.com/tony-cloud/flutter.git';
 
   /// The Flutter fork git URL used when installing vended Flutter revisions.
   String get flutterGitUrl {

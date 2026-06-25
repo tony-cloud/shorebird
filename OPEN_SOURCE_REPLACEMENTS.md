@@ -19,8 +19,8 @@ The combined workspace provides these open replacements:
 | Artifact mirror/proxy | `packages/artifact_proxy` |
 | Runtime updater library | `../updater/library`, linked into the Flutter engine by `../scripts/sync_open_sources.sh` |
 | Patch artifact generator | `../updater/patch` and `packages/open_aot_patch_tools` |
-| Flutter engine and Flutter tool defaults | `../flutter`, linked to `../dart-sdk-new` and `../updater` |
-| Dart VM patch runtime | `../dart-sdk-new` |
+| Flutter engine and Flutter tool defaults | `../flutter`, linked to `../dart-sdk` and `../updater` |
+| Dart VM patch runtime | `../dart-sdk` |
 
 Run source linking from the workspace root:
 
@@ -31,7 +31,7 @@ Run source linking from the workspace root:
 The script links:
 
 ```text
-flutter/engine/src/flutter/third_party/dart -> dart-sdk-new
+flutter/engine/src/flutter/third_party/dart -> dart-sdk
 flutter/engine/src/flutter/third_party/updater -> updater
 ```
 

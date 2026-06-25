@@ -4,7 +4,7 @@ This workspace builds against the open Flutter fork configured in
 `SHOREBIRD_FLUTTER_GIT_URL`, which defaults to:
 
 ```text
-https://git.tonycloud.org/flutter/flutter.git
+https://github.com/tony-cloud/flutter.git
 ```
 
 Use `shorebird flutter versions list` to inspect versions known to the local

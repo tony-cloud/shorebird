@@ -11,7 +11,7 @@ unset CDPATH
 # Either clones or pulls the configured Flutter repository, depending on
 # whether FLUTTER_PATH exists.
 function update_flutter {
-  local flutter_git_url="${SHOREBIRD_FLUTTER_GIT_URL:-https://git.tonycloud.org/flutter/flutter.git}"
+  local flutter_git_url="${SHOREBIRD_FLUTTER_GIT_URL:-https://github.com/tony-cloud/flutter.git}"
   local flutter_storage_base_url="${SHOREBIRD_FLUTTER_STORAGE_BASE_URL:-${FLUTTER_STORAGE_BASE_URL:-http://localhost:8080/download.flutter.io}}"
 
   if [[ -d "$FLUTTER_PATH" ]]; then

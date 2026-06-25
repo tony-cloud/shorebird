@@ -15,7 +15,7 @@ $flutterPath = [IO.Path]::Combine($shorebirdCacheDir, "flutter", $flutterVersion
 $flutter = [IO.Path]::Combine($shorebirdCacheDir, "flutter", $flutterVersion, "bin", "flutter.bat")
 $shorebirdScript = [IO.Path]::Combine($shorebirdCliDir, "bin", "shorebird.dart")
 $dart = [IO.Path]::Combine($flutterPath, "bin", "cache", "dart-sdk", "bin", "dart.exe")
-$defaultFlutterGitUrl = "https://git.tonycloud.org/flutter/flutter.git"
+$defaultFlutterGitUrl = "https://github.com/tony-cloud/flutter.git"
 $defaultFlutterStorageBaseUrl = "http://localhost:8080/download.flutter.io"
 
 # Executes $command and redirects as much output to $null as possible.

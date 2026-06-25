@@ -101,7 +101,7 @@ and writes the file that the engine patch cache can map before isolate startup.
 The host proof app is `testapps/license_flavor_patch_test`. Run:
 
 ```powershell
-dart-sdk-new\tools\sdks\dart-sdk\bin\dart.exe testapps\license_flavor_patch_test\tool\verify_aot_patch.dart
+dart-sdk\tools\sdks\dart-sdk\bin\dart.exe testapps\license_flavor_patch_test\tool\verify_aot_patch.dart
 ```
 
 It compiles a `free` base AOT snapshot and a `pro` patch snapshot, reuses the
