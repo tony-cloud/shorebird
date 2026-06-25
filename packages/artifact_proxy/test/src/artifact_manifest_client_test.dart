@@ -30,13 +30,30 @@ void main() {
       expect(ArtifactManifestClient.new, returnsNormally);
     });
 
-    test('makes correct http request to storage bucket', () async {
+    test('makes correct http request to open artifact mirror', () async {
       client.getManifest(revision).ignore();
 
       verify(
         () => httpClient.get(
           Uri.parse(
-            'https://storage.googleapis.com/download.shorebird.dev/shorebird/$revision/artifacts_manifest.yaml',
+            'http://localhost:8080/artifacts/shorebird/$revision/artifacts_manifest.yaml',
+          ),
+        ),
+      ).called(1);
+    });
+
+    test('can use a custom artifact manifest root', () async {
+      client = ArtifactManifestClient(
+        httpClient: httpClient,
+        manifestBaseUri: Uri.parse('https://mirror.example.com/root'),
+      );
+
+      client.getManifest(revision).ignore();
+
+      verify(
+        () => httpClient.get(
+          Uri.parse(
+            'https://mirror.example.com/root/shorebird/$revision/artifacts_manifest.yaml',
           ),
         ),
       ).called(1);
@@ -68,7 +85,7 @@ void main() {
       verify(
         () => httpClient.get(
           Uri.parse(
-            'https://storage.googleapis.com/download.shorebird.dev/shorebird/$revision/artifacts_manifest.yaml',
+            'http://localhost:8080/artifacts/shorebird/$revision/artifacts_manifest.yaml',
           ),
         ),
       ).called(1);
@@ -78,7 +95,7 @@ void main() {
 
 const _testArtifactManifest = r'''
 flutter_engine_revision: ec975089acb540fc60752606a3d3ba809dd1528b
-storage_bucket: https://download.shorebird.dev
+storage_bucket: shorebird
 artifact_overrides:
   # artifacts.zip
   - flutter_infra_release/flutter/$engine/android-arm-64-release/artifacts.zip

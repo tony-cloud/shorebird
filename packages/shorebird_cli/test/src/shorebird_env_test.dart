@@ -93,6 +93,27 @@ void main() {
       });
     });
 
+    group('shorebirdRoot', () {
+      test('returns correct directory for legacy snapshot layout', () {
+        expect(
+          runWithOverrides(() => shorebirdEnv.shorebirdRoot.path),
+          equals(shorebirdRoot.path),
+        );
+      });
+
+      test('returns correct directory for compiled executable layout', () {
+        platformScript = Uri.file(
+          p.join(shorebirdRoot.path, 'bin', 'shorebird'),
+        );
+        when(() => platform.script).thenReturn(platformScript);
+
+        expect(
+          runWithOverrides(() => shorebirdEnv.shorebirdRoot.path),
+          equals(shorebirdRoot.path),
+        );
+      });
+    });
+
     group('getShorebirdYamlFile', () {
       test('returns correct file', () {
         final tempDir = Directory.systemTemp.createTempSync();
@@ -775,6 +796,18 @@ dependencies:
           equals(engineRevision),
         );
       });
+
+      test('falls back to packaged engine revision metadata', () {
+        const engineRevision = 'test-revision';
+        File(p.join(shorebirdRoot.path, 'bin', 'internal', 'engine.version'))
+          ..createSync(recursive: true)
+          ..writeAsStringSync(engineRevision, flush: true);
+
+        expect(
+          runWithOverrides(() => shorebirdEnv.shorebirdEngineRevision),
+          equals(engineRevision),
+        );
+      });
     });
 
     group('hostedUrl', () {
@@ -843,11 +876,14 @@ base_url: https://yaml.example.com''');
         );
       });
 
-      test('returns null when there is no env override or shorebird.yaml', () {
-        expect(runWithOverrides(() => shorebirdEnv.hostedUri), isNull);
+      test('defaults to the open self-hosted server URL', () {
+        expect(
+          runWithOverrides(() => shorebirdEnv.hostedUri),
+          equals(Uri.parse(ShorebirdEnv.defaultHostedUrl)),
+        );
       });
 
-      test('returns null when unable to read shorebird.yaml', () {
+      test('falls back to default when unable to read shorebird.yaml', () {
         final directory = Directory.systemTemp.createTempSync();
         // This is not valid utf8 so readAsString will throw.
         File(
@@ -859,7 +895,7 @@ base_url: https://yaml.example.com''');
             () => runWithOverrides(() => shorebirdEnv.hostedUri),
             getCurrentDirectory: () => directory,
           ),
-          isNull,
+          equals(Uri.parse(ShorebirdEnv.defaultHostedUrl)),
         );
       });
     });
@@ -931,7 +967,7 @@ base_url: https://yaml.example.com''');
         when(() => platform.environment).thenReturn({});
         expect(
           runWithOverrides(() => shorebirdEnv.authServiceUri),
-          equals(Uri.parse('https://auth.shorebird.dev')),
+          equals(Uri.parse(ShorebirdEnv.defaultAuthServiceUrl)),
         );
       });
 
@@ -951,7 +987,7 @@ base_url: https://yaml.example.com''');
         when(() => platform.environment).thenReturn({});
         expect(
           runWithOverrides(() => shorebirdEnv.jwtIssuer),
-          equals('https://auth.shorebird.dev'),
+          equals(ShorebirdEnv.defaultJwtIssuer),
         );
       });
 

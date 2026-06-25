@@ -13,31 +13,38 @@ const String _explainerHtml = """
 <body>
 <p>
 This server proxies requests for Flutter artifacts to the correct location,
-depending on the engine revision.  Most artifacts are served from the standard
-`download.flutter.io` location, but a few artifacts are served from Shorebird's
-storage bucket to add support for code push.
+	depending on the engine revision. Most artifacts are served from the configured
+	Flutter artifact origin, but a few artifacts are served from the configured
+	open Shorebird artifact mirror to add support for code push.
 </p>
 <p>
-See <a href='https://docs.shorebird.dev/architecture'>
-https://docs.shorebird.dev/architecture</a> for more information.
+See the workspace README and docs/CI.md for open artifact mirror details.
 </p>
 <p>
 Source code can be found here:
 <a
-href='https://github.com/shorebirdtech/shorebird/tree/main/packages/artifact_proxy'>
-https://github.com/shorebirdtech/shorebird/tree/main/packages/artifact_proxy</a>
+	href='https://git.tonycloud.org/flutter/shorebird'>
+	https://git.tonycloud.org/flutter/shorebird</a>
 </p>
 <p>
-If you're seeing problems with your Shorebird install, or are interested in
-replicating this proxy, please reach out to us over Discord.
-<a href='https://shorebird.dev/contact'>https://shorebird.dev/contact</a>
+If you're seeing problems with this open artifact proxy, file an issue against
+the repository that hosts this workspace.
 </p>
 </body>
 </html>
 """;
 
 /// A [Handler] that proxies artifact requests to the correct location.
-Handler artifactProxyHandler({required ArtifactManifestClient client}) {
+Handler artifactProxyHandler({
+  required ArtifactManifestClient client,
+  Uri? flutterArtifactBaseUri,
+  Uri? shorebirdArtifactBaseUri,
+}) {
+  final flutterBaseUri =
+      flutterArtifactBaseUri ?? defaultFlutterArtifactBaseUri;
+  final shorebirdBaseUri =
+      shorebirdArtifactBaseUri ?? defaultShorebirdArtifactBaseUri;
+
   return (Request request) async {
     final path = request.url.path;
     if (path.isEmpty) {
@@ -81,6 +88,7 @@ Handler artifactProxyHandler({required ArtifactManifestClient client}) {
           artifactPath: normalizedPath,
           engine: shorebirdEngineRevision,
           bucket: manifest.storageBucket,
+          baseUri: shorebirdBaseUri,
         );
         print('Shorebird engine artifact detected, forwarding to: $location');
         return Response.found(location);
@@ -89,6 +97,7 @@ Handler artifactProxyHandler({required ArtifactManifestClient client}) {
       final location = getFlutterArtifactLocation(
         artifactPath: normalizedPath,
         engine: manifest.flutterEngineRevision,
+        baseUri: flutterBaseUri,
       );
       print('Flutter artifact detected, forwarding to: $location');
       return Response.found(location);
@@ -102,23 +111,40 @@ Handler artifactProxyHandler({required ArtifactManifestClient client}) {
       return Response.notFound('Unrecognized artifact path: $path');
     }
 
-    final location = getFlutterArtifactLocation(artifactPath: path);
+    final location = getFlutterArtifactLocation(
+      artifactPath: path,
+      baseUri: flutterBaseUri,
+    );
     print('Flutter artifact detected, forwarding to: $location');
     return Response.found(location);
   };
 }
+
+/// Default public Flutter artifact origin.
+final defaultFlutterArtifactBaseUri = Uri.parse(
+  'https://storage.googleapis.com',
+);
+
+/// Default root for open self-hosted Shorebird artifacts.
+final defaultShorebirdArtifactBaseUri = Uri.parse(
+  'http://localhost:8080/artifacts',
+);
 
 /// Returns the location of the artifact at [artifactPath] using the
 /// specified [engine] revision for original Flutter artifacts.
 String getFlutterArtifactLocation({
   required String artifactPath,
   String? engine,
+  Uri? baseUri,
 }) {
   final adjustedPath = engine != null
       ? artifactPath.replaceAll(r'$engine', engine)
       : artifactPath;
 
-  return 'https://storage.googleapis.com/$adjustedPath';
+  return _joinUri(
+    baseUri ?? defaultFlutterArtifactBaseUri,
+    adjustedPath,
+  ).toString();
 }
 
 /// Returns the location of the artifact at [artifactPath] using the
@@ -127,7 +153,23 @@ String getShorebirdArtifactLocation({
   required String artifactPath,
   required String engine,
   required String bucket,
+  Uri? baseUri,
 }) {
   final adjustedPath = artifactPath.replaceAll(r'$engine', engine);
-  return 'https://storage.googleapis.com/$bucket/$adjustedPath';
+  final bucketUri = Uri.tryParse(bucket);
+  final resolvedBaseUri = bucketUri != null && bucketUri.hasScheme
+      ? bucketUri
+      : baseUri ?? defaultShorebirdArtifactBaseUri;
+  final path = bucketUri != null && bucketUri.hasScheme
+      ? adjustedPath
+      : [if (bucket.isNotEmpty) bucket, adjustedPath].join('/');
+  return _joinUri(resolvedBaseUri, path).toString();
+}
+
+Uri _joinUri(Uri base, String path) {
+  final basePath = base.path.endsWith('/')
+      ? base.path.substring(0, base.path.length - 1)
+      : base.path;
+  final relativePath = path.startsWith('/') ? path.substring(1) : path;
+  return base.replace(path: '$basePath/$relativePath');
 }

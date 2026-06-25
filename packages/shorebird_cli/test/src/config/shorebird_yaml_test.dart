@@ -105,6 +105,47 @@ patch_verification: install_only
       expect(shorebirdYaml.patchVerification, PatchVerification.installOnly);
     });
 
+    test('can be deserialized with open AOT patch metadata', () {
+      const yaml = '''
+app_id: test_app_id
+aot_patch_runtime_mode: dart-bytecode-interpreter
+aot_patch_bytecode_path: build/patch.interp
+aot_patch_key_id: test-key
+aot_patch_key_hex: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+aot_patch_app_build_id: 1.2.3+4
+aot_patch_base_flavor_id: free
+aot_patch_base_license_type: free
+aot_patch_flavor_id: pro
+aot_patch_license_type: pro
+aot_patch_sdk_hash: sdk-hash
+aot_patch_base_snapshot_hash: base-hash
+aot_patch_obfuscation_map_hash: obfuscation-hash
+aot_patch_offline_expires_at: 2030-01-01T00:00:00Z
+''';
+      final shorebirdYaml = checkedYamlDecode(
+        yaml,
+        (m) => ShorebirdYaml.fromJson(m!),
+      );
+      expect(
+        shorebirdYaml.aotPatchRuntimeMode,
+        'dart-bytecode-interpreter',
+      );
+      expect(shorebirdYaml.aotPatchBytecodePath, 'build/patch.interp');
+      expect(shorebirdYaml.aotPatchKeyId, 'test-key');
+      expect(shorebirdYaml.aotPatchAppBuildId, '1.2.3+4');
+      expect(shorebirdYaml.aotPatchBaseFlavorId, 'free');
+      expect(shorebirdYaml.aotPatchBaseLicenseType, 'free');
+      expect(shorebirdYaml.aotPatchFlavorId, 'pro');
+      expect(shorebirdYaml.aotPatchLicenseType, 'pro');
+      expect(shorebirdYaml.aotPatchSdkHash, 'sdk-hash');
+      expect(shorebirdYaml.aotPatchBaseSnapshotHash, 'base-hash');
+      expect(shorebirdYaml.aotPatchObfuscationMapHash, 'obfuscation-hash');
+      expect(
+        shorebirdYaml.aotPatchOfflineExpiresAt,
+        '2030-01-01T00:00:00Z',
+      );
+    });
+
     test('throws when patch_verification has invalid value', () {
       const yaml = '''
 app_id: test_app_id

@@ -125,7 +125,7 @@ Defaults to "latest" which builds using the latest stable Flutter version.''',
         hide: true,
         negatable: false,
       )
-      // Added for https://github.com/shorebirdtech/shorebird/issues/3223.
+      // Added for https://git.tonycloud.org/flutter/shorebird/issues/3223.
       // Can be removed fall 2026 or later.
       ..addFlag(
         'confirm',
@@ -461,9 +461,7 @@ $error''');
 
     if (revision == null) {
       final openIssueLink = link(
-        uri: Uri.parse(
-          'https://github.com/shorebirdtech/shorebird/issues/new?assignees=&labels=feature&projects=&template=feature_request.md&title=feat%3A+',
-        ),
+        uri: Uri.parse(openShorebirdIssueUrl),
         message: 'open an issue',
       );
       logger.err('''

@@ -1,8 +1,15 @@
 // cspell:words swiftobjective ckotlinjava havent
 import 'package:mason_logger/mason_logger.dart';
 
-/// Link to the Shorebird documentation page.
-const docsUrl = 'https://docs.shorebird.dev';
+/// Link to the open Shorebird repository.
+const openShorebirdRepositoryUrl =
+    'https://git.tonycloud.org/flutter/shorebird';
+
+/// Link to the open Shorebird issue tracker.
+const openShorebirdIssueUrl = '$openShorebirdRepositoryUrl/issues/new';
+
+/// Link to the open Shorebird documentation page.
+const docsUrl = '$openShorebirdRepositoryUrl/src/branch/main/docs';
 
 /// Link to the Flutter version page on the Shorebird documentation.
 const flutterVersionUrl = '$docsUrl/getting-started/flutter-version';

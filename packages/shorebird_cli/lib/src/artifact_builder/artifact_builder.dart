@@ -112,7 +112,7 @@ ${lightCyan.wrap('shorebird release <platform> --flutter-version=3.29.0')}
 
 • If `flutter build` completes successfully and `shorebird release`
 fails when using the same flutter version, please file an issue:
-${link(uri: Uri.parse('https://github.com/shorebirdtech/shorebird/issues/new'))}
+${link(uri: Uri.parse(openShorebirdIssueUrl))}
 ''';
 
   /// Cache of `flutter build <command>` help output checks for
@@ -246,7 +246,7 @@ Reason: Exited with code $exitCode.''',
         if (target != null) '--target=$target',
         if (targetPlatformArgs != null) '--target-platform=$targetPlatformArgs',
         // TODO(bryanoltman): reintroduce coverage when we can support this.
-        // See https://github.com/shorebirdtech/shorebird/issues/1141.
+        // See https://git.tonycloud.org/flutter/shorebird/issues/1141.
         // coverage:ignore-start
         if (splitPerAbi) '--split-per-abi',
         // coverage:ignore-end
@@ -459,7 +459,7 @@ Reason: Exited with code $exitCode.''',
       throw ArtifactBuildException(
         'Unable to find app.dill file.',
         fixRecommendation:
-            '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+            '''Please file a bug at $openShorebirdIssueUrl with the logs for this command.''',
       );
     }
 
@@ -531,7 +531,7 @@ Reason: Exited with code $exitCode.''',
       throw ArtifactBuildException(
         'Unable to find app.dill file.',
         fixRecommendation:
-            '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+            '''Please file a bug at $openShorebirdIssueUrl with the logs for this command.''',
       );
     }
 
@@ -596,7 +596,7 @@ Reason: Exited with code $exitCode.''',
       throw ArtifactBuildException(
         'Unable to find app.dill file.',
         fixRecommendation:
-            '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+            '''Please file a bug at $openShorebirdIssueUrl with the logs for this command.''',
       );
     }
 
@@ -760,7 +760,7 @@ Reason: Exited with code $exitCode.''',
   /// Flutter SDK on the user's PATH. This is necessary because Flutter commands
   /// run by shorebird update the package_config.json file to point to
   /// shorebird's version of Flutter, which confuses VS Code. See
-  /// https://github.com/shorebirdtech/shorebird/issues/1101 for more info.
+  /// https://git.tonycloud.org/flutter/shorebird/issues/1101 for more info.
   Future<void> _systemFlutterPubGet() async {
     const executable = 'flutter';
     if (osInterface.which(executable) == null) {
@@ -820,6 +820,51 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
 
     if (exitCode != ExitCode.success.code) {
       throw ArtifactBuildException('Failed to create snapshot');
+    }
+
+    return File(outFilePath);
+  }
+
+  /// Compiles [inputFilePath] to a Dart bytecode snapshot at [outFilePath].
+  Future<File> buildDartBytecodeSnapshot({
+    required String inputFilePath,
+    required String outFilePath,
+    String? packageConfigPath,
+    List<String> dartDefines = const [],
+    List<String> experiments = const [],
+  }) async {
+    final arguments = [
+      shorebirdArtifacts.getArtifactPath(
+        artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
+      ),
+      '--platform=${shorebirdArtifacts.getArtifactPath(
+        artifact: ShorebirdArtifact.flutterProductPlatformDill,
+      )}',
+      '--target=flutter',
+      if (packageConfigPath != null) '--packages=$packageConfigPath',
+      for (final define in dartDefines) '-D$define',
+      '-Ddart.vm.profile=false',
+      '-Ddart.vm.product=true',
+      for (final experiment in experiments) '--enable-experiment=$experiment',
+      '-o',
+      outFilePath,
+      inputFilePath,
+    ];
+
+    final exitCode = await shorebirdTracer.span<int>(
+      name: 'dart2bytecode',
+      category: 'subprocess',
+      body: () => process.stream(
+        shorebirdArtifacts.getArtifactPath(
+          artifact: ShorebirdArtifact.dartAotRuntime,
+        ),
+        arguments,
+        runInShell: false,
+      ),
+    );
+
+    if (exitCode != ExitCode.success.code) {
+      throw ArtifactBuildException('Failed to create Dart bytecode snapshot');
     }
 
     return File(outFilePath);

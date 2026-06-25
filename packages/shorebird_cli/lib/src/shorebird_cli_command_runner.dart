@@ -12,6 +12,7 @@ import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
 import 'package:shorebird_cli/src/shorebird_process.dart';
@@ -259,7 +260,7 @@ ${lightCyan.wrap('shorebird release android -- --no-pub lib/main.dart')}''';
           shorebirdFlutterPrefix.write(' $flutterVersion');
         }
         logger.info('''
-Shorebird $packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 $shorebirdFlutterPrefix • revision ${shorebirdEnv.flutterRevision}
 Engine • revision ${shorebirdEnv.shorebirdEngineRevision}''');
       }
@@ -340,9 +341,7 @@ Engine • revision ${shorebirdEnv.shorebirdEngineRevision}''');
         exitCode != ExitCode.success.code &&
         logger.level != Level.verbose) {
       final fileAnIssue = link(
-        uri: Uri.parse(
-          'https://github.com/shorebirdtech/shorebird/issues/new/choose',
-        ),
+        uri: Uri.parse(openShorebirdIssueUrl),
         message: 'file an issue',
       );
       logger.info('''

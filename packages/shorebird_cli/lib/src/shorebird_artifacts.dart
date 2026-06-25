@@ -28,6 +28,15 @@ enum ShorebirdArtifact {
 
   /// The gen_snapshot executable for macOS that creates x64 snapshots.
   genSnapshotMacosX64,
+
+  /// The host dartaotruntime executable.
+  dartAotRuntime,
+
+  /// The host dart2bytecode snapshot.
+  dart2BytecodeSnapshot,
+
+  /// The Flutter product platform dill used to compile Flutter bytecode.
+  flutterProductPlatformDill,
 }
 
 /// A reference to a [ShorebirdArtifacts] instance.
@@ -68,6 +77,12 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
         return _genSnapshotMacOsArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
         return _genSnapshotMacOsX64File.path;
+      case ShorebirdArtifact.dartAotRuntime:
+        return _dartAotRuntimeFile.path;
+      case ShorebirdArtifact.dart2BytecodeSnapshot:
+        return _dart2BytecodeSnapshotFile.path;
+      case ShorebirdArtifact.flutterProductPlatformDill:
+        return _flutterProductPlatformDillFile.path;
     }
   }
 
@@ -164,6 +179,63 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
       ),
     );
   }
+
+  File get _dartAotRuntimeFile {
+    return File(
+      p.join(
+        shorebirdEnv.flutterDirectory.path,
+        'bin',
+        'cache',
+        'dart-sdk',
+        'bin',
+        'dartaotruntime',
+      ),
+    );
+  }
+
+  File get _dart2BytecodeSnapshotFile {
+    return File(
+      p.join(
+        shorebirdEnv.flutterDirectory.path,
+        'bin',
+        'cache',
+        'dart-sdk',
+        'bin',
+        'snapshots',
+        'dart2bytecode.dart.snapshot',
+      ),
+    );
+  }
+
+  File get _flutterProductPlatformDillFile {
+    final workspaceIosPlatformDill = File(
+      p.join(
+        shorebirdEnv.flutterDirectory.path,
+        'engine',
+        'src',
+        'out',
+        'ios_release',
+        'flutter_patched_sdk',
+        'platform_strong.dill',
+      ),
+    );
+    if (workspaceIosPlatformDill.existsSync()) {
+      return workspaceIosPlatformDill;
+    }
+
+    return File(
+      p.join(
+        shorebirdEnv.flutterDirectory.path,
+        'bin',
+        'cache',
+        'artifacts',
+        'engine',
+        'common',
+        'flutter_patched_sdk_product',
+        'platform_strong.dill',
+      ),
+    );
+  }
 }
 
 /// {@template shorebird_local_engine_artifacts}
@@ -188,6 +260,12 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
         return _genSnapshotMacosArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
         return _genSnapshotMacosX64File.path;
+      case ShorebirdArtifact.dartAotRuntime:
+        return _dartAotRuntimeFile.path;
+      case ShorebirdArtifact.dart2BytecodeSnapshot:
+        return _dart2BytecodeSnapshotFile.path;
+      case ShorebirdArtifact.flutterProductPlatformDill:
+        return _flutterProductPlatformDillFile.path;
     }
   }
 
@@ -262,6 +340,59 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
         engineConfig.localEngine,
         'artifacts_x64',
         'gen_snapshot',
+      ),
+    );
+  }
+
+  File get _dartAotRuntimeFile {
+    final localEngineHost = engineConfig.localEngineHost;
+    if (localEngineHost == null) {
+      throw StateError(
+        'localEngineHost is required for local engine artifacts',
+      );
+    }
+    return File(
+      p.join(
+        engineConfig.localEngineSrcPath!,
+        'out',
+        localEngineHost,
+        'dartaotruntime',
+      ),
+    );
+  }
+
+  File get _dart2BytecodeSnapshotFile {
+    final localEngineHost = engineConfig.localEngineHost;
+    if (localEngineHost == null) {
+      throw StateError(
+        'localEngineHost is required for local engine artifacts',
+      );
+    }
+    return File(
+      p.join(
+        engineConfig.localEngineSrcPath!,
+        'out',
+        localEngineHost,
+        'dart-sdk',
+        'bin',
+        'snapshots',
+        'dart2bytecode.dart.snapshot',
+      ),
+    );
+  }
+
+  File get _flutterProductPlatformDillFile {
+    final localEngine = engineConfig.localEngine;
+    if (localEngine == null) {
+      throw StateError('localEngine is required for local engine artifacts');
+    }
+    return File(
+      p.join(
+        engineConfig.localEngineSrcPath!,
+        'out',
+        localEngine,
+        'flutter_patched_sdk',
+        'platform_strong.dill',
       ),
     );
   }

@@ -17,6 +17,7 @@ import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
@@ -36,13 +37,13 @@ class AndroidPatcher extends Patcher {
 
   /// Android versions prior to 3.24.2 have a bug that can cause patches to
   /// be erroneously uninstalled.
-  /// https://github.com/shorebirdtech/updater/issues/211 was fixed in 3.24.2
+  /// Fixed in Flutter 3.24.2.
   static final updaterPatchErrorWarning =
       '''
 Your version of flutter contains a known issue that can cause patches to be erroneously uninstalled in apps that use package:flutter_foreground_task or other plugins that start their own Flutter engines.
 This issue was fixed in Flutter 3.24.2. Please upgrade to a newer version of Flutter to avoid this issue.
 
-See more info about the issue ${link(uri: Uri.parse('https://github.com/shorebirdtech/updater/issues/211'), message: 'on Github')}
+See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssueUrl), message: 'open issue tracker')}
 ''';
 
   /// The `<arch>/libapp.so` directory resolved by [buildPatchArtifact] —
@@ -50,7 +51,7 @@ See more info about the issue ${link(uri: Uri.parse('https://github.com/shorebir
   /// AAB is unreadable, AGP's stripped output. Cached so
   /// [createPatchArtifacts] reuses it instead of decoding the AAB a second
   /// time.
-  /// See https://github.com/shorebirdtech/shorebird/issues/3388.
+  /// See https://git.tonycloud.org/flutter/shorebird/issues/3388.
   Directory? _patchArchsBuildDir;
 
   @override
@@ -93,7 +94,7 @@ See more info about the issue ${link(uri: Uri.parse('https://github.com/shorebir
     final flutterVersion = await shorebirdFlutter.getVersion();
     // Android versions prior to 3.24.2 have a bug that can cause patches to
     // be erroneously uninstalled.
-    // https://github.com/shorebirdtech/updater/issues/211 was fixed in 3.24.2
+    // Fixed in Flutter 3.24.2.
     if (flutterVersion != null && flutterVersion < Version(3, 24, 2)) {
       logger.warn(updaterPatchErrorWarning);
     }
@@ -122,7 +123,7 @@ See more info about the issue ${link(uri: Uri.parse('https://github.com/shorebir
         ..err('Cannot find patch build artifacts.')
         ..info('''
 Please run `shorebird cache clean` and try again. If the issue persists, please
-file a bug report at https://github.com/shorebirdtech/shorebird/issues/new.
+file a bug report at $openShorebirdIssueUrl.
 
 Looked in:
   - the libapp.so entries inside the built .aab
@@ -140,6 +141,7 @@ Looked in:
     required File releaseArtifact,
     Directory? supplementDirectory,
     Duration downloadMessageTimeout = const Duration(minutes: 1),
+    String? releaseVersion,
   }) async {
     final releaseArtifacts = await codePushClientWrapper.getReleaseArtifacts(
       appId: appId,
@@ -150,7 +152,8 @@ Looked in:
     final releaseArtifactPaths = <Arch, String>{};
     final numArtifacts = releaseArtifacts.length;
 
-    // Direct users to https://github.com/shorebirdtech/shorebird/issues/2532
+    // Direct users to the troubleshooting docs until we can provide a better
+    // solution.
     // until we can provide a better solution.
     var artifactsDownloadCompleted = false;
     unawaited(
@@ -161,7 +164,7 @@ Looked in:
         logger.info(
           '''
 It seems like your download is taking longer than expected. If you are on Windows, this is a known issue.
-Please refer to ${link(uri: Uri.parse('https://github.com/shorebirdtech/shorebird/issues/2532'))} for potential workarounds.''',
+Please refer to ${link(uri: Uri.parse(troubleshootingUrl))} for potential workarounds.''',
         );
       }),
     );
@@ -209,7 +212,7 @@ Please refer to ${link(uri: Uri.parse('https://github.com/shorebirdtech/shorebir
       // Skip archs the build didn't produce (ndk.abiFilters / splits.abi /
       // jniLibs.excludes). Without this, a release built for a subset of
       // archs can't be patched without hitting PathNotFoundException
-      // (https://github.com/shorebirdtech/shorebird/issues/3388).
+      // (https://git.tonycloud.org/flutter/shorebird/issues/3388).
       if (!patchArtifact.existsSync()) {
         logger.detail(
           'Skipping ${arch.arch}: no libapp.so at $patchArtifactPath. '

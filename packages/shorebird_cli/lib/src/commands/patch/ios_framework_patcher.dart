@@ -132,6 +132,7 @@ class IosFrameworkPatcher extends Patcher with ApplePatcherMixin {
     required int releaseId,
     required File releaseArtifact,
     Directory? supplementDirectory,
+    String? releaseVersion,
   }) async {
     final unzipProgress = logger.progress('Extracting release artifact');
     late final String releaseXcframeworkPath;

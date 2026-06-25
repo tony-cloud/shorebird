@@ -9,8 +9,12 @@
 //
 // Usage (from the repo root):
 //   dart run packages/shorebird_code_push_protocol/tool/gen.dart \
-//     -i https://api.shorebird.dev/openapi.json \
+//     -i http://localhost:8080/openapi.yaml \
 //     -o packages/shorebird_code_push_protocol
+//
+// Do not regenerate this package from Shorebird's hosted API. Use the checked
+// open spec at ../shorebird-server/internal/api/handlers/openapi.yaml or the
+// self-hosted server's OpenAPI endpoint.
 //
 // The generator does not touch `lib/extensions/` or
 // `lib/shorebird_code_push_protocol.dart`; those are hand-written and

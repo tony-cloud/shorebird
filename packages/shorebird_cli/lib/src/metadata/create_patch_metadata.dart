@@ -12,8 +12,8 @@ part 'create_patch_metadata.g.dart';
 /// later failures in their builds.
 ///
 /// We do not collect Personally Identifying Information (e.g. no paths,
-/// argument lists, etc.) in accordance with our privacy policy:
-/// https://shorebird.dev/privacy/
+/// argument lists, etc.) in accordance with the configured server privacy
+/// policy.
 /// {@endtemplate}
 @JsonSerializable()
 class CreatePatchMetadata extends Equatable {

@@ -8,19 +8,23 @@ set -e
 # Needed because if it is set, cd may print the path it changed to.
 unset CDPATH
 
-# Either clones or pulls the Shorebird Flutter repository, depending on whether FLUTTER_PATH exists.
+# Either clones or pulls the configured Flutter repository, depending on
+# whether FLUTTER_PATH exists.
 function update_flutter {
+  local flutter_git_url="${SHOREBIRD_FLUTTER_GIT_URL:-https://git.tonycloud.org/flutter/flutter.git}"
+  local flutter_storage_base_url="${SHOREBIRD_FLUTTER_STORAGE_BASE_URL:-${FLUTTER_STORAGE_BASE_URL:-http://localhost:8080/download.flutter.io}}"
+
   if [[ -d "$FLUTTER_PATH" ]]; then
     git -C "$FLUTTER_PATH" fetch
   else
-    git clone --filter=tree:0 https://github.com/shorebirdtech/flutter.git --no-checkout "$FLUTTER_PATH"
+    git clone --filter=tree:0 "$flutter_git_url" --no-checkout "$FLUTTER_PATH"
   fi
   # -c to avoid printing a warning about being in a detached head state.
   git -C "$FLUTTER_PATH" -c advice.detachedHead=false checkout "$FLUTTER_VERSION"
   SHOREBIRD_ENGINE_VERSION=`cat "$FLUTTER_PATH/bin/internal/engine.version"`
   echo "Shorebird Engine • revision $SHOREBIRD_ENGINE_VERSION"
-  # Install Shorebird Flutter Artifacts
-  FLUTTER_STORAGE_BASE_URL=https://download.shorebird.dev $FLUTTER_PATH/bin/flutter --version
+  # Install Flutter artifacts through the configured open mirror.
+  FLUTTER_STORAGE_BASE_URL="$flutter_storage_base_url" "$FLUTTER_PATH/bin/flutter" --version
 }
 
 function pub_get_with_retry {

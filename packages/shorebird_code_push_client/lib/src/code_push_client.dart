@@ -95,7 +95,10 @@ class CodePushClient {
          ...standardHeaders,
          ...?customHeaders,
        }),
-       hostedUri = hostedUri ?? Uri.https('api.shorebird.dev');
+       hostedUri = hostedUri ?? defaultHostedUri;
+
+  /// Default URL for the open self-hosted Shorebird server.
+  static final Uri defaultHostedUri = Uri.parse('http://localhost:8080');
 
   /// The standard headers applied to all requests.
   static const standardHeaders = <String, String>{'x-version': packageVersion};

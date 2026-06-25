@@ -13,6 +13,7 @@ import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
+import 'package:shorebird_cli/src/shorebird_process.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
@@ -167,7 +168,7 @@ dependencyResolutionManagement {
 +       }
 +       maven {
 -           url 'https://storage.googleapis.com/download.flutter.io'
-+           url 'https://download.shorebird.dev/download.flutter.io'
++           url '${ShorebirdProcess.defaultFlutterStorageBaseUrl}'
 +       }
     }
 }

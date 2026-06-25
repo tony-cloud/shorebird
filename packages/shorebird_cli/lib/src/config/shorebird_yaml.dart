@@ -25,6 +25,19 @@ class ShorebirdYaml {
     this.baseUrl,
     this.autoUpdate,
     this.patchVerification,
+    this.aotPatchRuntimeMode,
+    this.aotPatchBytecodePath,
+    this.aotPatchKeyId,
+    this.aotPatchKeyHex,
+    this.aotPatchAppBuildId,
+    this.aotPatchBaseFlavorId,
+    this.aotPatchBaseLicenseType,
+    this.aotPatchFlavorId,
+    this.aotPatchLicenseType,
+    this.aotPatchSdkHash,
+    this.aotPatchBaseSnapshotHash,
+    this.aotPatchObfuscationMapHash,
+    this.aotPatchOfflineExpiresAt,
   });
 
   /// Creates a [ShorebirdYaml] from a JSON map.
@@ -61,6 +74,45 @@ class ShorebirdYaml {
 
   /// The patch verification mode for the app.
   final PatchVerification? patchVerification;
+
+  /// Runtime mode used for open AOT patch artifacts.
+  final String? aotPatchRuntimeMode;
+
+  /// Path to a full Dart bytecode patch payload for the iOS interpreter route.
+  final String? aotPatchBytecodePath;
+
+  /// Key id used to encrypt open AOT patch artifacts.
+  final String? aotPatchKeyId;
+
+  /// Development-only AES-256 key used to encrypt open AOT patch artifacts.
+  final String? aotPatchKeyHex;
+
+  /// App build id to bind into open AOT patch artifacts.
+  final String? aotPatchAppBuildId;
+
+  /// Optional source flavor id this patch can replace.
+  final String? aotPatchBaseFlavorId;
+
+  /// Optional source license type this patch can replace.
+  final String? aotPatchBaseLicenseType;
+
+  /// Target flavor id after the patch is applied.
+  final String? aotPatchFlavorId;
+
+  /// Target license type after the patch is applied.
+  final String? aotPatchLicenseType;
+
+  /// SDK hash expected by the runtime for open AOT patch artifacts.
+  final String? aotPatchSdkHash;
+
+  /// Base bytecode snapshot hash expected by the runtime.
+  final String? aotPatchBaseSnapshotHash;
+
+  /// Optional obfuscation map hash expected by the runtime.
+  final String? aotPatchObfuscationMapHash;
+
+  /// Optional offline expiration timestamp for the patch artifact.
+  final String? aotPatchOfflineExpiresAt;
 }
 
 /// Extension on [ShorebirdYaml] to get the app id for a specific flavor.

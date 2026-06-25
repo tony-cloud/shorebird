@@ -42,6 +42,10 @@ void main() {
       shorebirdEnv = MockShorebirdEnv();
       validator = MockValidator();
       shorebirdValidator = runWithOverrides(ShorebirdValidator.new);
+
+      when(
+        () => shorebirdEnv.hostedUri,
+      ).thenReturn(Uri.parse(ShorebirdEnv.defaultHostedUrl));
     });
 
     group('PreconditionFailedException', () {
@@ -93,7 +97,7 @@ void main() {
             '''If you already have an account, run ${lightCyan.wrap('shorebird login')} to sign in.''',
           ),
           () => logger.info(
-            '''If you don't have a Shorebird account, go to ${link(uri: Uri.parse('https://console.shorebird.dev'))} to create one.''',
+            '''If you don't have a Shorebird account, go to ${link(uri: Uri.parse(ShorebirdEnv.defaultHostedUrl))} to create one.''',
           ),
         ]);
       });

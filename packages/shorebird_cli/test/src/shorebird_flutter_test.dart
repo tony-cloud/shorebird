@@ -96,6 +96,7 @@ void main() {
         ),
       ).thenAnswer((_) async => 'origin/flutter_release/3.10.6');
       when(() => logger.progress(any())).thenReturn(progress);
+      when(() => platform.environment).thenReturn(const {});
       when(() => platform.isMacOS).thenReturn(false);
       when(() => shorebirdEnv.flutterDirectory).thenReturn(flutterDirectory);
       when(() => shorebirdEnv.flutterRevision).thenReturn(flutterRevision);
@@ -114,6 +115,27 @@ void main() {
         () => precacheProcessResult.exitCode,
       ).thenReturn(ExitCode.success.code);
       when(() => precacheProcessResult.stderr).thenReturn('');
+    });
+
+    group('flutterGitUrl', () {
+      test('defaults to the open Flutter fork', () {
+        expect(
+          runWithOverrides(() => shorebirdFlutter.flutterGitUrl),
+          ShorebirdFlutter.defaultFlutterGitUrl,
+        );
+      });
+
+      test('uses SHOREBIRD_FLUTTER_GIT_URL when set', () {
+        const flutterGitUrl = 'https://example.com/open/flutter.git';
+        when(
+          () => platform.environment,
+        ).thenReturn(const {'SHOREBIRD_FLUTTER_GIT_URL': flutterGitUrl});
+
+        expect(
+          runWithOverrides(() => shorebirdFlutter.flutterGitUrl),
+          flutterGitUrl,
+        );
+      });
     });
 
     group('precacheArgs', () {
@@ -935,7 +957,7 @@ origin/flutter_release/3.10.6''';
 
         verify(
           () => git.clone(
-            url: ShorebirdFlutter.flutterGitUrl,
+            url: ShorebirdFlutter.defaultFlutterGitUrl,
             outputDirectory: p.join(flutterDirectory.parent.path, revision),
             args: ['--filter=tree:0', '--no-checkout'],
           ),
@@ -962,7 +984,7 @@ origin/flutter_release/3.10.6''';
         );
         verify(
           () => git.clone(
-            url: ShorebirdFlutter.flutterGitUrl,
+            url: ShorebirdFlutter.defaultFlutterGitUrl,
             outputDirectory: p.join(flutterDirectory.parent.path, revision),
             args: ['--filter=tree:0', '--no-checkout'],
           ),

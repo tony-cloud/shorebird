@@ -62,6 +62,7 @@ class LinuxPatcher extends Patcher {
     required int releaseId,
     required File releaseArtifact,
     Directory? supplementDirectory,
+    String? releaseVersion,
   }) async {
     final createDiffProgress = logger.progress('Creating patch artifacts');
     final patchArtifactPath = p.join(

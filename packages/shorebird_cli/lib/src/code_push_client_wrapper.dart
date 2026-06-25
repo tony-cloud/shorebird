@@ -18,6 +18,7 @@ import 'package:shorebird_cli/src/deployment_track.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
 import 'package:shorebird_cli/src/shorebird_web_console.dart';
@@ -484,11 +485,12 @@ Please create a release using "shorebird release" and try again.
       _handleErrorAndExit(
         Exception('Cannot find patch build artifacts.'),
         progress: createArtifactProgress,
-        message: '''
+        message:
+            '''
 Cannot find release build artifacts.
 
 Please run `shorebird cache clean` and try again. If the issue persists, please
-file a bug report at https://github.com/shorebirdtech/shorebird/issues/new.
+file a bug report at $openShorebirdIssueUrl.
 
 Looked in:
   - the libapp.so entries inside the built .aab
@@ -502,7 +504,7 @@ Looked in:
     // the project filters it out via `ndk.abiFilters`, `splits.abi`, or
     // `jniLibs.excludes`. Iterating only over present files lets a filtered
     // release succeed instead of crashing on the first missing arch
-    // (https://github.com/shorebirdtech/shorebird/issues/3388).
+    // (https://git.tonycloud.org/flutter/shorebird/issues/3388).
     final missingArchPaths = <String>[];
     var uploadedArchCount = 0;
     for (final arch in architectures) {

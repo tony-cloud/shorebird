@@ -1,7 +1,7 @@
 name: artifact_proxy
 description: Intercept and proxy Flutter artifact requests.
 version: 1.0.0
-repository: https://github.com/shorebirdtech/shorebird/
+repository: https://git.tonycloud.org/flutter/shorebird-workspace
 publish_to: "none"
 resolution: workspace
 

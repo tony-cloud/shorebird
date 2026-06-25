@@ -22,7 +22,7 @@ class LogoutCommand extends ShorebirdCommand {
       return ExitCode.success.code;
     }
 
-    final logoutProgress = logger.progress('Logging out of shorebird.dev');
+    final logoutProgress = logger.progress('Logging out of Shorebird');
     await auth.logout();
     logoutProgress.complete();
 

@@ -1469,7 +1469,7 @@ Reason: Exited with code 70.'''),
                   .having(
                     (e) => e.fixRecommendation,
                     'fixRecommendation',
-                    '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+                    '''Please file a bug at https://git.tonycloud.org/flutter/shorebird/issues/new with the logs for this command.''',
                   ),
             ),
           );
@@ -1710,7 +1710,7 @@ Reason: Exited with code 70.'''),
                   .having(
                     (e) => e.fixRecommendation,
                     'fixRecommendation',
-                    '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+                    '''Please file a bug at https://git.tonycloud.org/flutter/shorebird/issues/new with the logs for this command.''',
                   ),
             ),
           );
@@ -1924,7 +1924,7 @@ Reason: Exited with code 70.'''),
                       .having(
                         (e) => e.fixRecommendation,
                         'fixRecommendation',
-                        '''Please file a bug at https://github.com/shorebirdtech/shorebird/issues/new with the logs for this command.''',
+                        '''Please file a bug at https://git.tonycloud.org/flutter/shorebird/issues/new with the logs for this command.''',
                       ),
                 ),
               );
@@ -2036,6 +2036,106 @@ Reason: Exited with code 70.'''),
             );
 
             expect(outFile.path, '/path/to/out');
+          });
+        });
+      });
+
+      group('buildDartBytecodeSnapshot', () {
+        setUp(() {
+          when(
+            () => shorebirdArtifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dartAotRuntime,
+            ),
+          ).thenReturn('dartaotruntime');
+          when(
+            () => shorebirdArtifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
+            ),
+          ).thenReturn('dart2bytecode.dart.snapshot');
+          when(
+            () => shorebirdArtifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.flutterProductPlatformDill,
+            ),
+          ).thenReturn('platform_strong.dill');
+        });
+
+        test('invokes dart2bytecode with release Flutter arguments', () async {
+          final outFile = await runWithOverrides(
+            () => builder.buildDartBytecodeSnapshot(
+              inputFilePath: '/app/lib/main.dart',
+              outFilePath: '/path/to/out.bytecode',
+              packageConfigPath: '/app/.dart_tool/package_config.json',
+              dartDefines: ['FOO=bar'],
+              experiments: ['records'],
+            ),
+          );
+
+          expect(outFile.path, '/path/to/out.bytecode');
+          verify(
+            () => shorebirdProcess.stream(
+              'dartaotruntime',
+              [
+                'dart2bytecode.dart.snapshot',
+                '--platform=platform_strong.dill',
+                '--target=flutter',
+                '--packages=/app/.dart_tool/package_config.json',
+                '-DFOO=bar',
+                '-Ddart.vm.profile=false',
+                '-Ddart.vm.product=true',
+                '--enable-experiment=records',
+                '-o',
+                '/path/to/out.bytecode',
+                '/app/lib/main.dart',
+              ],
+              runInShell: false,
+            ),
+          ).called(1);
+        });
+
+        test('omits package config when none is provided', () async {
+          await runWithOverrides(
+            () => builder.buildDartBytecodeSnapshot(
+              inputFilePath: '/app/lib/main.dart',
+              outFilePath: '/path/to/out.bytecode',
+            ),
+          );
+
+          final captured =
+              verify(
+                    () => shorebirdProcess.stream(
+                      'dartaotruntime',
+                      captureAny(),
+                      runInShell: false,
+                    ),
+                  ).captured.single
+                  as List<String>;
+          expect(
+            captured,
+            isNot(contains('--packages=/app/.dart_tool/package_config.json')),
+          );
+        });
+
+        group('when build fails', () {
+          setUp(() {
+            when(
+              () => shorebirdProcess.stream(
+                any(),
+                any(),
+                runInShell: any(named: 'runInShell'),
+              ),
+            ).thenAnswer((_) async => ExitCode.software.code);
+          });
+
+          test('throws ArtifactBuildException', () {
+            expect(
+              () => runWithOverrides(
+                () => builder.buildDartBytecodeSnapshot(
+                  inputFilePath: '/app/lib/main.dart',
+                  outFilePath: '/path/to/out.bytecode',
+                ),
+              ),
+              throwsA(isA<ArtifactBuildException>()),
+            );
           });
         });
       });

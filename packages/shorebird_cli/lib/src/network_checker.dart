@@ -11,6 +11,7 @@ import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/formatters/formatters.dart';
 import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/shorebird_env.dart';
 
 /// A reference to a [NetworkChecker] instance.
 final networkCheckerRef = create(NetworkChecker.new);
@@ -35,13 +36,16 @@ class NetworkCheckerException implements Exception {
 /// {@endtemplate}
 class NetworkChecker {
   /// The URLs to check for network reachability.
-  static final urlsToCheck = [
-    'https://api.shorebird.dev',
-    'https://console.shorebird.dev',
-    'https://oauth2.googleapis.com',
-    'https://storage.googleapis.com',
-    'https://cdn.shorebird.cloud',
-  ].map(Uri.parse).toList();
+  static List<Uri> get urlsToCheck {
+    final hostedUri =
+        shorebirdEnv.hostedUri ?? Uri.parse(ShorebirdEnv.defaultHostedUrl);
+    final urls = [hostedUri, shorebirdEnv.authServiceUri];
+    final seen = <String>{};
+    return [
+      for (final url in urls)
+        if (seen.add(url.toString())) url,
+    ];
+  }
 
   /// Verify that each of [urlsToCheck] responds to an HTTP GET request.
   Future<void> checkReachability() async {

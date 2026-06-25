@@ -68,7 +68,7 @@ More info: ${troubleshootingUrl.toLink()}.
   List<String> extraBuildArgs = const [];
 
   /// Additional gen_snapshot arguments needed to match the release's
-  /// obfuscation flags. Used by Apple patchers for [buildElfAotSnapshot]
+  /// obfuscation flags. Used by Apple patchers for `buildElfAotSnapshot`
   /// and linker calls.
   List<String> get obfuscationGenSnapshotArgs => [
     if (obfuscationMapPath != null) ...[
@@ -125,6 +125,7 @@ More info: ${troubleshootingUrl.toLink()}.
     required int releaseId,
     required File releaseArtifact,
     Directory? supplementDirectory,
+    String? releaseVersion,
   });
 
   /// Updates the provided metadata to include patcher-specific fields.
@@ -275,7 +276,7 @@ More info: ${troubleshootingUrl.toLink()}.
   /// native changes, even though the user may not have actually changed any
   /// code or dependencies.
   ///
-  /// Context: https://github.com/shorebirdtech/shorebird/issues/2270
+  /// Context: https://git.tonycloud.org/flutter/shorebird/issues/2270
   List<String> buildNameAndNumberArgsFromReleaseVersion(
     String? releaseVersion,
   ) {

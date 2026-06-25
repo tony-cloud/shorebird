@@ -12,10 +12,16 @@ void main() {
   const shorebirdEngineRevision = '8b89f8bd9fc6982aa9c4557fd0e5e89db1ff9986';
   const manifest = ArtifactsManifest(
     flutterEngineRevision: 'ec975089acb540fc60752606a3d3ba809dd1528b',
-    storageBucket: 'download.shorebird.dev',
+    storageBucket: 'shorebird',
     artifactOverrides: {
       r'flutter_infra_release/flutter/$engine/android-arm64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/android-arm64-release/symbols.zip',
+      r'flutter_infra_release/flutter/$engine/linux-x64-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/linux-x64-release/linux-x64-flutter-gtk.zip',
+      r'flutter_infra_release/flutter/$engine/ios-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/flutter_patched_sdk_product.zip',
+      r'flutter_infra_release/flutter/$engine/flutter-web-sdk.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-arm64-release/FlutterMacOS.framework.zip',
       r'flutter_infra_release/flutter/$engine/android-arm-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/android-arm-release/symbols.zip',
       r'flutter_infra_release/flutter/$engine/android-x64-release/artifacts.zip',
@@ -81,10 +87,71 @@ void main() {
       expect(
         response,
         isRedirectTo(
-          'https://storage.googleapis.com/${manifest.storageBucket}/$path',
+          'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
         ),
       );
       verify(() => client.getManifest(shorebirdEngineRevision)).called(1);
+    });
+
+    test('should proxy CI-produced desktop artifacts with overrides', () async {
+      const paths = [
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/linux-x64-release/artifacts.zip',
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/linux-x64-release/linux-x64-flutter-gtk.zip',
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/flutter_patched_sdk_product.zip',
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/darwin-arm64-release/FlutterMacOS.framework.zip',
+      ];
+
+      for (final path in paths) {
+        expect(
+          await handler(buildRequest(path)),
+          isRedirectTo(
+            'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
+          ),
+        );
+      }
+      verify(() => client.getManifest(shorebirdEngineRevision)).called(4);
+    });
+
+    test('should proxy CI-produced iOS and web artifacts with overrides', () async {
+      const paths = [
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/ios-release/artifacts.zip',
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/flutter-web-sdk.zip',
+      ];
+
+      for (final path in paths) {
+        expect(
+          await handler(buildRequest(path)),
+          isRedirectTo(
+            'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
+          ),
+        );
+      }
+      verify(() => client.getManifest(shorebirdEngineRevision)).called(2);
+    });
+
+    test('can use custom Flutter and Shorebird artifact roots', () async {
+      handler = artifactProxyHandler(
+        client: client,
+        flutterArtifactBaseUri: Uri.parse('https://flutter.example.com'),
+        shorebirdArtifactBaseUri: Uri.parse('https://shorebird.example.com'),
+      );
+      const shorebirdPath =
+          'flutter_infra_release/flutter/$shorebirdEngineRevision/android-x64-release/artifacts.zip';
+      const flutterPath =
+          'flutter_infra_release/flutter/$shorebirdEngineRevision/windows-x64/font-subset.zip';
+
+      expect(
+        await handler(buildRequest(shorebirdPath)),
+        isRedirectTo(
+          'https://shorebird.example.com/${manifest.storageBucket}/$shorebirdPath',
+        ),
+      );
+      expect(
+        await handler(buildRequest(flutterPath)),
+        isRedirectTo(
+          'https://flutter.example.com/flutter_infra_release/flutter/${manifest.flutterEngineRevision}/windows-x64/font-subset.zip',
+        ),
+      );
     });
 
     test('should proxy to Flutter artifacts '

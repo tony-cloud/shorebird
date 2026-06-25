@@ -4,22 +4,30 @@ This is a tool for proxying Flutter artifacts from a derived Flutter engine
 revision back to the base Flutter engine revision. This is useful for
 when you need to modify _some_ of the Flutter artifacts but not all of them.
 
-This is a development tool which map requests to Google
-Storage (either Shorebird's bucket or the official Flutter buckets).
+This is a development tool which maps requests to configurable artifact origins.
+By default, Flutter artifacts are redirected to the public Flutter storage
+origin and Shorebird-specific artifacts are redirected to the local open mirror
+root at `http://localhost:8080/artifacts`.
 
 ## Usage
 
-Uses `config.dart` to configure the engine revisions and artifact overrides.
+Uses `config.dart` to configure recognized artifact URL patterns. Runtime
+origins are configured with environment variables:
+
+- `SHOREBIRD_ARTIFACT_BASE_URL`: root for open Shorebird manifests and
+  artifacts, defaulting to `http://localhost:8080/artifacts`
+- `ARTIFACT_PROXY_FLUTTER_BASE_URL`: root for upstream Flutter artifacts,
+  defaulting to `https://storage.googleapis.com`
 
 ```bash
 # Run locally with hot-reload enabled.
-DEV=true dart --enable-vm-service run bin/server.dart
+PORT=8081 DEV=true dart --enable-vm-service run bin/server.dart
 ```
 
 And then in a separate terminal:
 
 ```
-FLUTTER_STORAGE_BASE_URL=http://localhost:8080 flutter precache -a
+FLUTTER_STORAGE_BASE_URL=http://localhost:8081 flutter precache -a
 ```
 
 You should use a separate checkout of Flutter when running this, so you don't
@@ -27,84 +35,56 @@ poison the cache of your main Flutter checkout.
 
 ## Updating config.dart
 
-If run into 404s when fetching artifacts, ensure that the expected manifest
-exists at
-https://storage.googleapis.com/download.shorebird.dev/shorebird/$engineRevision/artifacts_manifest.yaml.
+If you run into 404s when fetching artifacts, ensure that the expected manifest
+exists at:
+
+```text
+$SHOREBIRD_ARTIFACT_BASE_URL/shorebird/$engineRevision/artifacts_manifest.yaml
+```
 
 If it does, you may need to update the artifact list in `config.dart` and, if
-the artifact is one we're providing, add it in `tool/generate_manifest.sh`
+the artifact is one we're providing, add it in
+`../../../scripts/write_artifact_manifest.py`.
 
-To do so, you will need to determine the artifact URLs. Follow these steps:
+To do so, point Flutter at this proxy with `FLUTTER_STORAGE_BASE_URL`, run a
+Shorebird/Flutter command that downloads the missing artifact, then add the
+observed URL pattern to `packages/artifact_proxy/lib/config.dart`.
 
-- Adjust shorebird_cli to point to http://localhost:8080 instead of https://download.shorebird.dev:
-
-  - packages\shorebird_cli\lib\src\shorebird_process.dart
-
-    ```diff
-        Map<String, String> _environmentOverrides({
-        required String executable,
-    }) {
-        if (executable == 'flutter') {
-        // If this ever changes we also need to update the `shorebird` shell
-        // wrapper which downloads runs Flutter to fetch artifacts the first time.
-    -      return {'FLUTTER_STORAGE_BASE_URL': 'https://download.shorebird.dev'};
-    +      return {'FLUTTER_STORAGE_BASE_URL': 'http://localhost:8080'};
-        }
-
-        return {};
-    }
-    ```
-
-- Adjust third_party Flutter to point to http://localhost:8080 instead of https://download.shorebird.dev:
-
-  - third_party\flutter\bin\internal\shared.sh
-
-    ```diff
-    # Either clones or pulls the Shorebird Flutter repository, depending on whether FLUTTER_PATH exists.
-    function update_flutter {
-    if [[ -d "$FLUTTER_PATH" ]]; then
-        git -C "$FLUTTER_PATH" fetch
-    else
-        git clone --filter=tree:0 https://github.com/shorebirdtech/flutter.git --no-checkout "$FLUTTER_PATH"
-    fi
-    # -c to avoid printing a warning about being in a detached head state.
-    git -C "$FLUTTER_PATH" -c advice.detachedHead=false checkout "$FLUTTER_VERSION"
-    SHOREBIRD_ENGINE_VERSION=`cat "$FLUTTER_PATH/bin/internal/engine.version"`
-    echo "Shorebird Engine • revision $SHOREBIRD_ENGINE_VERSION"
-    # Install Shorebird Flutter Artifacts
-    -  FLUTTER_STORAGE_BASE_URL=https://download.shorebird.dev $FLUTTER_PATH/bin/flutter --version
-    +  FLUTTER_STORAGE_BASE_URL=http://localhost:8080 $FLUTTER_PATH/bin/flutter --version
-    }
-    ```
-
-- Modify flutter_tool used by Shorebird to allow downloads from insecure URLs:
-  - shorebird\bin\cache\flutter\packages\flutter_tools\gradle\flutter.gradle
-    ```diff
-    rootProject.allprojects {
-        repositories {
-            maven {
-                url repository
-    +           allowInsecureProtocol true
-            }
-        }
-    }
-    ```
-- Remove the flutter_tools snapshot
+If you changed Flutter tool code while debugging, remove the flutter_tools
+snapshot:
 
   ```bash
   cd bin/cache/flutter/bin/cache
   rm flutter_tools.s*
   ```
 
-- Run a shorebird command (`shorebird run` works well)
-- For each artifact that 404s, add a line to `packages\artifact_proxy\lib\config.dart`, following the conventions for capturing engine revisions and escaping relevant characters.
+- Run a Shorebird command (`shorebird run` works well).
+- For each artifact that 404s, add a line to
+  `packages/artifact_proxy/lib/config.dart`, following the conventions for
+  capturing engine revisions and escaping relevant characters.
 
-## Generating an `artifact_manifest.yaml`
+## Generating an `artifacts_manifest.yaml`
 
-To generate a new `artifact_manifest.yaml` for a specific flutter_revision use the following command:
+To generate a new `artifacts_manifest.yaml` for a specific Flutter engine
+revision, use the workspace helper:
 
 ```
-./tools/generate_manifest.sh <flutter_engine_revision> > artifact_manifest.yaml
+../../../scripts/write_artifact_manifest.py \
+  --flutter-engine-revision <flutter_engine_revision> \
+  --output artifacts_manifest.yaml
 ```
 
-Then upload the `artifact_manifest.yaml` to `download.shorebird.dev/shorebird/<shorebird_engine_revision>/artifacts_manifest.yaml`
+`--flutter-engine-revision` is the upstream Flutter engine revision used for
+unchanged artifacts. Upload the generated file under the custom Shorebird engine
+revision path shown below.
+
+Then upload the `artifacts_manifest.yaml` to:
+
+```text
+$SHOREBIRD_ARTIFACT_BASE_URL/shorebird/<shorebird_engine_revision>/artifacts_manifest.yaml
+```
+
+The GitHub CI engine artifacts include a `mirror/` subtree for the override
+files listed by this manifest. Copy the contents of that subtree to
+`$SHOREBIRD_ARTIFACT_BASE_URL` alongside the manifest and `patch-*.zip`
+artifacts.

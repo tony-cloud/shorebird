@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
-import 'package:path/path.dart' as p;
 import 'package:meta/meta.dart';
+import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
@@ -105,7 +105,7 @@ To target the latest release (e.g. the release that was most recently updated) u
 [DEPRECATED] Whether to publish the patch to the staging environment. Use --track=staging instead.''',
         hide: true,
       )
-      // Added for https://github.com/shorebirdtech/shorebird/issues/3223.
+      // Added for https://git.tonycloud.org/flutter/shorebird/issues/3223.
       // Can be removed fall 2026 or later.
       ..addFlag(
         'confirm',
@@ -458,10 +458,13 @@ Building with Flutter $flutterVersionString to determine the release version...
     // calls made by Apple patchers outside the Flutter build.
     final extraBuildArgs = <String>[];
     if (obfuscationMapFile != null) {
+      final loadObfuscationMapArg = [
+        '--extra-gen-snapshot-options=--load-obfuscation-map',
+        obfuscationMapFile.path,
+      ].join('=');
       extraBuildArgs.addAll([
         '--obfuscate',
-        '--extra-gen-snapshot-options='
-            '--load-obfuscation-map=${obfuscationMapFile.path}',
+        loadObfuscationMapArg,
       ]);
 
       // Gate --strip on the release's Flutter revision (not the user's
@@ -539,6 +542,7 @@ Building patch with Flutter $flutterVersionString
           releaseId: release.id,
           releaseArtifact: releaseArchive,
           supplementDirectory: supplementDirectory,
+          releaseVersion: release.version,
         );
 
         final dryRun = results['dry-run'] == true;
@@ -663,7 +667,7 @@ Please re-run the release command for this version or create a new release.''');
     required Patcher patcher,
   }) async {
     try {
-      return patcher.assertUnpatchableDiffs(
+      return await patcher.assertUnpatchableDiffs(
         releaseArtifact: releaseArtifact,
         releaseArchive: releaseArchive,
         patchArchive: patchArchive,

@@ -2,6 +2,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/shorebird_command.dart';
+import 'package:shorebird_cli/src/shorebird_web_console.dart';
 
 /// {@template login_command}
 /// `shorebird login`
@@ -33,7 +34,7 @@ class LoginCommand extends ShorebirdCommand {
     try {
       await auth.login(prompt: prompt);
     } on UserNotFoundException catch (error) {
-      final consoleUri = Uri.https('console.shorebird.dev');
+      final consoleUri = ShorebirdWebConsole.uri('');
       logger
         ..err('''
 We could not find a Shorebird account for ${error.email}.''')

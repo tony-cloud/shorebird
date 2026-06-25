@@ -974,7 +974,7 @@ void main() {
             '`shorebird login:ci`. '
             'This format is deprecated and will stop working in a future '
             'release. '
-            'Create an API key at https://console.shorebird.dev instead.',
+            'Create an API key at ${ShorebirdEnv.defaultHostedUrl} instead.',
           ),
         ).called(1);
         verify(

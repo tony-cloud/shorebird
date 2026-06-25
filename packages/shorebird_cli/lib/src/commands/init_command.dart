@@ -76,7 +76,7 @@ Please make sure you are running "shorebird init" from within your Flutter proje
         .getOrganizationMemberships();
     if (organizationMemberships.isEmpty) {
       logger.err(
-        '''You do not have any organizations. This should never happen. Please contact us on Discord or send us an email at contact@shorebird.dev.''',
+        '''You do not have any organizations. This should never happen. Please file an issue at $openShorebirdIssueUrl.''',
       );
       return ExitCode.software.code;
     }
@@ -339,7 +339,7 @@ Reference the following commands to get started:
 🚀 To push an update use: "${lightCyan.wrap('shorebird patch')}".
 👀 To preview a release use: "${lightCyan.wrap('shorebird preview')}".
 
-For more information about Shorebird, visit ${link(uri: Uri.parse('https://shorebird.dev'))}''',
+For more information about Shorebird, visit ${link(uri: Uri.parse(docsUrl))}''',
     );
 
     await doctor.runValidators(

@@ -57,6 +57,10 @@ void main() {
       expect(CodePushClient(), isNotNull);
     });
 
+    test('defaults to the open self-hosted server URL', () {
+      expect(CodePushClient().hostedUri, CodePushClient.defaultHostedUri);
+    });
+
     group('CodePushException', () {
       test('toString is correct', () {
         const exceptionWithDetails = CodePushException(

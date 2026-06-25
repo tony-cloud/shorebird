@@ -18,7 +18,7 @@ import 'mocks.dart';
 void main() {
   group('ShorebirdProcess', () {
     const flutterStorageBaseUrlEnv = {
-      'FLUTTER_STORAGE_BASE_URL': 'https://download.shorebird.dev',
+      'FLUTTER_STORAGE_BASE_URL': ShorebirdProcess.defaultFlutterStorageBaseUrl,
     };
 
     late EngineConfig engineConfig;
@@ -64,6 +64,7 @@ void main() {
 
       when(() => logger.level).thenReturn(Level.info);
 
+      when(() => platform.environment).thenReturn({});
       when(() => platform.isWindows).thenReturn(false);
     });
 
@@ -151,6 +152,31 @@ void main() {
             ),
             ['--version'],
             environment: flutterStorageBaseUrlEnv,
+            workingDirectory: '~',
+          ),
+        ).called(1);
+      });
+
+      test('can use an open Flutter storage mirror', () async {
+        when(() => platform.environment).thenReturn({
+          'SHOREBIRD_FLUTTER_STORAGE_BASE_URL':
+              'https://artifacts.example.com/flutter',
+        });
+
+        await runWithOverrides(
+          () => shorebirdProcess.run('flutter', [
+            '--version',
+          ], workingDirectory: '~'),
+        );
+
+        verify(
+          () => processWrapper.run(
+            any(),
+            ['--version'],
+            environment: {
+              'FLUTTER_STORAGE_BASE_URL':
+                  'https://artifacts.example.com/flutter',
+            },
             workingDirectory: '~',
           ),
         ).called(1);

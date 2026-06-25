@@ -56,7 +56,7 @@ void main() {
       final result = await runWithOverrides(command.run);
       expect(result, equals(ExitCode.success.code));
 
-      verify(() => logger.progress('Logging out of shorebird.dev')).called(1);
+      verify(() => logger.progress('Logging out of Shorebird')).called(1);
       verify(() => auth.logout()).called(1);
     });
   });

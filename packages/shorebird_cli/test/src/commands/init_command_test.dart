@@ -16,6 +16,7 @@ import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/apple/apple.dart';
 import 'package:shorebird_cli/src/pubspec_editor.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_process.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
@@ -393,7 +394,7 @@ Please make sure you are running "shorebird init" from within your Flutter proje
         expect(exitCode, equals(ExitCode.software.code));
         verify(
           () => logger.err(
-            '''You do not have any organizations. This should never happen. Please contact us on Discord or send us an email at contact@shorebird.dev.''',
+            '''You do not have any organizations. This should never happen. Please file an issue at $openShorebirdIssueUrl.''',
           ),
         ).called(1);
       });
@@ -1482,7 +1483,7 @@ flutter:
               '''📦 To create a new release use: "${lightCyan.wrap('shorebird release')}".''',
               '''🚀 To push an update use: "${lightCyan.wrap('shorebird patch')}".''',
               '''👀 To preview a release use: "${lightCyan.wrap('shorebird preview')}".''',
-              '''For more information about Shorebird, visit ${link(uri: Uri.parse('https://shorebird.dev'))}''',
+              '''For more information about Shorebird, visit ${link(uri: Uri.parse(docsUrl))}''',
               '',
             ]),
           ),

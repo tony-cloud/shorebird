@@ -25,6 +25,10 @@ class ShorebirdProcess {
     ProcessWrapper? processWrapper, // For mocking ShorebirdProcess.
   }) : processWrapper = processWrapper ?? ProcessWrapper();
 
+  /// Default Flutter artifact mirror for the open self-hosted setup.
+  static const defaultFlutterStorageBaseUrl =
+      '${ShorebirdEnv.defaultHostedUrl}/download.flutter.io';
+
   /// The underlying process wrapper.
   final ProcessWrapper processWrapper;
 
@@ -38,7 +42,7 @@ class ShorebirdProcess {
   /// `bin/shorebird.dart`, so `flutter build` stderr is absent from the
   /// shorebird log file — on a build failure users see the real error on
   /// screen but the log only has `Failed to build AAB. Exited with code 1`
-  /// (https://github.com/shorebirdtech/shorebird/issues/3703). Piping
+  /// (https://git.tonycloud.org/flutter/shorebird/issues/3703). Piping
   /// through Dart would capture stderr but turns `stdout.hasTerminal` false
   /// on the child side, regressing the interactive UX; a pty or per-fd
   /// shell tee would fix both but costs a dependency / POSIX-only path.
@@ -266,7 +270,12 @@ $stderr''');
     if (executable == 'flutter') {
       // If this ever changes we also need to update the `shorebird` shell
       // wrapper which downloads runs Flutter to fetch artifacts the first time.
-      return {'FLUTTER_STORAGE_BASE_URL': 'https://download.shorebird.dev'};
+      return {
+        'FLUTTER_STORAGE_BASE_URL':
+            platform.environment['SHOREBIRD_FLUTTER_STORAGE_BASE_URL'] ??
+            platform.environment['FLUTTER_STORAGE_BASE_URL'] ??
+            defaultFlutterStorageBaseUrl,
+      };
     }
 
     return {};

@@ -57,6 +57,15 @@ class ShorebirdEnv {
   final String? _flutterRevisionOverride;
   final String? _flutterProjectRootOverride;
 
+  /// Default URL for the open self-hosted Shorebird server.
+  static const defaultHostedUrl = 'http://localhost:8080';
+
+  /// Default auth service URL for the open self-hosted Shorebird server.
+  static const defaultAuthServiceUrl = '$defaultHostedUrl/auth';
+
+  /// Default JWT issuer used by the open self-hosted server.
+  static const defaultJwtIssuer = 'shorebird-auth';
+
   /// The application config directory for the Shorebird CLI.
   Directory get configDirectory {
     return Directory(applicationConfigHome(executableName));
@@ -69,21 +78,45 @@ class ShorebirdEnv {
 
   /// The root directory of the Shorebird install.
   ///
-  /// Assumes we are running from $ROOT/bin/cache.
+  /// Historically the CLI was launched from a snapshot under $ROOT/bin/cache.
+  /// Compiled open-source CLI bundles place the executable under $ROOT/bin, so
+  /// first look for the install metadata and fall back to the legacy layout.
   Directory get shorebirdRoot {
-    return File(platform.script.toFilePath()).parent.parent.parent;
+    final scriptDirectory = File(platform.script.toFilePath()).parent;
+    var candidate = scriptDirectory;
+
+    while (true) {
+      final flutterVersionFile = File(
+        p.join(candidate.path, 'bin', 'internal', 'flutter.version'),
+      );
+      if (flutterVersionFile.existsSync()) return candidate;
+
+      final parent = candidate.parent;
+      if (parent.path == candidate.path) break;
+      candidate = parent;
+    }
+
+    return scriptDirectory.parent.parent;
   }
 
   /// The Shorebird engine revision.
   String get shorebirdEngineRevision {
-    final file = File(
-      p.join(flutterDirectory.path, 'bin', 'internal', 'engine.version'),
-    );
-    try {
-      return file.readAsStringSync().trim();
-    } on FileSystemException {
-      throw CacheCorruptedException('Could not read ${file.path}.');
+    final files = [
+      File(p.join(flutterDirectory.path, 'bin', 'internal', 'engine.version')),
+      File(p.join(shorebirdRoot.path, 'bin', 'internal', 'engine.version')),
+    ];
+    for (final file in files) {
+      if (!file.existsSync()) continue;
+      try {
+        return file.readAsStringSync().trim();
+      } on FileSystemException {
+        break;
+      }
     }
+
+    throw CacheCorruptedException(
+      'Could not read ${files.map((file) => file.path).join(' or ')}.',
+    );
   }
 
   /// Get the Shorebird Flutter revision.
@@ -259,31 +292,29 @@ class ShorebirdEnv {
   }
 
   /// The base URL for the Shorebird auth service. Can be overridden with the
-  /// `AUTH_SERVICE_URL` environment variable. Defaults to
-  /// `https://auth.shorebird.dev`.
+  /// `AUTH_SERVICE_URL` environment variable. Defaults to the open self-hosted
+  /// server auth endpoint.
   Uri get authServiceUri => Uri.parse(
-    platform.environment['AUTH_SERVICE_URL'] ?? 'https://auth.shorebird.dev',
+    platform.environment['AUTH_SERVICE_URL'] ?? defaultAuthServiceUrl,
   );
 
   /// The expected JWT issuer for Shorebird-issued tokens. Can be overridden
-  /// with the `SHOREBIRD_JWT_ISSUER` environment variable. Defaults to
-  /// `https://auth.shorebird.dev`.
+  /// with the `SHOREBIRD_JWT_ISSUER` environment variable. Defaults to the open
+  /// self-hosted server issuer.
   String get jwtIssuer =>
-      platform.environment['SHOREBIRD_JWT_ISSUER'] ??
-      'https://auth.shorebird.dev';
+      platform.environment['SHOREBIRD_JWT_ISSUER'] ?? defaultJwtIssuer;
 
-  /// The base URL for the Shorebird code push server that overrides the default
-  /// used by [CodePushClient]. If none is provided, [CodePushClient] will use
-  /// its default.
+  /// The base URL for the Shorebird code push server.
   Uri? get hostedUri {
     try {
       final baseUrl =
           platform.environment['SHOREBIRD_HOSTED_URL'] ??
           getShorebirdYaml()?.baseUrl ??
-          userConfig.hostedUri?.toString();
+          userConfig.hostedUri?.toString() ??
+          defaultHostedUrl;
       return _parseHostedUri(baseUrl);
     } on Exception {
-      return null;
+      return Uri.parse(defaultHostedUrl);
     }
   }
 

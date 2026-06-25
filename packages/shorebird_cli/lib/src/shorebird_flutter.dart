@@ -31,8 +31,17 @@ class ShorebirdFlutter {
   static const executable = 'flutter';
 
   /// The Shorebird Flutter fork git URL.
-  static const String flutterGitUrl =
-      'https://github.com/shorebirdtech/flutter.git';
+  static const String defaultFlutterGitUrl =
+      'https://git.tonycloud.org/flutter/flutter.git';
+
+  /// The Flutter fork git URL used when installing vended Flutter revisions.
+  String get flutterGitUrl {
+    final override = platform.environment['SHOREBIRD_FLUTTER_GIT_URL'];
+    if (override != null && override.trim().isNotEmpty) {
+      return override.trim();
+    }
+    return defaultFlutterGitUrl;
+  }
 
   /// Arguments to pass to `flutter precache`.
   List<String> get precacheArgs => ['--android', if (platform.isMacOS) '--ios'];

@@ -6,20 +6,26 @@ import 'package:http/http.dart' as http;
 import 'package:quiver/collection.dart';
 
 /// {@template artifact_manifest_client}
-/// A client that fetches [ArtifactsManifest]s from the shorebird storage bucket
-/// and caches them in memory.
+/// A client that fetches [ArtifactsManifest]s from an open artifact mirror and
+/// caches them in memory.
 /// {@endtemplate}
 class ArtifactManifestClient {
   /// {@macro artifact_manifest_client}
-  ArtifactManifestClient({http.Client? httpClient})
-    : _httpClient = httpClient ?? http.Client();
+  ArtifactManifestClient({http.Client? httpClient, Uri? manifestBaseUri})
+    : _httpClient = httpClient ?? http.Client(),
+      _manifestBaseUri = manifestBaseUri ?? defaultManifestBaseUri;
+
+  /// Default root for open self-hosted artifact manifests.
+  static final defaultManifestBaseUri = Uri.parse(
+    'http://localhost:8080/artifacts',
+  );
 
   final http.Client _httpClient;
+  final Uri _manifestBaseUri;
 
   final _cache = LruMap<String, ArtifactsManifest>(maximumSize: 1000);
 
-  /// Fetches the [ArtifactsManifest] for the provided [revision] from the
-  /// shorebird storage bucket.
+  /// Fetches the [ArtifactsManifest] for the provided [revision].
   Future<ArtifactsManifest> getManifest(String revision) async {
     if (_cache.containsKey(revision)) return _cache[revision]!;
     final manifest = await _fetchManifest(revision);
@@ -28,8 +34,9 @@ class ArtifactManifestClient {
   }
 
   Future<ArtifactsManifest> _fetchManifest(String revision) async {
-    final url = Uri.parse(
-      'https://storage.googleapis.com/download.shorebird.dev/shorebird/$revision/artifacts_manifest.yaml',
+    final url = _joinUri(
+      _manifestBaseUri,
+      'shorebird/$revision/artifacts_manifest.yaml',
     );
     final response = await _httpClient.get(url);
     if (response.statusCode != HttpStatus.ok) {
@@ -43,4 +50,12 @@ ${response.statusCode} ${response.reasonPhrase}''');
       (m) => ArtifactsManifest.fromJson(m!),
     );
   }
+}
+
+Uri _joinUri(Uri base, String path) {
+  final basePath = base.path.endsWith('/')
+      ? base.path.substring(0, base.path.length - 1)
+      : base.path;
+  final relativePath = path.startsWith('/') ? path.substring(1) : path;
+  return base.replace(path: '$basePath/$relativePath');
 }

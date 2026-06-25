@@ -13,6 +13,7 @@ import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
@@ -100,7 +101,7 @@ To change the version of this release, change your app's version in your pubspec
 Split APKs are each given a different release version than what is specified in the pubspec.yaml.
 
 See ${link(uri: Uri.parse('https://github.com/flutter/flutter/issues/39817'))} for more information about this issue.
-Please comment and upvote ${link(uri: Uri.parse('https://github.com/shorebirdtech/shorebird/issues/1141'))} if you would like shorebird to support this.''',
+Please file an issue at ${link(uri: Uri.parse(openShorebirdIssueUrl))} if you would like shorebird to support this.''',
         );
       throw ProcessExit(ExitCode.unavailable.code);
     }

@@ -8,6 +8,7 @@ import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/commands/login_command.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
 import '../mocks.dart';
@@ -20,6 +21,7 @@ void main() {
     late http.Client httpClient;
     late Directory applicationConfigHome;
     late ShorebirdLogger logger;
+    late ShorebirdEnv shorebirdEnv;
     late LoginCommand command;
 
     R runWithOverrides<R>(R Function() body) {
@@ -28,6 +30,7 @@ void main() {
         values: {
           authRef.overrideWith(() => auth),
           loggerRef.overrideWith(() => logger),
+          shorebirdEnvRef.overrideWith(() => shorebirdEnv),
         },
       );
     }
@@ -37,9 +40,13 @@ void main() {
       auth = MockAuth();
       httpClient = MockHttpClient();
       logger = MockShorebirdLogger();
+      shorebirdEnv = MockShorebirdEnv();
 
       when(() => auth.isAuthenticated).thenReturn(false);
       when(() => auth.client).thenReturn(httpClient);
+      when(
+        () => shorebirdEnv.hostedUri,
+      ).thenReturn(Uri.parse(ShorebirdEnv.defaultHostedUrl));
       when(
         () => auth.credentialsFilePath,
       ).thenReturn(p.join(applicationConfigHome.path, 'credentials.json'));
@@ -117,7 +124,7 @@ void main() {
         () => logger.err('We could not find a Shorebird account for $email.'),
       ).called(1);
       verify(
-        () => logger.info(any(that: contains('console.shorebird.dev'))),
+        () => logger.info(any(that: contains(ShorebirdEnv.defaultHostedUrl))),
       ).called(1);
     });
 

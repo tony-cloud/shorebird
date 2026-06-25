@@ -102,7 +102,7 @@ class Apple {
     // Ideally, we would use `xcodebuild -list` to detect schemes/flavors.
     // Unfortunately, many projects contain schemes that are not flavors, and we
     // don't want to create flavors for these schemes. See
-    // https://github.com/shorebirdtech/shorebird/issues/1703 for an example.
+    // https://git.tonycloud.org/flutter/shorebird/issues/1703 for an example.
     // Instead, we look in `[platform]/Runner.xcodeproj/xcshareddata/xcschemes`
     // for xcscheme files (which seem to be 1-to-1 with schemes in Xcode) and
     // filter out schemes that are marked as "wasCreatedForAppExtension".

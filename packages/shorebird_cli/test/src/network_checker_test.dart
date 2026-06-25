@@ -11,6 +11,7 @@ import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/network_checker.dart';
+import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
 import 'fakes.dart';
@@ -23,6 +24,7 @@ void main() {
     late http.Client httpClient;
     late ShorebirdLogger logger;
     late Progress progress;
+    late ShorebirdEnv shorebirdEnv;
     late NetworkChecker networkChecker;
 
     R runWithOverrides<R>(R Function() body) {
@@ -33,6 +35,7 @@ void main() {
           codePushClientWrapperRef.overrideWith(() => codePushClientWrapper),
           httpClientRef.overrideWith(() => httpClient),
           loggerRef.overrideWith(() => logger),
+          shorebirdEnvRef.overrideWith(() => shorebirdEnv),
         },
       );
     }
@@ -48,8 +51,15 @@ void main() {
       httpClient = MockHttpClient();
       logger = MockShorebirdLogger();
       progress = MockProgress();
+      shorebirdEnv = MockShorebirdEnv();
 
       when(() => logger.progress(any())).thenReturn(progress);
+      when(
+        () => shorebirdEnv.hostedUri,
+      ).thenReturn(Uri.parse(ShorebirdEnv.defaultHostedUrl));
+      when(
+        () => shorebirdEnv.authServiceUri,
+      ).thenReturn(Uri.parse(ShorebirdEnv.defaultAuthServiceUrl));
 
       networkChecker = NetworkChecker();
     });
@@ -63,11 +73,26 @@ void main() {
         });
 
         test('logs reachability for each checked url', () async {
-          await runWithOverrides(networkChecker.checkReachability);
+          final checkedUrlCount = await runWithOverrides(() async {
+            await networkChecker.checkReachability();
+            return NetworkChecker.urlsToCheck.length;
+          });
 
           verify(
             () => progress.complete(any(that: contains('OK'))),
-          ).called(NetworkChecker.urlsToCheck.length);
+          ).called(checkedUrlCount);
+        });
+
+        test('checks self-hosted urls from ShorebirdEnv', () async {
+          final hostedUri = Uri.parse('https://open.example.com');
+          final authServiceUri = Uri.parse('https://auth.example.com');
+          when(() => shorebirdEnv.hostedUri).thenReturn(hostedUri);
+          when(() => shorebirdEnv.authServiceUri).thenReturn(authServiceUri);
+
+          await runWithOverrides(networkChecker.checkReachability);
+
+          verify(() => httpClient.get(hostedUri)).called(1);
+          verify(() => httpClient.get(authServiceUri)).called(1);
         });
       });
 
@@ -77,11 +102,14 @@ void main() {
         });
 
         test('logs reachability for each checked url', () async {
-          await runWithOverrides(networkChecker.checkReachability);
+          final checkedUrlCount = await runWithOverrides(() async {
+            await networkChecker.checkReachability();
+            return NetworkChecker.urlsToCheck.length;
+          });
 
           verify(
             () => progress.fail(any(that: contains('unreachable'))),
-          ).called(NetworkChecker.urlsToCheck.length);
+          ).called(checkedUrlCount);
         });
       });
     });

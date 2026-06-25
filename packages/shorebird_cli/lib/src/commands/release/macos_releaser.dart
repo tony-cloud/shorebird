@@ -12,6 +12,7 @@ import 'package:shorebird_cli/src/extensions/arg_results.dart';
 import 'package:shorebird_cli/src/logging/shorebird_logger.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_cli/src/validators/validators.dart';
@@ -143,6 +144,6 @@ class MacosReleaser extends Releaser with AppleReleaserMixin {
 
 macOS app created at ${artifactManager.getMacOSAppDirectory(flavor: flavor)!.path}.
 
-${styleBold.wrap('Note:')} If you distribute your app via the Mac App Store using a .pkg installer, the packaging process may modify the binary and cause patch failures. See ${link(uri: Uri.parse('https://github.com/shorebirdtech/shorebird/issues/3223'))} for more information.
+${styleBold.wrap('Note:')} If you distribute your app via the Mac App Store using a .pkg installer, the packaging process may modify the binary and cause patch failures. See ${link(uri: Uri.parse(troubleshootingUrl))} for more information.
 ''';
 }

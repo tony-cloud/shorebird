@@ -5,6 +5,7 @@ import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
+import 'package:shorebird_cli/src/shorebird_web_console.dart';
 import 'package:shorebird_cli/src/validators/validators.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 
@@ -83,7 +84,7 @@ class ShorebirdValidator {
           '''If you already have an account, run ${lightCyan.wrap('shorebird login')} to sign in.''',
         )
         ..info(
-          '''If you don't have a Shorebird account, go to ${link(uri: Uri.parse('https://console.shorebird.dev'))} to create one.''',
+          '''If you don't have a Shorebird account, go to ${link(uri: ShorebirdWebConsole.uri(''))} to create one.''',
         );
       throw UserNotAuthorizedException();
     }

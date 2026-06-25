@@ -209,12 +209,99 @@ void main() {
           ),
         );
       });
+
+      test('returns correct path for dartaotruntime', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dartAotRuntime,
+            ),
+          ),
+          equals(
+            p.join(
+              flutterDirectory.path,
+              'bin',
+              'cache',
+              'dart-sdk',
+              'bin',
+              'dartaotruntime',
+            ),
+          ),
+        );
+      });
+
+      test('returns correct path for dart2bytecode snapshot', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
+            ),
+          ),
+          equals(
+            p.join(
+              flutterDirectory.path,
+              'bin',
+              'cache',
+              'dart-sdk',
+              'bin',
+              'snapshots',
+              'dart2bytecode.dart.snapshot',
+            ),
+          ),
+        );
+      });
+
+      test('returns correct path for Flutter product platform dill', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.flutterProductPlatformDill,
+            ),
+          ),
+          equals(
+            p.join(
+              flutterDirectory.path,
+              'bin',
+              'cache',
+              'artifacts',
+              'engine',
+              'common',
+              'flutter_patched_sdk_product',
+              'platform_strong.dill',
+            ),
+          ),
+        );
+      });
+
+      test('prefers workspace iOS Flutter platform dill when present', () {
+        final workspacePlatformDill = File(
+          p.join(
+            flutterDirectory.path,
+            'engine',
+            'src',
+            'out',
+            'ios_release',
+            'flutter_patched_sdk',
+            'platform_strong.dill',
+          ),
+        )..createSync(recursive: true);
+
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.flutterProductPlatformDill,
+            ),
+          ),
+          equals(workspacePlatformDill.path),
+        );
+      });
     });
   });
 
   group(ShorebirdLocalEngineArtifacts, () {
     late String localEngineSrcPath;
     late String localEngine;
+    late String localEngineHost;
     late EngineConfig engineConfig;
     late ShorebirdLocalEngineArtifacts artifacts;
 
@@ -228,6 +315,7 @@ void main() {
     setUp(() {
       localEngineSrcPath = 'local_engine_src_path';
       localEngine = 'local_engine';
+      localEngineHost = 'local_engine_host';
       engineConfig = MockEngineConfig();
       artifacts = const ShorebirdLocalEngineArtifacts();
 
@@ -235,6 +323,7 @@ void main() {
         () => engineConfig.localEngineSrcPath,
       ).thenReturn(localEngineSrcPath);
       when(() => engineConfig.localEngine).thenReturn(localEngine);
+      when(() => engineConfig.localEngineHost).thenReturn(localEngineHost);
     });
 
     group('getArtifactPath', () {
@@ -349,6 +438,64 @@ void main() {
               localEngine,
               'clang_x64',
               'analyze_snapshot',
+            ),
+          ),
+        );
+      });
+
+      test('returns correct path for dartaotruntime', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dartAotRuntime,
+            ),
+          ),
+          equals(
+            p.join(
+              localEngineSrcPath,
+              'out',
+              localEngineHost,
+              'dartaotruntime',
+            ),
+          ),
+        );
+      });
+
+      test('returns correct path for dart2bytecode snapshot', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
+            ),
+          ),
+          equals(
+            p.join(
+              localEngineSrcPath,
+              'out',
+              localEngineHost,
+              'dart-sdk',
+              'bin',
+              'snapshots',
+              'dart2bytecode.dart.snapshot',
+            ),
+          ),
+        );
+      });
+
+      test('returns correct path for Flutter product platform dill', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.flutterProductPlatformDill,
+            ),
+          ),
+          equals(
+            p.join(
+              localEngineSrcPath,
+              'out',
+              localEngine,
+              'flutter_patched_sdk',
+              'platform_strong.dill',
             ),
           ),
         );

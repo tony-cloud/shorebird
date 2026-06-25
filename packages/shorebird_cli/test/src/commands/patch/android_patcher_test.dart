@@ -294,7 +294,7 @@ void main() {
         ).thenAnswer((_) async => aabFile);
       });
 
-      // See https://github.com/shorebirdtech/updater/issues/211
+      // Historical updater bug fixed in Flutter 3.24.2.
       group('when flutter version contains updater issue 211', () {
         setUp(() {
           setUpProjectRootArtifacts();
@@ -366,7 +366,7 @@ void main() {
           verify(
             () => logger.info('''
 Please run `shorebird cache clean` and try again. If the issue persists, please
-file a bug report at https://github.com/shorebirdtech/shorebird/issues/new.
+file a bug report at https://git.tonycloud.org/flutter/shorebird/issues/new.
 
 Looked in:
   - the libapp.so entries inside the built .aab
@@ -834,7 +834,7 @@ Looked in:
               () => logger.info(
                 any(
                   that: contains(
-                    'https://github.com/shorebirdtech/shorebird/issues/2532',
+                    'git.tonycloud.org/flutter/shorebird/src/branch/main/docs/code-push/troubleshooting',
                   ),
                 ),
               ),

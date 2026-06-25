@@ -173,6 +173,52 @@ void main() {
       });
     });
 
+    group('artifactBaseUrl', () {
+      test('uses the default open artifact mirror root', () {
+        final url = runWithOverrides(() => cache.artifactBaseUrl);
+        expect(
+          url,
+          equals(Cache.defaultArtifactBaseUrl),
+        );
+      });
+
+      test('uses SHOREBIRD_ARTIFACT_BASE_URL when set', () {
+        when(() => platform.environment).thenReturn({
+          'SHOREBIRD_ARTIFACT_BASE_URL': 'https://artifacts.example.com/open/',
+        });
+
+        final url = runWithOverrides(() => cache.artifactBaseUrl);
+        expect(url, equals('https://artifacts.example.com/open'));
+      });
+
+      test('can override the storage base URL and bucket separately', () {
+        when(() => platform.environment).thenReturn({
+          'SHOREBIRD_STORAGE_BASE_URL': 'https://storage.example.com/',
+          'SHOREBIRD_STORAGE_BUCKET': '/open-shorebird/',
+        });
+
+        final url = runWithOverrides(() => cache.artifactBaseUrl);
+        expect(url, equals('https://storage.example.com/open-shorebird'));
+      });
+
+      test('builds per-engine artifact URLs from the configured root', () {
+        when(() => platform.environment).thenReturn({
+          'SHOREBIRD_ARTIFACT_BASE_URL': 'https://artifacts.example.com/open/',
+        });
+
+        final url = runWithOverrides(
+          () => cache.shorebirdArtifactUrl('patch-linux-x64.zip'),
+        );
+        expect(
+          url,
+          equals(
+            'https://artifacts.example.com/open/shorebird/'
+            '$shorebirdEngineRevision/patch-linux-x64.zip',
+          ),
+        );
+      });
+    });
+
     group('clear', () {
       test('deletes the cache directory', () async {
         final shorebirdCacheDirectory = runWithOverrides(
@@ -357,33 +403,41 @@ void main() {
           );
         });
 
-        test('skips optional artifacts if a 404 is returned', () async {
-          when(() => httpClient.send(any())).thenAnswer((invocation) async {
-            final request =
-                invocation.positionalArguments.first as http.BaseRequest;
-            final fileName = p.basename(request.url.path);
-            if (fileName.startsWith('aot-tools')) {
+        test(
+          'skips optional legacy aot-tools if enabled and a 404 is returned',
+          () async {
+            when(() => platform.environment).thenReturn({
+              Cache.legacyAotToolsEnvironmentVariable: '1',
+            });
+            cache = runWithOverrides(Cache.new);
+
+            when(() => httpClient.send(any())).thenAnswer((invocation) async {
+              final request =
+                  invocation.positionalArguments.first as http.BaseRequest;
+              final fileName = p.basename(request.url.path);
+              if (fileName.startsWith('aot-tools')) {
+                return http.StreamedResponse(
+                  const Stream.empty(),
+                  HttpStatus.notFound,
+                  reasonPhrase: 'Not Found',
+                );
+              }
               return http.StreamedResponse(
-                const Stream.empty(),
-                HttpStatus.notFound,
-                reasonPhrase: 'Not Found',
+                Stream.value(ZipEncoder().encode(Archive())),
+                HttpStatus.ok,
               );
-            }
-            return http.StreamedResponse(
-              Stream.value(ZipEncoder().encode(Archive())),
-              HttpStatus.ok,
+            });
+            await expectLater(
+              runWithOverrides(() => cache.updateAll(Duration.zero)),
+              completes,
             );
-          });
-          await expectLater(
-            runWithOverrides(() => cache.updateAll(Duration.zero)),
-            completes,
-          );
-          verify(
-            () => logger.detail(
-              '''[cache] optional artifact: "aot-tools.dill" was not found, skipping...''',
-            ),
-          ).called(1);
-        });
+            verify(
+              () => logger.detail(
+                '''[cache] optional artifact: "aot-tools.dill" was not found, skipping...''',
+              ),
+            ).called(1);
+          },
+        );
 
         test('downloads correct artifacts', () async {
           final patchArtifactDirectory = runWithOverrides(
@@ -395,6 +449,22 @@ void main() {
             completes,
           );
           expect(patchArtifactDirectory.existsSync(), isTrue);
+        });
+
+        test('does not download legacy aot-tools by default', () async {
+          await expectLater(
+            runWithOverrides(() => cache.updateAll(Duration.zero)),
+            completes,
+          );
+
+          final requests = verify(
+            () => httpClient.send(captureAny()),
+          ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
+
+          expect(
+            requests.map((request) => request.path).join('\n'),
+            isNot(contains('aot-tools.dill')),
+          );
         });
 
         group('when extraction fails', () {
@@ -454,12 +524,11 @@ void main() {
           ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
 
           String perEngine(String name) =>
-              '${cache.storageBaseUrl}/${cache.storageBucket}/shorebird/$shorebirdEngineRevision/$name';
+              '${cache.artifactBaseUrl}/shorebird/$shorebirdEngineRevision/$name';
 
           final expected = [
             perEngine('patch-darwin-x64.zip'),
             'https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar',
-            perEngine('aot-tools.dill'),
           ].map(Uri.parse).toList();
 
           expect(requests, equals(expected));
@@ -478,12 +547,11 @@ void main() {
           ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
 
           String perEngine(String name) =>
-              '${cache.storageBaseUrl}/${cache.storageBucket}/shorebird/$shorebirdEngineRevision/$name';
+              '${cache.artifactBaseUrl}/shorebird/$shorebirdEngineRevision/$name';
 
           final expected = [
             perEngine('patch-windows-x64.zip'),
             'https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar',
-            perEngine('aot-tools.dill'),
           ].map(Uri.parse).toList();
 
           expect(requests, equals(expected));
@@ -502,15 +570,35 @@ void main() {
           ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
 
           String perEngine(String name) =>
-              '${cache.storageBaseUrl}/${cache.storageBucket}/shorebird/$shorebirdEngineRevision/$name';
+              '${cache.artifactBaseUrl}/shorebird/$shorebirdEngineRevision/$name';
 
           final expected = [
             perEngine('patch-linux-x64.zip'),
             'https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar',
-            perEngine('aot-tools.dill'),
           ].map(Uri.parse).toList();
 
           expect(requests, equals(expected));
+        });
+
+        test('pulls legacy aot-tools only when explicitly enabled', () async {
+          when(() => platform.environment).thenReturn({
+            Cache.legacyAotToolsEnvironmentVariable: 'true',
+          });
+          cache = runWithOverrides(Cache.new);
+
+          await expectLater(
+            runWithOverrides(() => cache.updateAll(Duration.zero)),
+            completes,
+          );
+
+          final requests = verify(
+            () => httpClient.send(captureAny()),
+          ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
+
+          String perEngine(String name) =>
+              '${cache.artifactBaseUrl}/shorebird/$shorebirdEngineRevision/$name';
+
+          expect(requests, contains(Uri.parse(perEngine('aot-tools.dill'))));
         });
       });
     });

@@ -8,6 +8,7 @@ import 'package:shorebird_cli/src/extensions/arg_results.dart';
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/shorebird_command.dart';
+import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 
@@ -111,7 +112,7 @@ class PromoteCommand extends ShorebirdCommand {
         '''
 No production channel found for app $appId.
       
-This is a bug and should never happen. Please file an issue at https://github.com/shorebirdtech/shorebird/issues/new?assignees=&labels=bug&projects=&template=bug_report.md&title=fix%3A+''',
+This is a bug and should never happen. Please file an issue at $openShorebirdIssueUrl''',
       );
       return ExitCode.software.code;
     }

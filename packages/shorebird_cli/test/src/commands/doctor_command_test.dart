@@ -101,6 +101,12 @@ void main() {
         () => shorebirdEnv.flutterRevision,
       ).thenReturn(shorebirdFlutterRevision);
       when(() => shorebirdEnv.logsDirectory).thenReturn(logsDirectory);
+      when(
+        () => shorebirdEnv.hostedUri,
+      ).thenReturn(Uri.parse('http://localhost:8080'));
+      when(
+        () => shorebirdEnv.authServiceUri,
+      ).thenReturn(Uri.parse('http://localhost:8080/auth'));
       when(() => doctor.initAndDoctorValidators).thenReturn([validator]);
       when(
         () => doctor.runValidators(any(), applyFixes: any(named: 'applyFixes')),
@@ -122,7 +128,7 @@ void main() {
       verify(
         () => logger.info('''
 
-Shorebird v$packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird v$packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 Flutter • revision ${shorebirdEnv.flutterRevision}
 Engine • revision $shorebirdEngineRevision
 '''),
@@ -146,7 +152,7 @@ Engine • revision $shorebirdEngineRevision
         verify(
           () => logger.info('''
 
-Shorebird v$packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird v$packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 Flutter $flutterVersion • revision ${shorebirdEnv.flutterRevision}
 Engine • revision $shorebirdEngineRevision
 '''),
@@ -178,7 +184,7 @@ Engine • revision $shorebirdEngineRevision
         expect(
           msg,
           equals('''
-Shorebird $packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 Flutter • revision ${shorebirdEnv.flutterRevision}
 Engine • revision $shorebirdEngineRevision
 
@@ -218,7 +224,7 @@ OpenJDK 64-Bit Server VM (build 17.0.9+0-17.0.9b1087.7-11185874, mixed mode)'''
         expect(
           msg.replaceAll(Platform.lineTerminator, '\n'),
           equals('''
-Shorebird $packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 Flutter • revision ${shorebirdEnv.flutterRevision}
 Engine • revision $shorebirdEngineRevision
 
@@ -275,7 +281,7 @@ OpenJDK 64-Bit Server VM (build 17.0.9+0-17.0.9b1087.7-11185874, mixed mode)'''
           expect(
             msg.replaceAll(Platform.lineTerminator, '\n'),
             equals('''
-Shorebird $packageVersion • git@github.com:shorebirdtech/shorebird.git
+Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
 Flutter • revision ${shorebirdEnv.flutterRevision}
 Engine • revision $shorebirdEngineRevision
 

@@ -176,6 +176,7 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     required int releaseId,
     required File releaseArtifact,
     Directory? supplementDirectory,
+    String? releaseVersion,
   }) async {
     final unzipProgress = logger.progress('Extracting release artifact');
     final releaseAppDirectory = Directory.systemTemp.createTempSync();

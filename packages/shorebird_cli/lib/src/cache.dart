@@ -52,7 +52,25 @@ class Cache {
   Cache() {
     registerArtifact(PatchArtifact(cache: this, platform: platform));
     registerArtifact(BundleToolArtifact(cache: this, platform: platform));
-    registerArtifact(AotToolsArtifact(cache: this, platform: platform));
+    if (legacyAotToolsEnabled) {
+      registerArtifact(AotToolsArtifact(cache: this, platform: platform));
+    }
+  }
+
+  /// Environment variable that enables the legacy closed aot-tools download.
+  static const legacyAotToolsEnvironmentVariable =
+      'SHOREBIRD_ENABLE_LEGACY_AOT_TOOLS';
+
+  /// Whether to download legacy `aot-tools.dill`.
+  ///
+  /// The open iOS App Store-safe path uses Dart bytecode interpreter artifacts
+  /// and must not fetch Shorebird's closed native-AOT linker artifact by
+  /// default. Developers can opt in when validating the old native-AOT route.
+  bool get legacyAotToolsEnabled {
+    final value = platform.environment[legacyAotToolsEnvironmentVariable]
+        ?.trim()
+        .toLowerCase();
+    return value == '1' || value == 'true' || value == 'yes';
   }
 
   /// Register a new [CachedArtifact] with the cache.
@@ -117,11 +135,34 @@ class Cache {
 
   final List<CachedArtifact> _artifacts = [];
 
+  /// Default local root for open Shorebird CLI-managed binary artifacts.
+  static const defaultArtifactBaseUrl = 'http://localhost:8080/artifacts';
+
   /// The storage base url.
-  String get storageBaseUrl => 'https://storage.googleapis.com';
+  String get storageBaseUrl =>
+      platform.environment['SHOREBIRD_STORAGE_BASE_URL'] ??
+      defaultArtifactBaseUrl;
 
   /// The storage bucket host.
-  String get storageBucket => 'download.shorebird.dev';
+  String get storageBucket =>
+      platform.environment['SHOREBIRD_STORAGE_BUCKET'] ?? '';
+
+  /// The root URL for Shorebird CLI-managed binary artifacts.
+  ///
+  /// Defaults to a local open artifact mirror. Deployments can set
+  /// `SHOREBIRD_ARTIFACT_BASE_URL` to host the same `/shorebird/<engine
+  /// revision>/...` layout at a public URL.
+  String get artifactBaseUrl {
+    final override = platform.environment['SHOREBIRD_ARTIFACT_BASE_URL'];
+    if (override != null && override.trim().isNotEmpty) {
+      return _trimTrailingSlash(override.trim());
+    }
+
+    final bucket = storageBucket.trim();
+    final base = _trimTrailingSlash(storageBaseUrl.trim());
+    if (bucket.isEmpty) return base;
+    return '$base/${_trimSlashes(bucket)}';
+  }
 
   /// Clear the cache.
   Future<void> clear() async {
@@ -129,6 +170,28 @@ class Cache {
     if (cacheDir.existsSync()) {
       await cacheDir.delete(recursive: true);
     }
+  }
+
+  /// Returns the full URL for a Shorebird artifact stored under the current
+  /// engine revision.
+  String shorebirdArtifactUrl(String fileName) {
+    return '$artifactBaseUrl/shorebird/${shorebirdEnv.shorebirdEngineRevision}/$fileName';
+  }
+
+  String _trimTrailingSlash(String value) {
+    var trimmed = value;
+    while (trimmed.endsWith('/')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    return trimmed;
+  }
+
+  String _trimSlashes(String value) {
+    var trimmed = value;
+    while (trimmed.startsWith('/')) {
+      trimmed = trimmed.substring(1);
+    }
+    return _trimTrailingSlash(trimmed);
   }
 }
 
@@ -284,8 +347,11 @@ allowed to access $url.''');
 }
 
 /// {@template aot_tools_artifact}
-/// The aot_tools.dill artifact.
-/// Used for linking and generating optimized AOT snapshots.
+/// The legacy closed aot_tools.dill artifact.
+///
+/// This is not part of the default open-source cache. It is available only
+/// when [Cache.legacyAotToolsEnvironmentVariable] is set for development-only
+/// native-AOT validation.
 /// {@endtemplate}
 class AotToolsArtifact extends CachedArtifact {
   /// {@macro aot_tools_artifact}
@@ -311,8 +377,7 @@ class AotToolsArtifact extends CachedArtifact {
   );
 
   @override
-  Future<String> get storageUrl async =>
-      '${cache.storageBaseUrl}/${cache.storageBucket}/shorebird/${shorebirdEnv.shorebirdEngineRevision}/$fileName';
+  Future<String> get storageUrl async => cache.shorebirdArtifactUrl(fileName);
 
   @override
   String? get checksum => null;
@@ -358,7 +423,7 @@ class PatchArtifact extends CachedArtifact {
       artifactName += 'windows-x64.zip';
     }
 
-    return '${cache.storageBaseUrl}/${cache.storageBucket}/shorebird/${shorebirdEnv.shorebirdEngineRevision}/$artifactName';
+    return cache.shorebirdArtifactUrl(artifactName);
   }
 
   Future<bool> _supportsArm64Patch() async {

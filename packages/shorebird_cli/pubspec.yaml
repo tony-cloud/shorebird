@@ -1,7 +1,7 @@
 name: shorebird_cli
 description: Command-line tool to interact with Shorebird's services.
 version: 1.6.108
-repository: https://github.com/shorebirdtech/shorebird
+repository: https://git.tonycloud.org/flutter/shorebird-workspace
 resolution: workspace
 
 publish_to: none
@@ -31,6 +31,8 @@ dependencies:
     path: ../jwt
   mason_logger: ^0.3.5
   meta: ^1.16.0
+  open_aot_patch_tools:
+    path: ../open_aot_patch_tools
   path: ^1.9.1
   pem: ^2.0.5
   platform: ^3.1.6

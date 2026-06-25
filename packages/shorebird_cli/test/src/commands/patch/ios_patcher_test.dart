@@ -1,11 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
 import 'package:pub_semver/pub_semver.dart';
+import 'package:pubspec_parse/pubspec_parse.dart';
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
@@ -23,6 +26,7 @@ import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/os/operating_system_interface.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/platform.dart' as cli_platform;
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
@@ -59,6 +63,7 @@ void main() {
     late ShorebirdLogger logger;
     late OperatingSystemInterface operatingSystemInterface;
     late PatchDiffChecker patchDiffChecker;
+    late Platform platform;
     late Progress progress;
     late ShorebirdArtifacts shorebirdArtifacts;
     late ShorebirdProcess shorebirdProcess;
@@ -83,6 +88,7 @@ void main() {
           loggerRef.overrideWith(() => logger),
           osInterfaceRef.overrideWith(() => operatingSystemInterface),
           patchDiffCheckerRef.overrideWith(() => patchDiffChecker),
+          cli_platform.platformRef.overrideWith(() => platform),
           processRef.overrideWith(() => shorebirdProcess),
           shorebirdArtifactsRef.overrideWith(() => shorebirdArtifacts),
           shorebirdEnvRef.overrideWith(() => shorebirdEnv),
@@ -117,7 +123,9 @@ void main() {
       flavorValidator = MockFlavorValidator();
       operatingSystemInterface = MockOperatingSystemInterface();
       patchDiffChecker = MockPatchDiffChecker();
+      platform = MockPlatform();
       progress = MockProgress();
+      flutterDirectory = Directory.systemTemp.createTempSync();
       projectRoot = Directory.systemTemp.createTempSync();
       logger = MockShorebirdLogger();
       shorebirdArtifacts = MockShorebirdArtifacts();
@@ -134,6 +142,9 @@ void main() {
       when(() => argResults.wasParsed(any())).thenReturn(false);
 
       when(() => logger.progress(any())).thenReturn(progress);
+      when(
+        () => platform.environment,
+      ).thenReturn({'SHOREBIRD_IOS_NATIVE_AOT_PATCH': '1'});
 
       when(
         () => shorebirdEnv.getShorebirdProjectRoot(),
@@ -144,9 +155,11 @@ void main() {
       when(() => shorebirdEnv.iosSupplementDirectory).thenReturn(
         Directory(p.join(projectRoot.path, 'build', 'shorebird', 'ios')),
       );
+      when(() => shorebirdEnv.flutterDirectory).thenReturn(flutterDirectory);
       when(() => shorebirdEnv.iosPodfileLockHash).thenReturn(null);
 
       when(aotTools.isLinkDebugInfoSupported).thenAnswer((_) async => false);
+      when(() => shorebirdFlutter.getConfig()).thenReturn({});
 
       patcher = IosPatcher(
         argParser: argParser,
@@ -841,6 +854,251 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}'''),
           expect(copiedKernelFile.existsSync(), isTrue);
         });
 
+        group('when using the interpreter patch route', () {
+          setUp(() {
+            when(() => platform.environment).thenReturn({});
+            File(p.join(projectRoot.path, 'lib', 'main.dart'))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('void main() {}');
+            File(p.join(projectRoot.path, '.dart_tool', 'package_config.json'))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('{"configVersion":2,"packages":[]}');
+            File(
+                p.join(
+                  flutterDirectory.path,
+                  'bin',
+                  'cache',
+                  'flutter.version.json',
+                ),
+              )
+              ..createSync(recursive: true)
+              ..writeAsStringSync(
+                jsonEncode({
+                  'frameworkVersion': '3.44.0-0.0.pre',
+                  'channel': '[user-branch]',
+                  'repositoryUrl': 'https://example.com/flutter.git',
+                  'frameworkRevision': '1234567890abcdef',
+                  'engineRevision': 'abcdef1234567890',
+                  'dartSdkVersion': '3.13.0',
+                }),
+              );
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              const ShorebirdYaml(
+                appId: 'app-id',
+                aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+              ),
+            );
+            when(
+              () => artifactBuilder.buildDartBytecodeSnapshot(
+                inputFilePath: any(named: 'inputFilePath'),
+                outFilePath: any(named: 'outFilePath'),
+                packageConfigPath: any(named: 'packageConfigPath'),
+                dartDefines: any(named: 'dartDefines'),
+                experiments: any(named: 'experiments'),
+              ),
+            ).thenAnswer(
+              (invocation) async {
+                final outFilePath =
+                    invocation.namedArguments[#outFilePath] as String;
+                return File(outFilePath)
+                  ..createSync(recursive: true)
+                  ..writeAsStringSync('bytecode');
+              },
+            );
+          });
+
+          test('generates a bytecode patch and skips native AOT', () async {
+            await runWithOverrides(patcher.buildPatchArtifact);
+
+            verify(
+              () => artifactBuilder.buildIpa(
+                codesign: any(named: 'codesign'),
+                args: any(named: 'args'),
+                flavor: any(named: 'flavor'),
+                target: any(named: 'target'),
+                base64PublicKey: any(named: 'base64PublicKey'),
+                ddMaxBytes: any(named: 'ddMaxBytes'),
+              ),
+            ).called(1);
+            verify(
+              () => artifactBuilder.buildDartBytecodeSnapshot(
+                inputFilePath: p.join(projectRoot.path, 'lib', 'main.dart'),
+                outFilePath: p.join(
+                  projectRoot.path,
+                  'build',
+                  'ios_interpreter_patch.bytecode',
+                ),
+                packageConfigPath: p.join(
+                  projectRoot.path,
+                  '.dart_tool',
+                  'package_config.json',
+                ),
+                dartDefines: any(named: 'dartDefines'),
+                experiments: any(named: 'experiments'),
+              ),
+            ).called(1);
+            verifyNever(
+              () => artifactBuilder.buildElfAotSnapshot(
+                appDillPath: any(named: 'appDillPath'),
+                outFilePath: any(named: 'outFilePath'),
+                genSnapshotArtifact: any(named: 'genSnapshotArtifact'),
+                additionalArgs: any(named: 'additionalArgs'),
+              ),
+            );
+          });
+
+          test(
+            'forwards Dart defines and experiments to bytecode compiler',
+            () async {
+              File(p.join(projectRoot.path, 'defines.json')).writeAsStringSync(
+                '{"FROM_FILE":"yes"}',
+              );
+              when(() => argResults.rest).thenReturn([
+                'ios',
+                '--dart-define=FROM_ARG=yes',
+                '--dart-define-from-file=defines.json',
+                '--enable-experiment=records',
+              ]);
+
+              await runWithOverrides(patcher.buildPatchArtifact);
+
+              final captured =
+                  verify(
+                        () => artifactBuilder.buildDartBytecodeSnapshot(
+                          inputFilePath: any(named: 'inputFilePath'),
+                          outFilePath: any(named: 'outFilePath'),
+                          packageConfigPath: any(named: 'packageConfigPath'),
+                          dartDefines: captureAny(named: 'dartDefines'),
+                          experiments: ['records'],
+                        ),
+                      ).captured.single
+                      as List<String>;
+              expect(
+                captured,
+                containsAllInOrder([
+                  'FROM_FILE=yes',
+                  'FROM_ARG=yes',
+                  'FLUTTER_VERSION=3.44.0-0.0.pre',
+                  'FLUTTER_CHANNEL=[user-branch]',
+                  'FLUTTER_GIT_URL=https://example.com/flutter.git',
+                  'FLUTTER_FRAMEWORK_REVISION=1234567890',
+                  'FLUTTER_ENGINE_REVISION=abcdef1234',
+                  'FLUTTER_DART_VERSION=3.13.0',
+                ]),
+              );
+            },
+          );
+
+          test('adds enabled Flutter runtime feature flags', () async {
+            when(() => shorebirdFlutter.getConfig()).thenReturn({
+              'enable-windowing': 'true',
+            });
+            when(() => platform.environment).thenReturn({
+              'FLUTTER_ACCESSIBILITY_EVALUATIONS': 'true',
+            });
+
+            await runWithOverrides(patcher.buildPatchArtifact);
+
+            final captured =
+                verify(
+                      () => artifactBuilder.buildDartBytecodeSnapshot(
+                        inputFilePath: any(named: 'inputFilePath'),
+                        outFilePath: any(named: 'outFilePath'),
+                        packageConfigPath: any(named: 'packageConfigPath'),
+                        dartDefines: captureAny(named: 'dartDefines'),
+                        experiments: any(named: 'experiments'),
+                      ),
+                    ).captured.single
+                    as List<String>;
+            expect(
+              captured,
+              contains(
+                'FLUTTER_ENABLED_FEATURE_FLAGS='
+                'windowing,accessibility_evaluations',
+              ),
+            );
+          });
+
+          test(
+            'respects project feature config before global and environment',
+            () async {
+              when(() => shorebirdEnv.getPubspecYaml()).thenReturn(
+                Pubspec(
+                  'app',
+                  flutter: {
+                    'config': {
+                      'enable-windowing': false,
+                      'enable-accessibility-evaluations': true,
+                    },
+                  },
+                ),
+              );
+              when(() => shorebirdFlutter.getConfig()).thenReturn({
+                'enable-windowing': 'true',
+                'enable-accessibility-evaluations': 'false',
+              });
+              when(() => platform.environment).thenReturn({
+                'FLUTTER_WINDOWING': 'true',
+                'FLUTTER_ACCESSIBILITY_EVALUATIONS': 'false',
+              });
+
+              await runWithOverrides(patcher.buildPatchArtifact);
+
+              final captured =
+                  verify(
+                        () => artifactBuilder.buildDartBytecodeSnapshot(
+                          inputFilePath: any(named: 'inputFilePath'),
+                          outFilePath: any(named: 'outFilePath'),
+                          packageConfigPath: any(named: 'packageConfigPath'),
+                          dartDefines: captureAny(named: 'dartDefines'),
+                          experiments: any(named: 'experiments'),
+                        ),
+                      ).captured.single
+                      as List<String>;
+              expect(
+                captured,
+                contains(
+                  'FLUTTER_ENABLED_FEATURE_FLAGS=accessibility_evaluations',
+                ),
+              );
+              expect(
+                captured,
+                isNot(
+                  contains('FLUTTER_ENABLED_FEATURE_FLAGS=windowing'),
+                ),
+              );
+            },
+          );
+
+          test('rejects user-provided Flutter version defines', () async {
+            when(() => argResults.rest).thenReturn([
+              'ios',
+              '--dart-define=FLUTTER_VERSION=custom',
+            ]);
+
+            await expectLater(
+              () => runWithOverrides(patcher.buildPatchArtifact),
+              exitsWithCode(ExitCode.usage),
+            );
+
+            verify(
+              () => logger.err(
+                'FLUTTER_VERSION is used by Flutter and cannot be set using '
+                '--dart-define or --dart-define-from-file.',
+              ),
+            ).called(1);
+            verifyNever(
+              () => artifactBuilder.buildDartBytecodeSnapshot(
+                inputFilePath: any(named: 'inputFilePath'),
+                outFilePath: any(named: 'outFilePath'),
+                packageConfigPath: any(named: 'packageConfigPath'),
+                dartDefines: any(named: 'dartDefines'),
+                experiments: any(named: 'experiments'),
+              ),
+            );
+          });
+        });
+
         group('when extraBuildArgs has obfuscation flags', () {
           late File obfuscationMapFile;
 
@@ -857,13 +1115,17 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}'''),
           });
 
           test('includes obfuscation flags in build args', () async {
-            patcher.obfuscationMapPath = obfuscationMapFile.path;
-            patcher.extraBuildArgs = [
-              '--obfuscate',
-              '--extra-gen-snapshot-options='
-                  '--load-obfuscation-map=${obfuscationMapFile.path}',
-              '--split-debug-info=build/shorebird/symbols',
-            ];
+            final loadObfuscationMapArg = [
+              '--extra-gen-snapshot-options=--load-obfuscation-map',
+              obfuscationMapFile.path,
+            ].join('=');
+            patcher
+              ..obfuscationMapPath = obfuscationMapFile.path
+              ..extraBuildArgs = [
+                '--obfuscate',
+                loadObfuscationMapArg,
+                '--split-debug-info=build/shorebird/symbols',
+              ];
             await runWithOverrides(patcher.buildPatchArtifact);
 
             final captured = verify(
@@ -1067,6 +1329,138 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}'''),
             exitsWithCode(ExitCode.software),
           );
         });
+      });
+
+      group('when using the interpreter patch route', () {
+        const keyHex =
+            '000102030405060708090a0b0c0d0e0f'
+            '101112131415161718191a1b1c1d1e1f';
+        const nonceHex = '000102030405060708090a0b';
+        final patchBytes = utf8.encode('dart-bytecode-payload');
+
+        setUp(() {
+          when(() => platform.environment).thenReturn({
+            'SHOREBIRD_AOT_PATCH_KEY_HEX': keyHex,
+            'SHOREBIRD_AOT_PATCH_NONCE_HEX': nonceHex,
+          });
+          File(p.join(projectRoot.path, 'build', 'patch.interp'))
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(patchBytes);
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+              aotPatchBytecodePath: 'build/patch.interp',
+              aotPatchKeyId: 'test-key',
+              aotPatchBaseFlavorId: 'free',
+              aotPatchBaseLicenseType: 'free',
+              aotPatchFlavorId: 'pro',
+              aotPatchLicenseType: 'pro',
+              aotPatchSdkHash: 'sdk-hash',
+              aotPatchBaseSnapshotHash: 'base-snapshot-hash',
+              aotPatchOfflineExpiresAt: '2030-01-01T00:00:00Z',
+            ),
+          );
+        });
+
+        test('returns an encrypted full-snapshot bytecode artifact', () async {
+          final patchBundle = await runWithOverrides(
+            () => patcher.createPatchArtifacts(
+              appId: appId,
+              releaseId: releaseId,
+              releaseArtifact: releaseArtifactFile,
+              releaseVersion: '1.2.3+4',
+            ),
+          );
+
+          final bundle = patchBundle[Arch.arm64]!;
+          expect(bundle.path, endsWith('ios_interpreter_patch.vmcode'));
+
+          final encrypted = open_patch.EncryptedPatchArtifact.fromJson(
+            (jsonDecode(File(bundle.path).readAsStringSync()) as Map)
+                .cast<String, Object?>(),
+          );
+          expect(encrypted.payloadKind, open_patch.payloadKindFullSnapshot);
+          expect(
+            encrypted.metadata.runtimeMode,
+            open_patch.runtimeModeDartBytecodeInterpreter,
+          );
+          expect(encrypted.metadata.appId, appId);
+          expect(encrypted.metadata.appBuildId, '1.2.3+4');
+          expect(encrypted.metadata.baseFlavorId, 'free');
+          expect(encrypted.metadata.baseLicenseType, 'free');
+          expect(encrypted.metadata.flavorId, 'pro');
+          expect(encrypted.metadata.licenseType, 'pro');
+          expect(encrypted.metadata.targetOs, 'ios');
+          expect(encrypted.metadata.targetArch, 'arm64');
+          expect(
+            encrypted.metadata.offlineExpiresAt,
+            '2030-01-01T00:00:00.000Z',
+          );
+          expect(
+            encrypted.decrypt(open_patch.readKey(keyHex)).payload,
+            equals(patchBytes),
+          );
+          verifyNever(
+            () => apple.runLinker(
+              kernelFile: any(named: 'kernelFile'),
+              aotOutputFile: any(named: 'aotOutputFile'),
+              releaseArtifact: any(named: 'releaseArtifact'),
+              splitDebugInfoArgs: any(named: 'splitDebugInfoArgs'),
+              vmCodeFile: any(named: 'vmCodeFile'),
+              ddMaxBytes: any(named: 'ddMaxBytes'),
+            ),
+          );
+        });
+
+        test(
+          'uses generated bytecode when no override path is configured',
+          () async {
+            File(
+                p.join(
+                  projectRoot.path,
+                  'build',
+                  'ios_interpreter_patch.bytecode',
+                ),
+              )
+              ..createSync(recursive: true)
+              ..writeAsBytesSync(patchBytes);
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              const ShorebirdYaml(
+                appId: appId,
+                aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+                aotPatchKeyId: 'test-key',
+                aotPatchBaseFlavorId: 'free',
+                aotPatchBaseLicenseType: 'free',
+                aotPatchFlavorId: 'pro',
+                aotPatchLicenseType: 'pro',
+                aotPatchSdkHash: 'sdk-hash',
+                aotPatchBaseSnapshotHash: 'base-snapshot-hash',
+              ),
+            );
+
+            final patchBundle = await runWithOverrides(
+              () => patcher.createPatchArtifacts(
+                appId: appId,
+                releaseId: releaseId,
+                releaseArtifact: releaseArtifactFile,
+                releaseVersion: '1.2.3+4',
+              ),
+            );
+
+            final encrypted = open_patch.EncryptedPatchArtifact.fromJson(
+              (jsonDecode(
+                        File(patchBundle[Arch.arm64]!.path).readAsStringSync(),
+                      )
+                      as Map)
+                  .cast<String, Object?>(),
+            );
+            expect(
+              encrypted.decrypt(open_patch.readKey(keyHex)).payload,
+              equals(patchBytes),
+            );
+          },
+        );
       });
 
       group('when uses linker', () {

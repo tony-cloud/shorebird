@@ -15,6 +15,8 @@ $flutterPath = [IO.Path]::Combine($shorebirdCacheDir, "flutter", $flutterVersion
 $flutter = [IO.Path]::Combine($shorebirdCacheDir, "flutter", $flutterVersion, "bin", "flutter.bat")
 $shorebirdScript = [IO.Path]::Combine($shorebirdCliDir, "bin", "shorebird.dart")
 $dart = [IO.Path]::Combine($flutterPath, "bin", "cache", "dart-sdk", "bin", "dart.exe")
+$defaultFlutterGitUrl = "https://git.tonycloud.org/flutter/flutter.git"
+$defaultFlutterStorageBaseUrl = "http://localhost:8080/download.flutter.io"
 
 # Executes $command and redirects as much output to $null as possible.
 #
@@ -105,10 +107,21 @@ function Test-ShorebirdNeedsUpdate {
 
 function Update-Flutter {
     Write-Output "Updating Flutter..."
+    $flutterGitUrl = $env:SHOREBIRD_FLUTTER_GIT_URL
+    if ([string]::IsNullOrWhiteSpace($flutterGitUrl)) {
+        $flutterGitUrl = $defaultFlutterGitUrl
+    }
+    $flutterStorageBaseUrl = $env:SHOREBIRD_FLUTTER_STORAGE_BASE_URL
+    if ([string]::IsNullOrWhiteSpace($flutterStorageBaseUrl)) {
+        $flutterStorageBaseUrl = $env:FLUTTER_STORAGE_BASE_URL
+    }
+    if ([string]::IsNullOrWhiteSpace($flutterStorageBaseUrl)) {
+        $flutterStorageBaseUrl = $defaultFlutterStorageBaseUrl
+    }
 
     if (!(Test-Path $flutterPath)) {
         Invoke-SilentlyIfNeeded {
-            git clone --filter=tree:0 https://github.com/shorebirdtech/flutter.git --no-checkout "$flutterPath" 
+            git clone --filter=tree:0 "$flutterGitUrl" --no-checkout "$flutterPath"
         }
     }
     else {
@@ -122,11 +135,18 @@ function Update-Flutter {
         git -C "$flutterPath" -c advice.detachedHead=false checkout "$flutterVersion"
     }
 
-    # Set FLUTTER_STORAGE_BASE_URL=https://download.shorebird.dev and execute
-    # a `flutter` command to trigger a download of Dart, etc.
-    $env:FLUTTER_STORAGE_BASE_URL = 'https://download.shorebird.dev';
+    # Set FLUTTER_STORAGE_BASE_URL and execute a `flutter` command to trigger
+    # a download of Dart, etc. through the configured open mirror.
+    $hadFlutterStorageBaseUrl = Test-Path Env:\FLUTTER_STORAGE_BASE_URL
+    $previousFlutterStorageBaseUrl = $env:FLUTTER_STORAGE_BASE_URL
+    $env:FLUTTER_STORAGE_BASE_URL = $flutterStorageBaseUrl;
     & $flutter --version
-    Remove-Item Env:\FLUTTER_STORAGE_BASE_URL
+    if ($hadFlutterStorageBaseUrl) {
+        $env:FLUTTER_STORAGE_BASE_URL = $previousFlutterStorageBaseUrl
+    }
+    else {
+        Remove-Item Env:\FLUTTER_STORAGE_BASE_URL -ErrorAction SilentlyContinue
+    }
 }
 
 function Update-Shorebird {

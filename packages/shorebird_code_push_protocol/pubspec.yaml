@@ -1,7 +1,7 @@
 name: shorebird_code_push_protocol
 description: Library which contains common interfaces used by Shorebird CodePush
 version: 0.1.0+1
-repository: https://github.com/shorebirdtech/shorebird
+repository: https://git.tonycloud.org/flutter/shorebird-workspace
 resolution: workspace
 
 publish_to: none
