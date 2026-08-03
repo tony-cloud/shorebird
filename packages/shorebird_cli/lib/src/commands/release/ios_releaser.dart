@@ -134,7 +134,7 @@ If left checked, Xcode will rewrite the build number in the uploaded IPA, so the
     // optional and exits 0 even when it fails (e.g. no signing certificate),
     // so we must verify the .ipa was actually produced. Otherwise we would
     // report a successful release and point the user at an .ipa that does not
-    // exist. See https://github.com/shorebirdtech/shorebird/issues/3807.
+    // exist. See https://git.tonycloud.org/flutter/shorebird/issues/3807.
     if (codesign && artifactManager.getIpa() == null) {
       logger.err(
         '''
