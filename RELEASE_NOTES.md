@@ -4,6 +4,39 @@
 cspell:words pubspec erickzanardo xcframeworks cupertino codesign codecov rkishan appbundle proto tlsv kingdomseed Peetee Aditya serde bipatch GLES lipo
  -->
 
+## 1.6.118 (August 18, 2026)
+
+- 🐦 Flutter 3.47.0 / Dart 3.13.0 support
+  - 💥 Android: Gradle 8.14, AGP 8.11.1 and Kotlin 2.2.20 are now required,
+    not recommended. Builds that previously warned will now fail. Java 17
+    remains the minimum, unchanged. Pass
+    `-- --android-skip-build-dependency-validation` to bypass temporarily.
+- 📉 Better patch link percentages, with the largest gains on obfuscated
+  builds and on patches that shift dynamic dispatch.
+- 🔧 Updater (rolled into the Flutter 3.47 engine):
+  - Mark a patch bad and fall forward to the next one when it fails to load,
+    instead of silently running base code and retrying it every launch.
+- 🐛 Link failures now name the checks that actually ran (Dart SDK version,
+  build features) instead of the stale --dart-define/--obfuscate hint.
+
+## 1.6.117 (August 14, 2026)
+
+- 🐦 Flutter 3.44.9 / Dart 3.12.2 support
+  - iOS: fix a crash on patch boot when loading a patched snapshot.
+  - iOS: fix a crash in patched apps at call sites that switch between
+    base and patch code.
+  - Fix a null dereference in patched code aborting the process instead
+    of throwing.
+  - Reduce patch artifact size and memory use when creating patches for
+    large apps.
+
+## 1.6.116 (August 7, 2026)
+
+- 🐦 Flutter 3.44.9 / Dart 3.12.2 support
+  - iOS: fix the Flutter CLI hanging when a debugged app crashes. LLDB now
+    detaches and prints a stack trace on process stop, so crashing tests
+    report instead of hanging.
+
 ## 1.6.115 (July 28, 2026)
 
 - 🐦 Flutter 3.44.8 / Dart 3.12.2 support
