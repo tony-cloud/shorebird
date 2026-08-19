@@ -931,7 +931,7 @@ To change the version of this release, change your app's version in your pubspec
         expect(
           runWithOverrides(() => releaser.postReleaseInstructions),
           contains(
-            'git.tonycloud.org/flutter/shorebird/src/branch/main/docs/code-push/troubleshooting',
+            'github.com/tony-cloud/shorebird/blob/main/docs/code-push/troubleshooting',
           ),
         );
       });

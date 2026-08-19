@@ -51,7 +51,7 @@ See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssu
   /// AAB is unreadable, AGP's stripped output. Cached so
   /// [createPatchArtifacts] reuses it instead of decoding the AAB a second
   /// time.
-  /// See https://git.tonycloud.org/flutter/shorebird/issues/3388.
+  /// See https://github.com/tony-cloud/shorebird/issues/3388.
   Directory? _patchArchsBuildDir;
 
   @override
@@ -212,7 +212,7 @@ Please refer to ${link(uri: Uri.parse(troubleshootingUrl))} for potential workar
       // Skip archs the build didn't produce (ndk.abiFilters / splits.abi /
       // jniLibs.excludes). Without this, a release built for a subset of
       // archs can't be patched without hitting PathNotFoundException
-      // (https://git.tonycloud.org/flutter/shorebird/issues/3388).
+      // (https://github.com/tony-cloud/shorebird/issues/3388).
       if (!patchArtifact.existsSync()) {
         logger.detail(
           'Skipping ${arch.arch}: no libapp.so at $patchArtifactPath. '

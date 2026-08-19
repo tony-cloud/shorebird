@@ -62,7 +62,7 @@ void main() {
       expect(
         message,
         contains(
-          'git.tonycloud.org/flutter/shorebird/src/branch/main/docs/account/api-keys',
+          'github.com/tony-cloud/shorebird/blob/main/docs/account/api-keys',
         ),
       );
     });

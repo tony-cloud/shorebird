@@ -1,7 +1,7 @@
 name: shorebird_code_push_client
 description: Library which allows Dart applications to interact with the Shorebird CodePush API
 version: 0.9.0+1
-repository: https://git.tonycloud.org/flutter/shorebird-workspace
+repository: https://github.com/tony-cloud/shorebird-workspace
 resolution: workspace
 
 publish_to: none

@@ -23,8 +23,8 @@ See the workspace README and docs/CI.md for open artifact mirror details.
 <p>
 Source code can be found here:
 <a
-	href='https://git.tonycloud.org/flutter/shorebird'>
-	https://git.tonycloud.org/flutter/shorebird</a>
+	href='https://github.com/tony-cloud/shorebird'>
+	https://github.com/tony-cloud/shorebird</a>
 </p>
 <p>
 If you're seeing problems with this open artifact proxy, file an issue against

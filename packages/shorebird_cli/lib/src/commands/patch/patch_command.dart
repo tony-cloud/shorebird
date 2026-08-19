@@ -105,7 +105,7 @@ To target the latest release (e.g. the release that was most recently updated) u
 [DEPRECATED] Whether to publish the patch to the staging environment. Use --track=staging instead.''',
         hide: true,
       )
-      // Added for https://git.tonycloud.org/flutter/shorebird/issues/3223.
+      // Added for https://github.com/tony-cloud/shorebird/issues/3223.
       // Can be removed fall 2026 or later.
       ..addFlag(
         'confirm',

@@ -504,7 +504,7 @@ Looked in:
     // the project filters it out via `ndk.abiFilters`, `splits.abi`, or
     // `jniLibs.excludes`. Iterating only over present files lets a filtered
     // release succeed instead of crashing on the first missing arch
-    // (https://git.tonycloud.org/flutter/shorebird/issues/3388).
+    // (https://github.com/tony-cloud/shorebird/issues/3388).
     final missingArchPaths = <String>[];
     var uploadedArchCount = 0;
     for (final arch in architectures) {

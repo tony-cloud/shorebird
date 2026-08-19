@@ -226,7 +226,7 @@ ${lightCyan.wrap("shorebird release android '--' --no-pub lib/main.dart")}'''),
 
         verify(
           () => logger.info('''
-Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
+Shorebird $packageVersion • https://github.com/tony-cloud/shorebird.git
 Flutter $flutterVersion • revision $flutterRevision
 Engine • revision $shorebirdEngineRevision'''),
         ).called(1);

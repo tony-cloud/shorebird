@@ -241,7 +241,7 @@ abstract class Releaser {
   // upload, so an interruption between the two leaves the release without its
   // supplement. Now that the supplement drives patching decisions (e.g.
   // obfuscation), we should make this atomic or recoverable.
-  // https://git.tonycloud.org/flutter/shorebird/issues/3630
+  // https://github.com/tony-cloud/shorebird/issues/3630
   Future<void> uploadSupplementArtifact({
     required String appId,
     required int releaseId,

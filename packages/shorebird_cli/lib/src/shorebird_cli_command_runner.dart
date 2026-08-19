@@ -260,7 +260,7 @@ ${lightCyan.wrap('shorebird release android -- --no-pub lib/main.dart')}''';
           shorebirdFlutterPrefix.write(' $flutterVersion');
         }
         logger.info('''
-Shorebird $packageVersion • https://git.tonycloud.org/flutter/shorebird.git
+Shorebird $packageVersion • https://github.com/tony-cloud/shorebird.git
 $shorebirdFlutterPrefix • revision ${shorebirdEnv.flutterRevision}
 Engine • revision ${shorebirdEnv.shorebirdEngineRevision}''');
       }

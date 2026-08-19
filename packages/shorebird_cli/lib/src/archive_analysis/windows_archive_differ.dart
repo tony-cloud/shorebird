@@ -37,7 +37,7 @@ class WindowsArchiveDiffer extends ArchiveDiffer {
     // Otherwise, this function would return true if the file has a .dll or .exe
     // extension.
     //
-    // See https://git.tonycloud.org/flutter/shorebird/issues/2794
+    // See https://github.com/tony-cloud/shorebird/issues/2794
     return false;
   }
 }

@@ -366,7 +366,7 @@ void main() {
           verify(
             () => logger.info('''
 Please run `shorebird cache clean` and try again. If the issue persists, please
-file a bug report at https://git.tonycloud.org/flutter/shorebird/issues/new.
+file a bug report at https://github.com/tony-cloud/shorebird/issues/new.
 
 Looked in:
   - the libapp.so entries inside the built .aab
@@ -834,7 +834,7 @@ Looked in:
               () => logger.info(
                 any(
                   that: contains(
-                    'git.tonycloud.org/flutter/shorebird/src/branch/main/docs/code-push/troubleshooting',
+                    'github.com/tony-cloud/shorebird/blob/main/docs/code-push/troubleshooting',
                   ),
                 ),
               ),

@@ -8,7 +8,7 @@ import 'package:xml/xml.dart';
 /// Checks that android/app/src/main/AndroidManifest.xml contains the INTERNET
 /// permission, which is required for Shorebird to work.
 ///
-/// See https://git.tonycloud.org/flutter/shorebird/issues/160.
+/// See https://github.com/tony-cloud/shorebird/issues/160.
 class AndroidInternetPermissionValidator extends Validator {
   /// Path to the main AndroidManifest.xml file.
   final String _mainAndroidManifestPath = p.join(

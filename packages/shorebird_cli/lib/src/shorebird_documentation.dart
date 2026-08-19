@@ -3,13 +3,13 @@ import 'package:mason_logger/mason_logger.dart';
 
 /// Link to the open Shorebird repository.
 const openShorebirdRepositoryUrl =
-    'https://git.tonycloud.org/flutter/shorebird';
+    'https://github.com/tony-cloud/shorebird';
 
 /// Link to the open Shorebird issue tracker.
 const openShorebirdIssueUrl = '$openShorebirdRepositoryUrl/issues/new';
 
 /// Link to the open Shorebird documentation page.
-const docsUrl = '$openShorebirdRepositoryUrl/src/branch/main/docs';
+const docsUrl = '$openShorebirdRepositoryUrl/blob/main/docs';
 
 /// Link to the Flutter version page on the Shorebird documentation.
 const flutterVersionUrl = '$docsUrl/getting-started/flutter-version';

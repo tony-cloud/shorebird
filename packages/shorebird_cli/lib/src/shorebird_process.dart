@@ -42,7 +42,7 @@ class ShorebirdProcess {
   /// `bin/shorebird.dart`, so `flutter build` stderr is absent from the
   /// shorebird log file — on a build failure users see the real error on
   /// screen but the log only has `Failed to build AAB. Exited with code 1`
-  /// (https://git.tonycloud.org/flutter/shorebird/issues/3703). Piping
+  /// (https://github.com/tony-cloud/shorebird/issues/3703). Piping
   /// through Dart would capture stderr but turns `stdout.hasTerminal` false
   /// on the child side, regressing the interactive UX; a pty or per-fd
   /// shell tee would fix both but costs a dependency / POSIX-only path.

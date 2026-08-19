@@ -125,7 +125,7 @@ Defaults to "latest" which builds using the latest stable Flutter version.''',
         hide: true,
         negatable: false,
       )
-      // Added for https://git.tonycloud.org/flutter/shorebird/issues/3223.
+      // Added for https://github.com/tony-cloud/shorebird/issues/3223.
       // Can be removed fall 2026 or later.
       ..addFlag(
         'confirm',

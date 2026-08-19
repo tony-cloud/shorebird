@@ -253,7 +253,7 @@ Reason: Exited with code $exitCode.''',
         if (target != null) '--target=$target',
         if (targetPlatformArgs != null) '--target-platform=$targetPlatformArgs',
         // TODO(bryanoltman): reintroduce coverage when we can support this.
-        // See https://git.tonycloud.org/flutter/shorebird/issues/1141.
+        // See https://github.com/tony-cloud/shorebird/issues/1141.
         // coverage:ignore-start
         if (splitPerAbi) '--split-per-abi',
         // coverage:ignore-end
@@ -767,7 +767,7 @@ Reason: Exited with code $exitCode.''',
   /// Flutter SDK on the user's PATH. This is necessary because Flutter commands
   /// run by shorebird update the package_config.json file to point to
   /// shorebird's version of Flutter, which confuses VS Code. See
-  /// https://git.tonycloud.org/flutter/shorebird/issues/1101 for more info.
+  /// https://github.com/tony-cloud/shorebird/issues/1101 for more info.
   Future<void> _systemFlutterPubGet() async {
     const executable = 'flutter';
     if (osInterface.which(executable) == null) {

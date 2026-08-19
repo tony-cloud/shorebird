@@ -5,8 +5,8 @@ description: >
   Not intended for consumption outside of those projects.
 version: 0.1.0
 publish_to: none
-homepage: https://git.tonycloud.org/flutter/shorebird-workspace
-repository: https://git.tonycloud.org/flutter/shorebird-workspace
+homepage: https://github.com/tony-cloud/shorebird-workspace
+repository: https://github.com/tony-cloud/shorebird-workspace
 resolution: workspace
 
 environment:

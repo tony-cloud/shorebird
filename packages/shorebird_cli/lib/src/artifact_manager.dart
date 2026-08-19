@@ -225,7 +225,7 @@ class ArtifactManager {
     // "strip{flavor}ReleaseDebugSymbols". We check first for the new
     // directory and then fallback to the old one.
     //
-    // See https://git.tonycloud.org/flutter/shorebird/issues/1798
+    // See https://github.com/tony-cloud/shorebird/issues/1798
     final strippedSymbolsDir = Directory(
       p.join(releasePath, stripReleaseDebugSymbolsDirName),
     );
@@ -252,7 +252,7 @@ class ArtifactManager {
   /// (flutter/flutter#181275) handed `libapp.so` stripping to AGP, and the
   /// strip task can emit nothing — or leave stale output from a previous
   /// build — while the current library is still bundled into the AAB. See
-  /// https://git.tonycloud.org/flutter/shorebird/issues/3388. Reading the AAB
+  /// https://github.com/tony-cloud/shorebird/issues/3388. Reading the AAB
   /// first sidesteps the strip task entirely.
   ///
   /// Reading the unstripped `merged_native_libs` is deliberately NOT used as a

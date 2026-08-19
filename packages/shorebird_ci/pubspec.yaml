@@ -4,8 +4,8 @@ description: >-
   workflows, resolves affected packages via dependency graphs, and
   verifies path filters stay in sync.
 version: 0.2.4
-homepage: https://git.tonycloud.org/flutter/shorebird-workspace
-repository: https://git.tonycloud.org/flutter/shorebird-workspace
+homepage: https://github.com/tony-cloud/shorebird-workspace
+repository: https://github.com/tony-cloud/shorebird-workspace
 topics: [ci, github-actions, monorepo, shorebird]
 resolution: workspace
 

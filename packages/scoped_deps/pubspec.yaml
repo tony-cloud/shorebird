@@ -2,8 +2,8 @@
 name: scoped_deps
 description: A simple Dart library for managing scoped dependencies built on top of Zones from dart:async.
 version: 0.1.0+2
-homepage: https://git.tonycloud.org/flutter/shorebird-workspace
-repository: https://git.tonycloud.org/flutter/shorebird-workspace
+homepage: https://github.com/tony-cloud/shorebird-workspace
+repository: https://github.com/tony-cloud/shorebird-workspace
 resolution: workspace
 # pub.dev/packages/scoped_deps is now owned by mrgnhnt96; see README.md.
 publish_to: none

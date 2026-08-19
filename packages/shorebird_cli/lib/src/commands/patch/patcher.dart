@@ -276,7 +276,7 @@ More info: ${troubleshootingUrl.toLink()}.
   /// native changes, even though the user may not have actually changed any
   /// code or dependencies.
   ///
-  /// Context: https://git.tonycloud.org/flutter/shorebird/issues/2270
+  /// Context: https://github.com/tony-cloud/shorebird/issues/2270
   List<String> buildNameAndNumberArgsFromReleaseVersion(
     String? releaseVersion,
   ) {
