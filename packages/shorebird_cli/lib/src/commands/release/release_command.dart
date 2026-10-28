@@ -430,6 +430,7 @@ $error''');
     required AppMetadata app,
     required String flutterRevision,
   }) async {
+    assertIosInterpreterReleaseConfiguration(releaser);
     await cache.updateAll();
     await _assertPatchVerificationChecksSignatures();
 
@@ -633,23 +634,13 @@ $error''');
     }
     if (!results.patchSigningEnabled ||
         shorebirdYaml?.patchVerification == PatchVerification.installOnly) {
-      final nativeOptIn =
-          platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH'];
-      final nativeEnabled = const {'1', 'true', 'yes'}.contains(nativeOptIn);
-      final environmentMode = platform
-          .environment['SHOREBIRD_IOS_PATCH_RUNTIME_MODE']
-          ?.trim();
-      final runtimeMode = environmentMode != null && environmentMode.isNotEmpty
-          ? environmentMode
-          : (nativeEnabled ? open_patch.runtimeModeNativeAot : null) ??
-                shorebirdYaml?.aotPatchRuntimeMode ??
-                open_patch.runtimeModeDartBytecodeInterpreter;
       final isIos = const {
         ReleaseType.ios,
         ReleaseType.iosFramework,
       }.contains(releaser.releaseType);
       if (isIos &&
-          runtimeMode.trim() == open_patch.runtimeModeDartBytecodeInterpreter) {
+          _iosPatchRuntimeMode ==
+              open_patch.runtimeModeDartBytecodeInterpreter) {
         usageException(
           'Encrypted iOS interpreter releases require patch signing and '
           'patch_verification: strict. Remove --no-patch-signing and '
@@ -697,6 +688,78 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
 
     // Ask the releaser to assert its own args are valid.
     await releaser.assertArgsAreValid();
+  }
+
+  String get _iosPatchRuntimeMode {
+    final nativeOptIn = platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH'];
+    final nativeEnabled = const {'1', 'true', 'yes'}.contains(nativeOptIn);
+    final environmentMode = platform
+        .environment['SHOREBIRD_IOS_PATCH_RUNTIME_MODE']
+        ?.trim();
+    if (environmentMode != null && environmentMode.isNotEmpty) {
+      return environmentMode;
+    }
+    return (nativeEnabled ? open_patch.runtimeModeNativeAot : null) ??
+        shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode ??
+        open_patch.runtimeModeDartBytecodeInterpreter;
+  }
+
+  /// Rejects interpreter releases without a complete runtime trust policy.
+  /// Runs before building or creating a release on the server.
+  @visibleForTesting
+  void assertIosInterpreterReleaseConfiguration(Releaser releaser) {
+    if (!const {
+          ReleaseType.ios,
+          ReleaseType.iosFramework,
+        }.contains(releaser.releaseType) ||
+        _iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
+      return;
+    }
+    if (results.wasParsed(CommonArguments.publicKeyArg.name) ||
+        results.wasParsed(CommonArguments.publicKeyCmd.name)) {
+      usageException(
+        'Encrypted iOS interpreter releases currently require managed signing '
+        'to authenticate patch offers and rollback responses. Remove '
+        '--public-key-path/--public-key-cmd and use the default managed key. '
+        'Customer signing remains available for native AOT releases.',
+      );
+    }
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    final required = <String, String?>{
+      'aot_patch_runtime_mode': yaml?.aotPatchRuntimeMode,
+      'aot_patch_base_flavor_id': yaml?.aotPatchBaseFlavorId,
+      'aot_patch_base_license_type': yaml?.aotPatchBaseLicenseType,
+      'aot_patch_sdk_hash': yaml?.aotPatchSdkHash,
+      'aot_patch_base_snapshot_hash': yaml?.aotPatchBaseSnapshotHash,
+      'aot_patch_key_id': yaml?.aotPatchKeyId,
+    };
+    final missing = required.entries
+        .where((entry) => entry.value == null || entry.value!.trim().isEmpty)
+        .map((entry) => entry.key)
+        .toList();
+    if (missing.isNotEmpty) {
+      usageException(
+        'Missing iOS interpreter baseline policy in shorebird.yaml: '
+        '${missing.join(', ')}. Set aot_patch_runtime_mode to '
+        'dart-bytecode-interpreter. The SDK hash and base snapshot hash must '
+        'describe the release SDK and baseline Dart bytecode, respectively; '
+        'do not use the native App.framework hash. App id and release build '
+        'version are resolved from the build automatically.',
+      );
+    }
+    if (yaml!.aotPatchRuntimeMode !=
+        open_patch.runtimeModeDartBytecodeInterpreter) {
+      usageException(
+        'Set aot_patch_runtime_mode: dart-bytecode-interpreter in '
+        'shorebird.yaml so the release embeds its interpreter baseline policy.',
+      );
+    }
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(yaml.aotPatchBaseSnapshotHash!)) {
+      usageException(
+        'aot_patch_base_snapshot_hash must be the lowercase SHA-256 hash '
+        'of the baseline Dart bytecode (64 hexadecimal characters).',
+      );
+    }
   }
 
   /// Determines which Flutter version to use for the release. This will be

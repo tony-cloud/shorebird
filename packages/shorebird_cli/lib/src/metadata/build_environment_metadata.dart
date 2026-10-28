@@ -141,6 +141,7 @@ Map<String, dynamic> _publicShorebirdYaml(ShorebirdYaml yaml) {
     'base_url',
     'auto_update',
     'patch_verification',
+    'patch_response_verification',
     'aot_patch_runtime_mode',
     'aot_patch_key_id',
     'aot_patch_app_build_id',

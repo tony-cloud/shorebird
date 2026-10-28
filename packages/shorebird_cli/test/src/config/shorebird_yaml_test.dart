@@ -107,6 +107,38 @@ patch_verification: install_only
       expect(shorebirdYaml.patchVerification, PatchVerification.installOnly);
     });
 
+    for (final mode in PatchResponseVerification.values) {
+      test('serializes patch_response_verification: ${mode.name}', () {
+        final config = checkedYamlDecode(
+          'app_id: test_app_id\npatch_response_verification: ${mode.name}',
+          (map) => ShorebirdYaml.fromJson(map!),
+        );
+        expect(config.patchResponseVerification, mode);
+        expect(config.toJson()['patch_response_verification'], mode.name);
+      });
+    }
+
+    test('rejects invalid patch_response_verification', () {
+      expect(
+        () => checkedYamlDecode(
+          'app_id: test_app_id\npatch_response_verification: invalid',
+          (map) => ShorebirdYaml.fromJson(map!),
+        ),
+        throwsA(
+          isA<ParsedYamlException>().having(
+            (error) => error.message,
+            'message',
+            contains('patch_response_verification'),
+          ),
+        ),
+      );
+    });
+
+    test('defaults patch_response_verification to absent for legacy apps', () {
+      final config = ShorebirdYaml.fromJson({'app_id': 'test_app_id'});
+      expect(config.patchResponseVerification, isNull);
+    });
+
     test('can be deserialized with open AOT patch metadata', () {
       const yaml = '''
 app_id: test_app_id

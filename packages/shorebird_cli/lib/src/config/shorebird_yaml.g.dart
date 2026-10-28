@@ -20,6 +20,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
         'base_url',
         'auto_update',
         'patch_verification',
+        'patch_response_verification',
         'aot_patch_runtime_mode',
         'aot_patch_bytecode_path',
         'aot_patch_key_id',
@@ -46,6 +47,10 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
       patchVerification: $checkedConvert(
         'patch_verification',
         (v) => $enumDecodeNullable(_$PatchVerificationEnumMap, v),
+      ),
+      patchResponseVerification: $checkedConvert(
+        'patch_response_verification',
+        (v) => $enumDecodeNullable(_$PatchResponseVerificationEnumMap, v),
       ),
       aotPatchRuntimeMode: $checkedConvert(
         'aot_patch_runtime_mode',
@@ -101,6 +106,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
     'baseUrl': 'base_url',
     'autoUpdate': 'auto_update',
     'patchVerification': 'patch_verification',
+    'patchResponseVerification': 'patch_response_verification',
     'aotPatchRuntimeMode': 'aot_patch_runtime_mode',
     'aotPatchBytecodePath': 'aot_patch_bytecode_path',
     'aotPatchKeyId': 'aot_patch_key_id',
@@ -125,6 +131,8 @@ Map<String, dynamic> _$ShorebirdYamlToJson(
   'base_url': instance.baseUrl,
   'auto_update': instance.autoUpdate,
   'patch_verification': _$PatchVerificationEnumMap[instance.patchVerification],
+  'patch_response_verification':
+      _$PatchResponseVerificationEnumMap[instance.patchResponseVerification],
   'aot_patch_runtime_mode': instance.aotPatchRuntimeMode,
   'aot_patch_bytecode_path': instance.aotPatchBytecodePath,
   'aot_patch_key_id': instance.aotPatchKeyId,
@@ -143,4 +151,9 @@ Map<String, dynamic> _$ShorebirdYamlToJson(
 const _$PatchVerificationEnumMap = {
   PatchVerification.strict: 'strict',
   PatchVerification.installOnly: 'install_only',
+};
+
+const _$PatchResponseVerificationEnumMap = {
+  PatchResponseVerification.optional: 'optional',
+  PatchResponseVerification.required: 'required',
 };

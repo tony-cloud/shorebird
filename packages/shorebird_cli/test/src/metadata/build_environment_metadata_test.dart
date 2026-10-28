@@ -30,6 +30,7 @@ void main() {
         'app_id': 'app-id',
         'aot_patch_key_hex': secret,
         'aot_patch_key_id': 'public-key-id',
+        'patch_response_verification': 'required',
         'aot_patch_bytecode_path': '/local/private/patch.bytecode',
       });
       final metadata = BuildEnvironmentMetadata.forTest(shorebirdYaml: yaml);
@@ -40,6 +41,7 @@ void main() {
       expect(uploadedYaml, isNot(contains('aot_patch_key_hex')));
       expect(uploadedYaml, isNot(contains('aot_patch_bytecode_path')));
       expect(uploadedYaml['aot_patch_key_id'], 'public-key-id');
+      expect(uploadedYaml['patch_response_verification'], 'required');
       expect(yaml.aotPatchKeyHex, secret);
       expect(yaml.toJson()['aot_patch_key_hex'], secret);
     });

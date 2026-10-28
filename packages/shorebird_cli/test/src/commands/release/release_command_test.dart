@@ -1263,6 +1263,111 @@ Did you mean --release-version=1.0.0+1?''',
       });
     });
 
+    group('assertIosInterpreterReleaseConfiguration', () {
+      const baseline = {
+        'app_id': appId,
+        'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+        'aot_patch_base_flavor_id': 'free',
+        'aot_patch_base_license_type': 'free',
+        'aot_patch_sdk_hash': 'sdk-hash',
+        'aot_patch_base_snapshot_hash':
+            '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        'aot_patch_key_id': 'app-owned-provider-key',
+      };
+      setUp(() {
+        when(() => releaser.releaseType).thenReturn(ReleaseType.ios);
+        when(
+          () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+        ).thenReturn(false);
+        when(
+          () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+        ).thenReturn(false);
+        when(
+          () => shorebirdEnv.getShorebirdYaml(),
+        ).thenReturn(ShorebirdYaml.fromJson(baseline));
+      });
+      test(
+        'accepts measured baseline policy without future target restrictions',
+        () {
+          runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          );
+        },
+      );
+      for (final argument in [
+        CommonArguments.publicKeyArg,
+        CommonArguments.publicKeyCmd,
+      ]) {
+        test('rejects customer signing through ${argument.name}', () {
+          when(() => argResults.wasParsed(argument.name)).thenReturn(true);
+          expect(
+            () => runWithOverrides(
+              () => command.assertIosInterpreterReleaseConfiguration(releaser),
+            ),
+            throwsA(
+              isA<UsageException>().having(
+                (e) => e.message,
+                'message',
+                contains('require managed signing'),
+              ),
+            ),
+          );
+        });
+      }
+      for (final field in baseline.keys.where((key) => key != 'app_id')) {
+        test('rejects missing $field before building', () {
+          final config = {...baseline}..remove(field);
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(ShorebirdYaml.fromJson(config));
+          expect(
+            () => runWithOverrides(
+              () => command.assertIosInterpreterReleaseConfiguration(releaser),
+            ),
+            throwsA(
+              isA<UsageException>().having(
+                (e) => e.message,
+                'message',
+                contains(field),
+              ),
+            ),
+          );
+        });
+      }
+      test('rejects a native artifact hash with invalid SHA-256 format', () {
+        final config = {
+          ...baseline,
+          'aot_patch_base_snapshot_hash': 'native-path',
+        };
+        when(
+          () => shorebirdEnv.getShorebirdYaml(),
+        ).thenReturn(ShorebirdYaml.fromJson(config));
+        expect(
+          () => runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          ),
+          throwsA(
+            isA<UsageException>().having(
+              (e) => e.message,
+              'message',
+              contains('64 hexadecimal'),
+            ),
+          ),
+        );
+      });
+      test('leaves native customer signing available', () {
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+          const ShorebirdYaml(appId: appId, aotPatchRuntimeMode: 'native-aot'),
+        );
+        when(
+          () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+        ).thenReturn(true);
+        runWithOverrides(
+          () => command.assertIosInterpreterReleaseConfiguration(releaser),
+        );
+      });
+    });
+
     group('assertArgsAreValid', () {
       test('calls releaser.assertArgsAreValid', () async {
         final releaser = MockReleaser();

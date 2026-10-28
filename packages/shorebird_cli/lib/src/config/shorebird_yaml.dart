@@ -13,6 +13,16 @@ enum PatchVerification {
   installOnly,
 }
 
+/// Whether device patch-check control responses must be authenticated.
+@JsonEnum(fieldRename: FieldRename.snake)
+enum PatchResponseVerification {
+  /// Accept legacy patch-check responses without authentication.
+  optional,
+
+  /// Require signatures bound to the request nonce and release context.
+  required,
+}
+
 /// {@template shorebird_yaml}
 /// A Shorebird configuration file which contains metadata about the app.
 /// {@endtemplate}
@@ -25,6 +35,7 @@ class ShorebirdYaml {
     this.baseUrl,
     this.autoUpdate,
     this.patchVerification,
+    this.patchResponseVerification,
     this.aotPatchRuntimeMode,
     this.aotPatchBytecodePath,
     this.aotPatchKeyId,
@@ -74,6 +85,9 @@ class ShorebirdYaml {
 
   /// The patch verification mode for the app.
   final PatchVerification? patchVerification;
+
+  /// Whether patch-check offers and rollback instructions require signatures.
+  final PatchResponseVerification? patchResponseVerification;
 
   /// Runtime mode used for open AOT patch artifacts.
   final String? aotPatchRuntimeMode;
