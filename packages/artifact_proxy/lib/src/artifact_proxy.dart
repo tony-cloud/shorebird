@@ -94,6 +94,15 @@ Handler artifactProxyHandler({
         return Response.found(location);
       }
 
+      // A stock SDK or release engine cannot execute our patches. Missing
+      // custom artifacts must be visible failures, never silent substitution.
+      if (_requiresCustomRuntime(normalizedPath)) {
+        return Response.notFound(
+          'No custom runtime artifact is published for $normalizedPath. '
+          'Build and publish this target before using code push.',
+        );
+      }
+
       final location = getFlutterArtifactLocation(
         artifactPath: normalizedPath,
         engine: manifest.flutterEngineRevision,
@@ -172,4 +181,16 @@ Uri _joinUri(Uri base, String path) {
       : base.path;
   final relativePath = path.startsWith('/') ? path.substring(1) : path;
   return base.replace(path: '$basePath/$relativePath');
+}
+
+/// Fonts and debug tools may use upstream artifacts. Production runtime
+/// binaries and snapshot compilers must match the custom VM revision.
+bool _requiresCustomRuntime(String path) {
+  return RegExp(r'/dart-sdk-[^/]+\.zip$').hasMatch(path) ||
+      path.endsWith('/flutter_patched_sdk_product.zip') ||
+      RegExp(
+        '/(?:android-[^/]+|ios|darwin(?:-[^/]+)?|linux-[^/]+)-release/',
+      ).hasMatch(path) ||
+      RegExp(r'/windows-[^/]+/windows-[^/]+-flutter\.zip$').hasMatch(path) ||
+      RegExp('/io/flutter/[^/]+_release/').hasMatch(path);
 }

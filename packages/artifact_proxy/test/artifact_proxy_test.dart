@@ -14,6 +14,8 @@ void main() {
     flutterEngineRevision: 'ec975089acb540fc60752606a3d3ba809dd1528b',
     storageBucket: 'shorebird',
     artifactOverrides: {
+      r'flutter_infra_release/flutter/$engine/dart-sdk-linux-x64.zip',
+      r'flutter_infra_release/flutter/$engine/dart-sdk-darwin-arm64.zip',
       r'flutter_infra_release/flutter/$engine/android-arm64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/android-arm64-release/symbols.zip',
       r'flutter_infra_release/flutter/$engine/linux-x64-release/artifacts.zip',
@@ -95,6 +97,8 @@ void main() {
 
     test('should proxy CI-produced desktop artifacts with overrides', () async {
       const paths = [
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/dart-sdk-linux-x64.zip',
+        'flutter_infra_release/flutter/$shorebirdEngineRevision/dart-sdk-darwin-arm64.zip',
         'flutter_infra_release/flutter/$shorebirdEngineRevision/linux-x64-release/artifacts.zip',
         'flutter_infra_release/flutter/$shorebirdEngineRevision/linux-x64-release/linux-x64-flutter-gtk.zip',
         'flutter_infra_release/flutter/$shorebirdEngineRevision/flutter_patched_sdk_product.zip',
@@ -109,7 +113,7 @@ void main() {
           ),
         );
       }
-      verify(() => client.getManifest(shorebirdEngineRevision)).called(4);
+      verify(() => client.getManifest(shorebirdEngineRevision)).called(6);
     });
 
     test(
@@ -172,6 +176,31 @@ void main() {
         ),
       );
       verify(() => client.getManifest(shorebirdEngineRevision)).called(1);
+    });
+
+    test('rejects missing custom SDK and release runtime artifacts', () async {
+      const missing = ArtifactsManifest(
+        flutterEngineRevision: 'stock-engine',
+        storageBucket: 'shorebird',
+        artifactOverrides: {},
+      );
+      when(() => client.getManifest(any())).thenAnswer((_) async => missing);
+      for (final suffix in [
+        'dart-sdk-darwin-x64.zip',
+        'dart-sdk-linux-x64.zip',
+        'android-arm64-release/artifacts.zip',
+        'ios-release/artifacts.zip',
+        'darwin-arm64-release/FlutterMacOS.framework.zip',
+        'windows-x64/windows-x64-flutter.zip',
+      ]) {
+        final response = await handler(
+          buildRequest(
+            'flutter_infra_release/flutter/$shorebirdEngineRevision/$suffix',
+          ),
+        );
+        expect(response.statusCode, HttpStatus.notFound, reason: suffix);
+        expect(response.headers['location'], isNull, reason: suffix);
+      }
     });
 
     test('should return 404 '
