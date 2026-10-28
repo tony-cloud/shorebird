@@ -112,22 +112,27 @@ void main() {
       verify(() => client.getManifest(shorebirdEngineRevision)).called(4);
     });
 
-    test('should proxy CI-produced iOS and web artifacts with overrides', () async {
-      const paths = [
-        'flutter_infra_release/flutter/$shorebirdEngineRevision/ios-release/artifacts.zip',
-        'flutter_infra_release/flutter/$shorebirdEngineRevision/flutter-web-sdk.zip',
-      ];
+    test(
+      'should proxy CI-produced iOS and web artifacts with overrides',
+      () async {
+        const artifactPrefix =
+            'flutter_infra_release/flutter/$shorebirdEngineRevision';
+        const paths = [
+          '$artifactPrefix/ios-release/artifacts.zip',
+          '$artifactPrefix/flutter-web-sdk.zip',
+        ];
 
-      for (final path in paths) {
-        expect(
-          await handler(buildRequest(path)),
-          isRedirectTo(
-            'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
-          ),
-        );
-      }
-      verify(() => client.getManifest(shorebirdEngineRevision)).called(2);
-    });
+        for (final path in paths) {
+          expect(
+            await handler(buildRequest(path)),
+            isRedirectTo(
+              'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
+            ),
+          );
+        }
+        verify(() => client.getManifest(shorebirdEngineRevision)).called(2);
+      },
+    );
 
     test('can use custom Flutter and Shorebird artifact roots', () async {
       handler = artifactProxyHandler(

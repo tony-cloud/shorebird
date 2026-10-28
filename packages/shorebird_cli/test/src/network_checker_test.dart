@@ -15,9 +15,11 @@ import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
 import 'fakes.dart';
+import 'helpers.dart';
 import 'mocks.dart';
 
 void main() {
+  useTempWorkingDirectory();
   group(NetworkChecker, () {
     late ArtifactManager artifactManager;
     late CodePushClientWrapper codePushClientWrapper;
@@ -54,14 +56,50 @@ void main() {
       shorebirdEnv = MockShorebirdEnv();
 
       when(() => logger.progress(any())).thenReturn(progress);
-      when(
-        () => shorebirdEnv.hostedUri,
-      ).thenReturn(Uri.parse(ShorebirdEnv.defaultHostedUrl));
+      when(() => shorebirdEnv.hostedUri).thenReturn(null);
       when(
         () => shorebirdEnv.authServiceUri,
-      ).thenReturn(Uri.parse(ShorebirdEnv.defaultAuthServiceUrl));
+      ).thenReturn(Uri.parse(defaultAuthServiceUrl));
+      when(() => shorebirdEnv.downloadUrl).thenReturn(defaultDownloadUrl);
 
       networkChecker = NetworkChecker();
+    });
+
+    /// The URLs probed when nothing overrides the defaults.
+    final defaultUrls = [
+      'http://localhost:8080',
+      'http://localhost:8080/auth',
+    ].map(Uri.parse).toList();
+
+    group('urlsToCheck', () {
+      test('probes the default hosts', () {
+        expect(
+          runWithOverrides(() => networkChecker.urlsToCheck),
+          equals(defaultUrls),
+        );
+      });
+
+      test('probes the configured hosts in place of the defaults', () {
+        when(
+          () => shorebirdEnv.hostedUri,
+        ).thenReturn(Uri.parse('https://api.example.com'));
+        when(
+          () => shorebirdEnv.authServiceUri,
+        ).thenReturn(Uri.parse('https://auth.example.com'));
+        when(
+          () => shorebirdEnv.downloadUrl,
+        ).thenReturn('https://mirror.example.com/shorebird');
+
+        expect(
+          runWithOverrides(() => networkChecker.urlsToCheck),
+          equals(
+            [
+              'https://api.example.com',
+              'https://auth.example.com',
+            ].map(Uri.parse),
+          ),
+        );
+      });
     });
 
     group('checkReachability', () {
@@ -73,26 +111,11 @@ void main() {
         });
 
         test('logs reachability for each checked url', () async {
-          final checkedUrlCount = await runWithOverrides(() async {
-            await networkChecker.checkReachability();
-            return NetworkChecker.urlsToCheck.length;
-          });
+          await runWithOverrides(networkChecker.checkReachability);
 
           verify(
             () => progress.complete(any(that: contains('OK'))),
-          ).called(checkedUrlCount);
-        });
-
-        test('checks self-hosted urls from ShorebirdEnv', () async {
-          final hostedUri = Uri.parse('https://open.example.com');
-          final authServiceUri = Uri.parse('https://auth.example.com');
-          when(() => shorebirdEnv.hostedUri).thenReturn(hostedUri);
-          when(() => shorebirdEnv.authServiceUri).thenReturn(authServiceUri);
-
-          await runWithOverrides(networkChecker.checkReachability);
-
-          verify(() => httpClient.get(hostedUri)).called(1);
-          verify(() => httpClient.get(authServiceUri)).called(1);
+          ).called(defaultUrls.length);
         });
       });
 
@@ -102,15 +125,64 @@ void main() {
         });
 
         test('logs reachability for each checked url', () async {
-          final checkedUrlCount = await runWithOverrides(() async {
-            await networkChecker.checkReachability();
-            return NetworkChecker.urlsToCheck.length;
-          });
+          await runWithOverrides(networkChecker.checkReachability);
 
           verify(
             () => progress.fail(any(that: contains('unreachable'))),
-          ).called(checkedUrlCount);
+          ).called(defaultUrls.length);
         });
+      });
+    });
+
+    group('reachability', () {
+      test(
+        'reports each url, counting any HTTP response as reachable',
+        () async {
+          // A bare GET to some of these hosts answers 404; that still means the
+          // network lets us reach them.
+          when(() => httpClient.get(any())).thenAnswer((invocation) async {
+            final url = invocation.positionalArguments.first as Uri;
+            if (url == defaultUrls[1]) throw Exception('oops');
+            return http.Response('', HttpStatus.notFound);
+          });
+
+          final results = await runWithOverrides(networkChecker.reachability);
+
+          expect(
+            results.map((r) => r.url),
+            equals(defaultUrls),
+          );
+          expect(
+            results.map((r) => r.reachable),
+            equals([
+              for (final url in defaultUrls) url != defaultUrls[1],
+            ]),
+          );
+          expect(results[1].error, isA<Exception>());
+          expect(
+            results[1].toJson(),
+            equals({
+              'url': '${defaultUrls[1]}',
+              'reachable': false,
+            }),
+          );
+          verifyNever(() => logger.progress(any()));
+        },
+      );
+
+      test('reports a malformed url as unreachable', () async {
+        when(
+          () => shorebirdEnv.hostedUri,
+        ).thenReturn(Uri.parse('mirror.example.com'));
+        when(
+          () => httpClient.get(any()),
+        ).thenThrow(ArgumentError('No host specified in URI'));
+
+        final results = await runWithOverrides(networkChecker.reachability);
+
+        expect(results.map((r) => r.reachable), everyElement(isFalse));
+        expect(results[0].url, equals(Uri.parse('mirror.example.com')));
+        expect(results[0].error, isA<ArgumentError>());
       });
     });
 

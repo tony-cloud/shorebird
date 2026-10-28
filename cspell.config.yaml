@@ -12,13 +12,15 @@ words:
   - allprojects # From gradle files
   - altool
   - ANDROIDD
-  - apigee
   - Apks
   - appbundle
+  - appcircle # Appcircle CI platform
+  - appex # Apple app extension bundle
   - archs
   - armeabi
   - Azul
   - backboardd
+  - backpressure
   - bdero
   - bintools
   - bitcode
@@ -38,6 +40,7 @@ words:
   - deflavored
   - develocity
   - devicectl
+  - DLRT # Prefix on the Dart VM's runtime entry points, as in DLRT_ExitSafepoint
   - dorny # From .github dir, doesn't show up in "**" check?
   - dyld
   - dylib
@@ -48,6 +51,8 @@ words:
   - exportoptions
   - felangel
   - FLUSHALL
+  - fvm # Flutter Version Management
+  - fvmrc # fvm's per-project config file
   - genhtml
   - genkey # From .github/workflows/e2e.yaml
   - gradlew
@@ -58,6 +63,7 @@ words:
   - iokit
   - iphoneos
   - isatty
+  - ITMS # App Store Connect error code prefix, e.g. ITMS-90473
   - keyalg # From .github/workflows/e2e.yaml
   - keypass # From .github/workflows/e2e.yaml
   - keysize # From .github/workflows/e2e.yaml
@@ -78,6 +84,7 @@ words:
   - lproj
   - madd # From ./packages/redis_client
   - mbps
+  - Memorystore
   - metacharacters
   - mget # From ./packages/redis_client
   - metadatas
@@ -86,10 +93,12 @@ words:
   - mocktail
   - mset # From ./packages/redis_client
   - multioption
+  - newtype # space_gen's term for a wrapper type, in generated protocol docs
   - noaudio # From .github dir, doesn't show up in "**" check?
   - NOAUTH
   - nonobvious # From analysis_options.yaml
   - nserror
+  - OCSF # Open Cybersecurity Schema Framework, the audit log format
   - Oltman
   - orri # Arm64 instruction, Or Register with Immediate
   - parseable
@@ -98,11 +107,13 @@ words:
   - pbxproj
   - pinact # Third-party action-pinning tool referenced in shorebird_ci
   - Perfetto # Chrome trace viewer at ui.perfetto.dev
+  - PKCE # OAuth Proof Key for Code Exchange (RFC 7636)
   - pkcs
   - podfile
   - podspec
   - pointycastle
   - precache
+  - precaching
   - previewable
   - PRNG
   - proguard # Android ProGuard shrinker/obfuscator
@@ -112,16 +123,18 @@ words:
   - pubspec
   - pwsh
   - quantiles
-  - rdata
   - reactivecircus # From .github dir, doesn't show up in "**" check?
   - readlink
   - reimplementation
   - reinit
   - requirepass # From .github dir, doesn't show up in "**" check?
+  - resends # "server resends the same patch on rollforward"
   - reusables
+  - rollforward # POST /.../patches/<id>/rollforward — un-rolls-back a patch
   - spawnee
   - Retryable
   - RSAPKCS
+  - Safepoint # Dart VM thread state, as in DLRT_ExitSafepoint
   - sdcard # From .github/workflows/e2e.yaml
   - sgit # From .github/license_check/action.yaml
   - shorebirdtech
@@ -142,6 +155,7 @@ words:
   - tdigest
   - temurin # From .github dir, doesn't show up in "**" check?
   - timebase # Mach timebase (mach_timebase_info)
+  - ttfb
   - udevadm # From .github/workflows/e2e.yaml
   - udid # Unique Device Identifier
   - unanalyzed
@@ -149,12 +163,14 @@ words:
   - unmockable
   - unobfuscated
   - unpadded
+  - unparseable
   - Unpatchable
   - unsets
   - unskipped
   - upvote
   - usbmuxd
   - USERPROFILE
+  - Valkey
   - VCRUNTIME
   - Verdana
   - vmcode
@@ -174,4 +190,5 @@ words:
   - xcschemes
   - xcshareddata
   - xcworkspace
+  - xlarge # GitHub runner labels (macos-latest-xlarge)
   - xlink

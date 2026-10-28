@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
@@ -14,12 +15,15 @@ import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_process.dart';
+import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 import 'package:test/test.dart';
 
 import 'fakes.dart';
+import 'helpers.dart';
 import 'mocks.dart';
 
 void main() {
+  useTempWorkingDirectory();
   group(ArtifactManager, () {
     late ArtifactManager artifactManager;
     late Cache cache;
@@ -326,64 +330,77 @@ void main() {
         });
       });
 
-      group(
-        'when download succeeds',
-        () {
-          late StreamController<List<int>> responseStreamController;
+      group('when download succeeds', () {
+        late StreamController<double> progressController;
+        late Completer<File> fileCompleter;
+        late List<String> updates;
 
-          setUp(() {
-            responseStreamController = StreamController<List<int>>();
-            when(() => httpClient.send(any())).thenAnswer(
-              (_) async => http.StreamedResponse(
-                responseStreamController.stream,
-                HttpStatus.ok,
-                contentLength: 5,
+        setUp(() {
+          progressController = StreamController<double>();
+          fileCompleter = Completer<File>();
+          artifactManager = _TestArtifactManager(
+            FileDownload(
+              file: fileCompleter.future,
+              progress: progressController.stream,
+            ),
+          );
+          updates = [];
+          when(() => progress.update(any())).thenAnswer((invocation) {
+            updates.add(invocation.positionalArguments.first as String);
+          });
+        });
+
+        // Polling beats sleeping for a fixed span: a loaded machine only makes
+        // the test wait longer, where a fixed sleep lets two events collapse
+        // into one throttle window and drops an expected update.
+        Future<void> waitForUpdates(int count) async {
+          final deadline = DateTime.now().add(const Duration(seconds: 10));
+          while (updates.length < count) {
+            if (DateTime.now().isAfter(deadline)) {
+              fail('timed out waiting for $count updates, saw $updates');
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+        }
+
+        test(
+          'emits the leading progress update and throttles the rest',
+          () async {
+            final downloadedFile = File(p.join(projectRoot.path, 'artifact'));
+            final download = runWithOverrides(
+              () => artifactManager.downloadWithProgressUpdates(
+                Uri.parse('https://example.com'),
+                message: 'hello',
+                throttleDuration: const Duration(milliseconds: 50),
               ),
             );
-          });
 
-          test('progress updates with a throttled ', () async {
-            // Awaiting this will cause the test to hang
-            unawaited(
-              runWithOverrides(
-                () => artifactManager.downloadWithProgressUpdates(
-                  Uri.parse('https://example.com'),
-                  message: 'hello',
-                  throttleDuration: const Duration(milliseconds: 50),
-                ),
-              ),
-            );
-            // Download the first 3/5. The first addition will trigger the
-            // first progress update, the second addition will be throttled,
-            // and the third addition will trigger the second progress update
-            // after the delay.
-            responseStreamController
-              ..add([1])
-              ..add([1])
-              ..add([1]);
-            await Future<void>.delayed(const Duration(milliseconds: 70));
-            // Download the last 2/5, bringing the total to 5/5
-            responseStreamController.add([1, 1]);
-            await Future<void>.delayed(const Duration(milliseconds: 70));
-            // The first update (20%) always fires immediately. The
-            // trailing throttled update may be 40% or 60% depending on
-            // timing. The final 100% always fires.
-            verifyInOrder([
-              () => progress.update('hello (20%)'),
-              () => progress.update(
-                any(that: anyOf('hello (40%)', 'hello (60%)')),
-              ),
-              () => progress.update('hello (100%)'),
-            ]);
-            verifyNever(() => progress.update('hello (0%)'));
-            verifyNever(() => progress.update('hello (20%)'));
-            verifyNever(() => progress.update('hello (80%)'));
-            verifyNoMoreInteractions(progress);
-            await responseStreamController.close();
-          });
-        },
-        onPlatform: {'windows': const Skip('Flaky on Windows')},
-      );
+            // Opens the throttle window, so it goes straight through.
+            progressController.add(0.2);
+            await waitForUpdates(1);
+
+            // Both land inside that window and only the last survives it.
+            // Stream events arrive as microtasks, which the throttle's timer
+            // can never preempt, so 0.4 is dropped however loaded the machine
+            // is.
+            progressController
+              ..add(0.4)
+              ..add(0.6);
+            await waitForUpdates(2);
+
+            progressController.add(1);
+            await waitForUpdates(3);
+
+            expect(updates, ['hello (20%)', 'hello (60%)', 'hello (100%)']);
+
+            fileCompleter.complete(downloadedFile);
+            expect(await download, downloadedFile);
+            verify(() => progress.complete('hello (100%)')).called(1);
+
+            await progressController.close();
+          },
+        );
+      });
 
       test('uses outputPath when specified', () async {
         when(() => httpClient.send(any())).thenAnswer(
@@ -409,9 +426,129 @@ void main() {
       });
     });
 
+    group('downloadReleaseArtifact', () {
+      const content = [1, 2, 3];
+      final contentHash = sha256.convert(content).toString();
+      late Directory shorebirdRoot;
+      late Progress progress;
+      late int requests;
+
+      ReleaseArtifact artifactWithHash(String hash) => ReleaseArtifact(
+        id: 7,
+        releaseId: 1,
+        arch: 'aarch64',
+        platform: ReleasePlatform.android,
+        hash: hash,
+        size: content.length,
+        url: 'https://example.com/artifact',
+        canSideload: true,
+      );
+
+      Directory releaseArtifactsDirectory() =>
+          runWithOverrides(() => Cache.shorebirdReleaseArtifactsDirectory);
+
+      Future<File> download(ReleaseArtifact artifact) => runWithOverrides(
+        () => artifactManager.downloadReleaseArtifact(
+          artifact,
+          message: 'Downloading',
+        ),
+      );
+
+      setUp(() {
+        shorebirdRoot = Directory.systemTemp.createTempSync();
+        when(() => shorebirdEnv.shorebirdRoot).thenReturn(shorebirdRoot);
+        progress = MockProgress();
+        when(() => logger.progress(any())).thenReturn(progress);
+        requests = 0;
+        when(() => httpClient.send(any())).thenAnswer((_) async {
+          requests++;
+          return http.StreamedResponse(
+            Stream.value(content),
+            HttpStatus.ok,
+            contentLength: content.length,
+          );
+        });
+      });
+
+      test('downloads once and reuses the cached copy', () async {
+        final artifact = artifactWithHash(contentHash);
+        final first = await download(artifact);
+        final second = await download(artifact);
+
+        expect(requests, equals(1));
+        expect(second.path, equals(first.path));
+        expect(second.readAsBytesSync(), equals(content));
+        expect(
+          releaseArtifactsDirectory().listSync().map((e) => e.path),
+          equals([first.path]),
+        );
+        verify(() => progress.complete('Downloading (cached)')).called(1);
+      });
+
+      test('downloads again when the cached copy is corrupt', () async {
+        final artifact = artifactWithHash(contentHash);
+        final first = await download(artifact);
+        first.writeAsBytesSync([9]);
+
+        final second = await download(artifact);
+
+        expect(requests, equals(2));
+        expect(second.readAsBytesSync(), equals(content));
+      });
+
+      test('warns about, uses, and does not cache a download whose hash '
+          'differs', () async {
+        final artifact = artifactWithHash('not-the-hash');
+        final first = await download(artifact);
+        final second = await download(artifact);
+
+        expect(requests, equals(2));
+        expect(first.readAsBytesSync(), equals(content));
+        expect(second.path, isNot(equals(first.path)));
+        verify(
+          () => logger.warn(any(that: contains('does not match the hash'))),
+        ).called(2);
+        expect(
+          File(
+            p.join(releaseArtifactsDirectory().path, '7-not-the-hash'),
+          ).existsSync(),
+          isFalse,
+        );
+      });
+
+      test('uses the download when it cannot be moved into place', () async {
+        final artifact = artifactWithHash(contentHash);
+        // A directory in the way makes the rename fail on every OS, as a
+        // copy held open by another run does on Windows.
+        Directory(
+          p.join(releaseArtifactsDirectory().path, '7-$contentHash', 'x'),
+        ).createSync(recursive: true);
+
+        final file = await download(artifact);
+
+        expect(file.readAsBytesSync(), equals(content));
+        expect(p.dirname(file.path), isNot(releaseArtifactsDirectory().path));
+      });
+
+      test('deletes a failed download', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            Stream<List<int>>.error(Exception('connection reset')),
+            HttpStatus.ok,
+          ),
+        );
+
+        await expectLater(
+          download(artifactWithHash(contentHash)),
+          throwsA(isA<Exception>()),
+        );
+        expect(releaseArtifactsDirectory().listSync(), isEmpty);
+      });
+    });
+
     group('extractZip', () {
       test('unzips provided file to provided output path', () async {
-        final zipFile = File(p.join('test', 'fixtures', 'aabs', 'base.aab'));
+        final zipFile = File(p.join(fixturesDirectory, 'aabs', 'base.aab'));
         final tempDir = Directory.systemTemp.createTempSync();
 
         expect(tempDir.listSync(recursive: true), isEmpty);
@@ -577,10 +714,13 @@ void main() {
       test('extracts a non-empty libapp.so for every arch in the '
           'aab', () async {
         final aab = File(
-          p.join('test', 'fixtures', 'aabs', 'changed_asset.aab'),
+          p.join(fixturesDirectory, 'aabs', 'changed_asset.aab'),
         );
 
-        final dir = await ArtifactManager.extractAndroidLibappsFromAab(aab);
+        final dir = Directory.systemTemp.createTempSync();
+        addTearDown(() => dir.deleteSync(recursive: true));
+
+        await ArtifactManager.extractAndroidLibappsFromAab(aab, into: dir);
 
         final archDirs =
             dir
@@ -598,9 +738,9 @@ void main() {
       });
     });
 
-    group('androidArchsDirectoryFromAab', () {
+    group('withAndroidArchsDirectoryFromAab', () {
       late Directory projectRoot;
-      final aab = File(p.join('test', 'fixtures', 'aabs', 'changed_asset.aab'));
+      final aab = File(p.join(fixturesDirectory, 'aabs', 'changed_asset.aab'));
 
       Directory strippedOutLib() => Directory(
         p.join(
@@ -630,36 +770,73 @@ void main() {
           ..createSync(recursive: true)
           ..writeAsStringSync(staleContents);
 
-        final result = await ArtifactManager.androidArchsDirectoryFromAab(
+        await ArtifactManager.withAndroidArchsDirectoryFromAab(
           projectRoot: projectRoot,
           aab: aab,
+          action: (result) async {
+            expect(result, isNotNull);
+            expect(result!.path, isNot(equals(stripped.path)));
+            final libapp = File(p.join(result.path, 'arm64-v8a', 'libapp.so'));
+            expect(libapp.existsSync(), isTrue);
+            expect(libapp.lengthSync(), isNot(equals(staleContents.length)));
+          },
         );
-
-        expect(result, isNotNull);
-        expect(result!.path, isNot(equals(stripped.path)));
-        final libapp = File(p.join(result.path, 'arm64-v8a', 'libapp.so'));
-        expect(libapp.existsSync(), isTrue);
-        expect(libapp.lengthSync(), isNot(equals(staleContents.length)));
       });
 
       test('extracts from the aab when no stripped dir exists', () async {
-        final result = await ArtifactManager.androidArchsDirectoryFromAab(
+        await ArtifactManager.withAndroidArchsDirectoryFromAab(
           projectRoot: projectRoot,
           aab: aab,
+          action: (result) async {
+            expect(result, isNotNull);
+            expect(
+              File(p.join(result!.path, 'x86_64', 'libapp.so')).existsSync(),
+              isTrue,
+            );
+          },
+        );
+      });
+
+      test('deletes the extracted libraries once action completes', () async {
+        final result = await ArtifactManager.withAndroidArchsDirectoryFromAab(
+          projectRoot: projectRoot,
+          aab: aab,
+          action: (result) async => result,
         );
 
         expect(result, isNotNull);
-        expect(
-          File(p.join(result!.path, 'x86_64', 'libapp.so')).existsSync(),
-          isTrue,
+        expect(result!.existsSync(), isFalse);
+      });
+
+      test('deletes the extracted libraries when action throws', () async {
+        Directory? extracted;
+        var calls = 0;
+        await expectLater(
+          ArtifactManager.withAndroidArchsDirectoryFromAab(
+            projectRoot: projectRoot,
+            aab: aab,
+            action: (result) async {
+              calls++;
+              extracted = result;
+              throw Exception('oops');
+            },
+          ),
+          throwsException,
         );
+
+        // The action's own error must not be taken for an extraction failure
+        // and retried against the stripped dir.
+        expect(calls, equals(1));
+        expect(extracted, isNotNull);
+        expect(extracted!.existsSync(), isFalse);
       });
 
       test('falls back to the stripped dir when no aab is provided', () async {
         final stripped = strippedOutLib()..createSync(recursive: true);
 
-        final result = await ArtifactManager.androidArchsDirectoryFromAab(
+        final result = await ArtifactManager.withAndroidArchsDirectoryFromAab(
           projectRoot: projectRoot,
+          action: (result) async => result,
         );
 
         expect(result, isNotNull);
@@ -676,9 +853,10 @@ void main() {
           ..writeAsStringSync('not a zip');
 
         final result = await runWithOverrides(
-          () => ArtifactManager.androidArchsDirectoryFromAab(
+          () => ArtifactManager.withAndroidArchsDirectoryFromAab(
             projectRoot: projectRoot,
             aab: invalidAab,
+            action: (result) async => result,
           ),
         );
 
@@ -710,9 +888,10 @@ void main() {
           ..writeAsBytesSync(bytes);
 
         final result = await runWithOverrides(
-          () => ArtifactManager.androidArchsDirectoryFromAab(
+          () => ArtifactManager.withAndroidArchsDirectoryFromAab(
             projectRoot: projectRoot,
             aab: corruptAab,
+            action: (result) async => result,
           ),
         );
 
@@ -739,22 +918,102 @@ void main() {
           );
 
         final result = await runWithOverrides(
-          () => ArtifactManager.androidArchsDirectoryFromAab(
+          () => ArtifactManager.withAndroidArchsDirectoryFromAab(
             projectRoot: projectRoot,
             aab: libappLessAab,
+            action: (result) async => result,
           ),
         );
 
         expect(result, isNotNull);
         expect(result!.path, equals(stripped.path));
+        expect(stripped.existsSync(), isTrue);
       });
 
       test('returns null when there is no stripped dir and no aab', () async {
-        final result = await ArtifactManager.androidArchsDirectoryFromAab(
+        final result = await ArtifactManager.withAndroidArchsDirectoryFromAab(
           projectRoot: projectRoot,
+          action: (result) async => result,
         );
 
         expect(result, isNull);
+      });
+    });
+
+    group('describeMissingLibappInAab', () {
+      late Directory tempDir;
+
+      File aabWith(List<String> entryNames) {
+        final archive = Archive();
+        for (final name in entryNames) {
+          archive.addFile(ArchiveFile.string(name, 'data'));
+        }
+        return File(p.join(tempDir.path, 'app.aab'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(ZipEncoder().encode(archive));
+      }
+
+      setUp(() {
+        tempDir = Directory.systemTemp.createTempSync();
+      });
+
+      test('returns null when the aab does not exist', () async {
+        final result = await ArtifactManager.describeMissingLibappInAab(
+          File(p.join(tempDir.path, 'missing.aab')),
+        );
+
+        expect(result, isNull);
+      });
+
+      test('returns null when the aab contains libapp.so', () async {
+        final aab = File(
+          p.join(fixturesDirectory, 'aabs', 'changed_asset.aab'),
+        );
+
+        final result = await ArtifactManager.describeMissingLibappInAab(aab);
+
+        expect(result, isNull);
+      });
+
+      test('returns null when the aab is not a valid zip', () async {
+        // Garbage decodes to an empty archive rather than throwing, and an
+        // empty archive must not be reported as a dropped libapp.so.
+        final invalidAab = File(p.join(tempDir.path, 'invalid.aab'))
+          ..createSync(recursive: true)
+          ..writeAsStringSync('not a zip');
+
+        final result = await ArtifactManager.describeMissingLibappInAab(
+          invalidAab,
+        );
+
+        expect(result, isNull);
+      });
+
+      test('reports the other native libs when libapp.so is missing', () async {
+        final aab = aabWith([
+          'base/manifest/AndroidManifest.xml',
+          'base/lib/arm64-v8a/libflutter.so',
+          'base/lib/armeabi-v7a/libflutter.so',
+        ]);
+
+        final result = await ArtifactManager.describeMissingLibappInAab(aab);
+
+        expect(result, isNotNull);
+        expect(
+          result,
+          contains('does not contain libapp.so for any architecture'),
+        );
+        expect(result, contains('arm64-v8a -> libflutter.so'));
+        expect(result, contains('armeabi-v7a -> libflutter.so'));
+      });
+
+      test('reports no native libs when base/lib is empty', () async {
+        final aab = aabWith(['base/manifest/AndroidManifest.xml']);
+
+        final result = await ArtifactManager.describeMissingLibappInAab(aab);
+
+        expect(result, isNotNull);
+        expect(result, contains('found no native libraries under base/lib'));
       });
     });
 
@@ -1103,24 +1362,6 @@ void main() {
       });
     });
 
-    group('getAppXcframeworkPath', () {
-      test('returns path to App.xcframework', () {
-        expect(
-          runWithOverrides(artifactManager.getAppXcframeworkPath),
-          equals(
-            p.join(
-              projectRoot.path,
-              'build',
-              'ios',
-              'framework',
-              'Release',
-              ArtifactManager.appXcframeworkName,
-            ),
-          ),
-        );
-      });
-    });
-
     group('getAppXcframeworkDirectory', () {
       test('returns directory containing App.xcframework', () {
         expect(
@@ -1132,60 +1373,35 @@ void main() {
       });
     });
 
-    group('getIosReleaseSupplementDirectory', () {
+    group('getReleaseSupplementDirectory', () {
+      Directory? getDirectory({bool create = false}) => runWithOverrides(
+        () => artifactManager.getReleaseSupplementDirectory(
+          platformSubdir: 'ios',
+          create: create,
+        ),
+      );
+
+      String expectedPath() =>
+          p.join(projectRoot.path, 'build', 'ios', 'shorebird');
+
       group('when the directory does not exist', () {
         test('returns null', () {
-          expect(
-            runWithOverrides(artifactManager.getIosReleaseSupplementDirectory),
-            isNull,
-          );
+          expect(getDirectory(), isNull);
+        });
+
+        test('creates the directory when create is true', () {
+          expect(getDirectory(create: true)?.path, equals(expectedPath()));
+          expect(Directory(expectedPath()).existsSync(), isTrue);
         });
       });
 
       group('when the directory exists', () {
         setUp(() {
-          Directory(
-            p.join(projectRoot.path, 'build', 'ios', 'shorebird'),
-          ).createSync(recursive: true);
+          Directory(expectedPath()).createSync(recursive: true);
         });
 
         test('returns path to the directory', () {
-          expect(
-            runWithOverrides(
-              artifactManager.getIosReleaseSupplementDirectory,
-            )?.path,
-            equals(p.join(projectRoot.path, 'build', 'ios', 'shorebird')),
-          );
-        });
-      });
-    });
-
-    group('getMacosReleaseSupplementDirectory', () {
-      group('when the directory does not exist', () {
-        test('returns null', () {
-          expect(
-            runWithOverrides(
-              artifactManager.getMacosReleaseSupplementDirectory,
-            ),
-            isNull,
-          );
-        });
-      });
-
-      group('when the directory exists', () {
-        setUp(() {
-          Directory(
-            p.join(projectRoot.path, 'build', 'macos', 'shorebird'),
-          ).createSync(recursive: true);
-        });
-
-        test('returns path to the directory', () {
-          expect(
-            runWithOverrides(
-              artifactManager.getMacosReleaseSupplementDirectory,
-            )?.path,
-            equals(p.join(projectRoot.path, 'build', 'macos', 'shorebird')),
-          );
+          expect(getDirectory()?.path, equals(expectedPath()));
         });
       });
     });
@@ -1228,4 +1444,19 @@ String _toTouchTimestamp(DateTime dt) {
   final h = dt.hour.toString().padLeft(2, '0');
   final min = dt.minute.toString().padLeft(2, '0');
   return '$y$m$d$h$min';
+}
+
+/// An [ArtifactManager] whose download is driven by the test instead of by the
+/// network and the file system. The real [ArtifactManager.startFileDownload]
+/// attaches its progress subscription a microtask after it starts draining the
+/// response, so early chunks are raced against that attachment and silently
+/// dropped.
+class _TestArtifactManager extends ArtifactManager {
+  _TestArtifactManager(this.download);
+
+  final FileDownload download;
+
+  @override
+  Future<FileDownload> startFileDownload(Uri uri, {String? outputPath}) async =>
+      download;
 }

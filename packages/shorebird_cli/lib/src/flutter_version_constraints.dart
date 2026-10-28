@@ -1,34 +1,68 @@
 import 'package:pub_semver/pub_semver.dart';
+import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 
-/// The minimum allowed Flutter version for creating iOS releases.
+/// The minimum allowed Flutter version for Android releases.
 ///
-/// This constraint exists because iOS code push support requires specific
-/// Flutter engine changes that were first available in this version.
-final minimumSupportedIosFlutterVersion = Version(3, 22, 2);
+/// Patches are not checked, so existing releases on older versions can still
+/// be patched.
+final minimumSupportedAndroidFlutterVersion = Version(3, 24, 0);
 
-/// The minimum allowed Flutter version for creating macOS releases.
+/// The minimum allowed Flutter version for iOS releases.
+final minimumSupportedIosFlutterVersion = Version(3, 24, 0);
+
+/// The minimum Flutter version an iOS release must have been built with to be
+/// patched.
+///
+/// Patched iOS apps on Flutter 3.19.5 through 3.22.1 do not always run the
+/// `catch` block after an exception is thrown.
+final minimumPatchableIosFlutterVersion = Version(3, 22, 2);
+
+/// The minimum allowed Flutter version for macOS releases and patches.
 ///
 /// macOS code push support was introduced later than iOS and requires
 /// Flutter engine changes that were first available in this version.
 final minimumSupportedMacosFlutterVersion = Version(3, 27, 4);
 
-/// The minimum allowed Flutter version for creating Linux releases.
+/// The minimum allowed Flutter version for Linux releases and patches.
 ///
 /// Linux code push support requires Flutter engine changes that were first
 /// available in this version.
 final minimumSupportedLinuxFlutterVersion = Version(3, 27, 4);
 
-/// The minimum allowed Flutter version for creating Windows releases.
+/// The minimum allowed Flutter version for Windows releases and patches.
 ///
 /// Windows code push support requires Flutter engine changes that were first
 /// available in this version.
 final minimumSupportedWindowsFlutterVersion = Version(3, 32, 6);
 
-/// Minimum Flutter version for obfuscation support across all platforms.
+/// The minimum allowed Flutter version for a new release of [releaseType].
+Version minimumReleaseFlutterVersion(ReleaseType releaseType) =>
+    switch (releaseType) {
+      ReleaseType.android ||
+      ReleaseType.aar => minimumSupportedAndroidFlutterVersion,
+      ReleaseType.ios ||
+      ReleaseType.iosFramework => minimumSupportedIosFlutterVersion,
+      ReleaseType.linux => minimumSupportedLinuxFlutterVersion,
+      ReleaseType.macos => minimumSupportedMacosFlutterVersion,
+      ReleaseType.windows => minimumSupportedWindowsFlutterVersion,
+    };
+
+/// Minimum Flutter version whose gen_snapshot supports
+/// `--load-obfuscation-map`, which builds an obfuscated patch with the same
+/// renamed identifiers as its release.
 ///
-/// Obfuscation requires gen_snapshot changes (--save-obfuscation-map and
-/// --strip flags) that were first available in this Flutter version.
+/// Only platforms where [patchesLinkAgainstRelease] need this: their patches
+/// are linked against the release snapshot, so the names must match. Other
+/// platforms' patches are complete snapshots and can be obfuscated
+/// independently on any Flutter version.
 final minimumObfuscationFlutterVersion = Version(3, 41, 2);
+
+/// Whether patches for [platform] are linked against the release snapshot
+/// (iOS, including iOS frameworks), so an obfuscated release on [platform]
+/// requires [minimumObfuscationFlutterVersion].
+bool patchesLinkAgainstRelease(ReleasePlatform platform) =>
+    platform == ReleasePlatform.ios;
 
 /// A Flutter support rule that combines a minimum version floor with an
 /// allowlist of specific Shorebird-fork engine revisions below the floor
@@ -79,19 +113,10 @@ final arm64PatchSupportConstraint = FlutterSupportConstraint(
 /// Flutter support for `flutter build --shorebird-trace=<path>` for emitting
 /// Chrome Trace Event Format build traces.
 ///
-/// Added in shorebirdtech/flutter#116. `minVersion` is set to the next
-/// minor past the latest Shorebird Flutter release (currently 3.41.6), so
-/// whenever that PR gets cut as 3.41.7 the floor covers it cleanly. Until
-/// then, the allowlist covers the current pin hash so users on it get
-/// tracing today.
+/// Added in shorebirdtech/flutter#116, which shipped in
+/// `flutter_release/3.41.7` and every subsequent release branch.
 final buildTraceSupportConstraint = FlutterSupportConstraint(
   minVersion: Version(3, 41, 7),
-  allowedRevisions: {
-    // Current Shorebird Flutter pin (bin/internal/flutter.version). Can
-    // be removed once a flutter_release/3.41.7 branch ships with this
-    // (or a later tracing-enabled) commit at its tip.
-    '3b10eecea184bb381f1045a878eeff36548ed11e',
-  },
 );
 
 /// Flutter versions where the Android Gradle Plugin (AGP) is the entity

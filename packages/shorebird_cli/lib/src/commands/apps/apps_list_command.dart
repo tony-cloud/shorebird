@@ -1,0 +1,78 @@
+import 'package:mason_logger/mason_logger.dart';
+import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/json_output.dart';
+import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/shorebird_command.dart';
+import 'package:shorebird_cli/src/shorebird_validator.dart';
+import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
+
+/// {@template apps_list_command}
+/// `shorebird apps list`
+/// List the apps the current user has access to.
+/// {@endtemplate}
+class AppsListCommand extends ShorebirdCommand {
+  /// {@macro apps_list_command}
+  AppsListCommand();
+
+  @override
+  String get name => 'list';
+
+  @override
+  String get description =>
+      'Lists the apps you have access to.\n\n'
+      'Example output (space-separated: app_id  display_name  '
+      'latest_release_version  latest_patch_number):\n'
+      '  01H...  Acme Mobile  1.2.3  4\n'
+      '  01J...  Acme Internal  -  -\n\n'
+      '"-" indicates no release or patch has been published yet.\n\n'
+      '${ShorebirdCommand.jsonHint('shorebird apps list --json')}';
+
+  @override
+  Future<int> run() async {
+    try {
+      await shorebirdValidator.validatePreconditions(
+        checkUserIsAuthenticated: true,
+      );
+    } on PreconditionFailedException catch (error) {
+      return reportPreconditionFailure(error);
+    }
+
+    late final List<AppMetadata> apps;
+    final fetchError = await guardApiCall(
+      () async => apps = await codePushClientWrapper.getApps(),
+      code: JsonErrorCode.fetchFailed,
+      message: 'Failed to fetch apps.',
+    );
+    if (fetchError != null) return fetchError;
+
+    if (isJsonMode) {
+      emitJsonSuccess({
+        'apps': [
+          for (final app in apps)
+            {
+              'app_id': app.appId,
+              'display_name': app.displayName,
+              'latest_release_version': app.latestReleaseVersion,
+              'latest_patch_number': app.latestPatchNumber,
+            },
+        ],
+      });
+      return ExitCode.success.code;
+    }
+
+    if (apps.isEmpty) {
+      logger.info('No apps found.');
+      return ExitCode.success.code;
+    }
+
+    for (final app in apps) {
+      logger.info(
+        '${app.appId}  ${lightCyan.wrap(app.displayName)}  '
+        '${app.latestReleaseVersion ?? '-'}  '
+        '${app.latestPatchNumber ?? '-'}',
+      );
+    }
+
+    return ExitCode.success.code;
+  }
+}

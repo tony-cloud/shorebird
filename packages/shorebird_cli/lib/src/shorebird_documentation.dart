@@ -2,8 +2,7 @@
 import 'package:mason_logger/mason_logger.dart';
 
 /// Link to the open Shorebird repository.
-const openShorebirdRepositoryUrl =
-    'https://github.com/tony-cloud/shorebird';
+const openShorebirdRepositoryUrl = 'https://github.com/tony-cloud/shorebird';
 
 /// Link to the open Shorebird issue tracker.
 const openShorebirdIssueUrl = '$openShorebirdRepositoryUrl/issues/new';

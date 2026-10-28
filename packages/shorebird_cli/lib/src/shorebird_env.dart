@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:pubspec_parse/pubspec_parse.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/platform.dart';
@@ -14,22 +15,99 @@ import 'package:shorebird_cli/src/user_config.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 
 /// Exception thrown when the Shorebird cache appears to be corrupted.
-///
-/// Surfaces a user-actionable message directing the user to run
-/// `shorebird cache clean` and retry.
 class CacheCorruptedException implements Exception {
   /// Creates a [CacheCorruptedException] explaining why the cache is
   /// considered corrupted via [reason] (a complete sentence).
-  const CacheCorruptedException(this.reason);
+  ///
+  /// [remedy] is the advice shown after [reason]. It defaults to wiping the
+  /// whole cache, which is the right answer only when nothing narrower is
+  /// known: that wipe takes every installed Flutter revision with it, so a
+  /// caller that can name a smaller repair should pass it.
+  const CacheCorruptedException(
+    this.reason, {
+    this.remedy =
+        'Your Shorebird installation may be corrupted. '
+        "Try running 'shorebird cache clean' and retrying.",
+  });
 
   /// Human-readable explanation of why the cache is considered corrupted.
   final String reason;
 
+  /// Human-readable advice on how to recover.
+  final String remedy;
+
   @override
-  String toString() =>
-      '$reason Your Shorebird installation may be corrupted. '
-      "Try running 'shorebird cache clean' and retrying.";
+  String toString() => '$reason $remedy';
 }
+
+/// The Shorebird auth service the CLI uses unless `AUTH_SERVICE_URL` names
+/// another.
+const defaultAuthServiceUrl = 'http://localhost:8080/auth';
+
+/// Where Flutter downloads its engine and SDK artifacts from unless
+/// `SHOREBIRD_DOWNLOAD_URL` names another, such as a mirror.
+const defaultDownloadUrl = 'http://localhost:8080/download.flutter.io';
+
+/// The Shorebird Flutter fork the CLI clones unless
+/// `SHOREBIRD_FLUTTER_GIT_URL` names another, such as a mirror.
+const defaultFlutterGitUrl = 'https://github.com/tony-cloud/flutter.git';
+
+/// The bundletool jar the CLI downloads unless `SHOREBIRD_BUNDLETOOL_URL`
+/// names another, such as a mirror. Whichever URL serves it, the jar must
+/// match the checksum the CLI expects.
+const defaultBundletoolUrl =
+    'https://github.com/google/bundletool/releases/download/${BundleToolArtifact.version}/bundletool-all-${BundleToolArtifact.version}.jar';
+
+/// The code push server the hidden `--dev` flag selects.
+const devHostedUrl = 'https://api-dev.shorebird.dev';
+
+/// The auth service the hidden `--dev` flag selects.
+const devAuthServiceUrl = 'https://auth-dev.shorebird.dev';
+
+/// The Shorebird web console for the production code push server.
+const defaultConsoleUrl = 'http://localhost:8080';
+
+/// The Shorebird web console the hidden `--dev` flag selects.
+const devConsoleUrl = 'https://console-dev.shorebird.dev';
+
+/// A Shorebird-hosted environment: a code push server, the auth service whose
+/// tokens it accepts, and the web console that manages it.
+///
+/// The one place these are paired, so that whichever way the CLI is pointed
+/// at a server (`--dev`, `SHOREBIRD_HOSTED_URL`, or `base_url` in
+/// shorebird.yaml) its auth service and console follow from it, and cannot
+/// drift from it.
+typedef ShorebirdEnvironment = ({
+  String hostedUrl,
+  String authServiceUrl,
+  String consoleUrl,
+});
+
+/// The production environment, which the CLI uses by default.
+const productionEnvironment = (
+  hostedUrl: 'http://localhost:8080',
+  authServiceUrl: defaultAuthServiceUrl,
+  consoleUrl: defaultConsoleUrl,
+);
+
+/// The dev environment, which the hidden `--dev` flag selects.
+const devEnvironment = (
+  hostedUrl: devHostedUrl,
+  authServiceUrl: devAuthServiceUrl,
+  consoleUrl: devConsoleUrl,
+);
+
+/// The Shorebird-hosted environments, matched by the host of their code push
+/// server (see [ShorebirdEnv.hostedEnvironment]).
+const shorebirdEnvironments = [productionEnvironment, devEnvironment];
+
+/// A reference to whether the hidden `--dev` global flag was passed.
+final isDevModeRef = create(() => false);
+
+/// Whether the hidden `--dev` global flag was passed: the CLI talks to
+/// [devEnvironment] unless `SHOREBIRD_HOSTED_URL` or `AUTH_SERVICE_URL`
+/// name another server.
+bool get isDevMode => read(isDevModeRef, orElse: () => false);
 
 /// A reference to a [ShorebirdEnv] instance.
 final shorebirdEnvRef = create(ShorebirdEnv.new);
@@ -54,9 +132,6 @@ class ShorebirdEnv {
         flutterRevisionOverride ?? _flutterRevisionOverride,
   );
 
-  final String? _flutterRevisionOverride;
-  final String? _flutterProjectRootOverride;
-
   /// Default URL for the open self-hosted Shorebird server.
   static const defaultHostedUrl = 'http://localhost:8080';
 
@@ -66,9 +141,19 @@ class ShorebirdEnv {
   /// Default JWT issuer used by the open self-hosted server.
   static const defaultJwtIssuer = 'shorebird-auth';
 
-  /// The application config directory for the Shorebird CLI.
+  final String? _flutterRevisionOverride;
+  final String? _flutterProjectRootOverride;
+
+  /// The application config directory for the Shorebird CLI, found from the
+  /// scoped [platform]'s environment (`HOME`, `XDG_CONFIG_HOME` or `APPDATA`)
+  /// so that tests can point it at a temporary directory.
   Directory get configDirectory {
-    return Directory(applicationConfigHome(executableName));
+    return Directory(
+      BaseDirectories(
+        executableName,
+        environment: platform.environment,
+      ).configHome,
+    );
   }
 
   /// The directory where shorebird logs are stored.
@@ -291,26 +376,123 @@ class ShorebirdEnv {
     return module?['androidPackage'] as String?;
   }
 
-  /// The base URL for the Shorebird auth service. Can be overridden with the
-  /// `AUTH_SERVICE_URL` environment variable. Defaults to the open self-hosted
-  /// server auth endpoint.
+  /// The base URL for the Shorebird auth service: the
+  /// `AUTH_SERVICE_URL` environment variable when it is set, otherwise the
+  /// auth service of the [hostedEnvironment] the CLI talks to (so `--dev`,
+  /// or `SHOREBIRD_HOSTED_URL` naming the dev server, selects
+  /// [devAuthServiceUrl]), otherwise [defaultAuthServiceUrl].
   Uri get authServiceUri => Uri.parse(
-    platform.environment['AUTH_SERVICE_URL'] ?? defaultAuthServiceUrl,
+    _environmentOverride('AUTH_SERVICE_URL') ??
+        hostedEnvironment?.authServiceUrl ??
+        defaultAuthServiceUrl,
   );
 
-  /// The expected JWT issuer for Shorebird-issued tokens. Can be overridden
-  /// with the `SHOREBIRD_JWT_ISSUER` environment variable. Defaults to the open
-  /// self-hosted server issuer.
-  String get jwtIssuer =>
-      platform.environment['SHOREBIRD_JWT_ISSUER'] ?? defaultJwtIssuer;
+  /// Whether login uses the open server's legacy `continue` callback.
+  ///
+  /// Servers mounted at `/auth` use that flow by default. Set
+  /// `SHOREBIRD_AUTH_FLOW=oauth` for a standard OAuth server, or `legacy`
+  /// for an open server mounted elsewhere.
+  bool get useLegacyAuthFlow => switch (_environmentOverride(
+    'SHOREBIRD_AUTH_FLOW',
+  )?.toLowerCase()) {
+    'legacy' => true,
+    'oauth' => false,
+    _ => authServiceUri.path.replaceFirst(RegExp(r'/+$'), '').endsWith('/auth'),
+  };
 
-  /// The base URL for the Shorebird code push server.
+  /// The Shorebird-hosted environment whose code push server [hostedUri]
+  /// names, matched by host: [productionEnvironment] when [hostedUri] is
+  /// null, and null for a server Shorebird does not host, such as a local
+  /// one.
+  ShorebirdEnvironment? get hostedEnvironment {
+    final hosted = hostedUri;
+    if (hosted == null) return productionEnvironment;
+    return shorebirdEnvironments
+        .where((env) => Uri.parse(env.hostedUrl).origin == hosted.origin)
+        .firstOrNull;
+  }
+
+  /// Why the code push server may refuse the auth service's tokens, with
+  /// what to set, or null when the two belong together (or the CLI cannot
+  /// tell): `AUTH_SERVICE_URL` names a different auth service from the one
+  /// a Shorebird-hosted server accepts, or the server is not one Shorebird
+  /// hosts and `AUTH_SERVICE_URL` is unset, so the CLI fell back to
+  /// [defaultAuthServiceUrl].
+  String? get authServiceMismatch {
+    final authOverride = _environmentOverride('AUTH_SERVICE_URL');
+    final environment = hostedEnvironment;
+    final serverHost =
+        hostedUri?.host ?? Uri.parse(productionEnvironment.hostedUrl).host;
+    if (environment == null) {
+      if (authOverride != null) return null;
+      return '$serverHost is not a Shorebird-hosted server, so the CLI '
+          'signed in with $defaultAuthServiceUrl. If $serverHost uses '
+          'another auth service, set AUTH_SERVICE_URL to it, then run '
+          'shorebird login.';
+    }
+    if (authOverride == null) return null;
+    final expected = Uri.parse(environment.authServiceUrl);
+    if (Uri.parse(authOverride).host == expected.host) return null;
+    return '$serverHost accepts tokens from ${environment.authServiceUrl}, '
+        'but AUTH_SERVICE_URL is $authOverride. Unset AUTH_SERVICE_URL (or '
+        'set it to ${environment.authServiceUrl}), then run shorebird login.';
+  }
+
+  /// The base URL Flutter downloads its artifacts from, passed to Flutter as
+  /// `FLUTTER_STORAGE_BASE_URL`: the `SHOREBIRD_DOWNLOAD_URL`
+  /// environment variable when it is set, otherwise [defaultDownloadUrl].
+  ///
+  /// Point this at a mirror of [defaultDownloadUrl] (for example an
+  /// Artifactory remote repository) or a local server. A user's own
+  /// `FLUTTER_STORAGE_BASE_URL` is deliberately not used: it usually names a
+  /// mirror of Google's Flutter artifacts, which lacks Shorebird's engine.
+  ///
+  /// The CLI's own per-engine tools come from here too, under
+  /// `shorebird/<engine revision>/`, so a mirror of this one host covers
+  /// every artifact the CLI downloads.
+  String get downloadUrl {
+    final override = _environmentOverride('SHOREBIRD_DOWNLOAD_URL');
+    if (override == null) return defaultDownloadUrl;
+    // Flutter appends paths that begin with '/'.
+    return override.endsWith('/')
+        ? override.substring(0, override.length - 1)
+        : override;
+  }
+
+  /// The git URL of the Shorebird Flutter fork: the
+  /// `SHOREBIRD_FLUTTER_GIT_URL` environment variable when it is set,
+  /// otherwise [defaultFlutterGitUrl].
+  String get flutterGitUrl =>
+      _environmentOverride('SHOREBIRD_FLUTTER_GIT_URL') ?? defaultFlutterGitUrl;
+
+  /// The URL of the bundletool jar: the `SHOREBIRD_BUNDLETOOL_URL`
+  /// environment variable when it is set, otherwise [defaultBundletoolUrl].
+  String get bundletoolUrl =>
+      _environmentOverride('SHOREBIRD_BUNDLETOOL_URL') ?? defaultBundletoolUrl;
+
+  /// The value of the environment variable [name], or null when it is unset
+  /// or empty.
+  String? _environmentOverride(String name) {
+    final value = platform.environment[name];
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  /// The base URL for the Shorebird code push server that overrides the default
+  /// used by [CodePushClient]: the `SHOREBIRD_HOSTED_URL` environment
+  /// variable when it is set, otherwise [devHostedUrl] with `--dev` (see
+  /// [isDevMode]), otherwise the `base_url` in shorebird.yaml. If none is
+  /// provided, [CodePushClient] will use its default.
   Uri? get hostedUri {
     try {
       final baseUrl =
-          platform.environment['SHOREBIRD_HOSTED_URL'] ??
-          getShorebirdYaml()?.baseUrl ??
-          userConfig.hostedUri?.toString() ??
+          _environmentOverride('SHOREBIRD_HOSTED_URL') ??
+          (isDevMode ? devHostedUrl : getShorebirdYaml()?.baseUrl) ??
+          read(
+            userConfigRef,
+            orElse: () => UserConfig(
+              file: File(p.join(configDirectory.path, 'config.json')),
+            ),
+          ).hostedUri?.toString() ??
           defaultHostedUrl;
       return _parseHostedUri(baseUrl);
     } on Exception {
@@ -330,12 +512,18 @@ class ShorebirdEnv {
     return Uri.tryParse(value.trim());
   }
 
-  /// Whether the CLI can accept user input via stdin.
+  /// Whether the CLI can prompt the user (`confirm`, `chooseOne`, `prompt`).
   ///
-  /// Returns `false` when stdin is not a terminal, when running on CI, or
-  /// when the user has opted into non-interactive output via `--json`.
+  /// Returns `false` when stdin is not a terminal, when stdout cannot render
+  /// a prompt, when running on CI, or when the user has opted into
+  /// non-interactive output via `--json`.
+  ///
+  /// Prompts need `stdout.hasTerminal` specifically: mason_logger's prompts
+  /// throw `NoTerminalAttachedError` without it. That is stricter than
+  /// `isInteractive`, which also accepts stdout redirected to `/dev/null` and
+  /// PTYs with no window size, where spinners still work but prompts do not.
   bool get canAcceptUserInput =>
-      stdin.hasTerminal && !isRunningOnCI && !isJsonMode;
+      stdin.hasTerminal && stdout.hasTerminal && !isRunningOnCI && !isJsonMode;
 
   /// Whether platform.environment indicates that we are running on a CI
   /// platform. This implementation is intended to behave similar to the Flutter

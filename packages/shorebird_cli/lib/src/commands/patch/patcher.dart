@@ -1,8 +1,11 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
+import 'package:pub_semver/pub_semver.dart';
+import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
@@ -57,9 +60,13 @@ More info: ${troubleshootingUrl.toLink()}.
   /// The target script to run, if any.
   final String? target;
 
-  /// The path to the obfuscation map downloaded from the release, if any.
-  /// Set by the patch command after downloading the map. Used by Apple
-  /// patchers to pass obfuscation flags to gen_snapshot and the linker.
+  /// Whether the release was built with obfuscation, so the patch must be
+  /// too. Set by the patch command.
+  bool obfuscate = false;
+
+  /// The path to the release's obfuscation map, if the patch should reuse
+  /// the release's obfuscated names. Set by the patch command. Only set when
+  /// [obfuscate] is true and the release's Flutter supports loading the map.
   String? obfuscationMapPath;
 
   /// Extra build arguments injected by the patch command. These are included
@@ -68,12 +75,14 @@ More info: ${troubleshootingUrl.toLink()}.
   List<String> extraBuildArgs = const [];
 
   /// Additional gen_snapshot arguments needed to match the release's
-  /// obfuscation flags. Used by Apple patchers for `buildElfAotSnapshot`
+  /// obfuscation flags. Used by Apple patchers for
+  /// `ArtifactBuilder.buildElfAotSnapshot`
   /// and linker calls.
   List<String> get obfuscationGenSnapshotArgs => [
-    if (obfuscationMapPath != null) ...[
+    if (obfuscate) ...[
       '--obfuscate',
-      '--load-obfuscation-map=$obfuscationMapPath',
+      if (obfuscationMapPath != null)
+        '--load-obfuscation-map=$obfuscationMapPath',
       // --dwarf-stack-traces must match the release build so the patch
       // produces the same stack trace format for correct symbolication.
       // --split-debug-info already implies --dwarf-stack-traces, so we only
@@ -84,6 +93,10 @@ More info: ${troubleshootingUrl.toLink()}.
       '--strip',
     ],
   ];
+
+  /// The minimum Flutter version a release must have been built with to be
+  /// patched with this patcher.
+  Version? get minimumFlutterVersion => null;
 
   /// The type of artifact we are creating a release for.
   ReleaseType get releaseType;
@@ -104,6 +117,15 @@ More info: ${troubleshootingUrl.toLink()}.
   /// Asserts that the combination arguments passed to the command are valid.
   Future<void> assertArgsAreValid() async {}
 
+  /// Whether `--release-version` must be passed when the version can't be
+  /// prompted for.
+  ///
+  /// True for release types whose version can't be read back out of a built
+  /// artifact ([extractReleaseVersionFromArtifact] is unimplemented). When
+  /// running interactively the user picks the release instead; otherwise the
+  /// patch command rejects a missing `--release-version` before building.
+  bool get requiresReleaseVersionArg => false;
+
   /// Compares the release and patch artifacts to determine if the patch can be
   /// cleanly applied to the release.
   Future<DiffStatus> assertUnpatchableDiffs({
@@ -111,6 +133,15 @@ More info: ${troubleshootingUrl.toLink()}.
     required File releaseArchive,
     required File patchArchive,
   });
+
+  /// Called by the patch command once it knows which [release] it is
+  /// patching, before it builds the patch for that release. (When the
+  /// release version must be read from a build, that first build runs before
+  /// this.)
+  Future<void> prepareForRelease({
+    required String appId,
+    required Release release,
+  }) async {}
 
   /// Builds the patch artifacts for the given platform. Returns the "primary"
   /// artifact for the platform (e.g. the AAB for Android, the IPA for iOS).
@@ -136,14 +167,14 @@ More info: ${troubleshootingUrl.toLink()}.
   }
 
   /// Uploads the patch artifacts to the CodePush server.
-  Future<void> uploadPatchArtifacts({
+  Future<CreatePatchResponse> uploadPatchArtifacts({
     required String appId,
     required int releaseId,
     required Map<String, dynamic> metadata,
     required Map<Arch, PatchArtifactBundle> artifacts,
     required DeploymentTrack track,
-  }) async {
-    await codePushClientWrapper.publishPatch(
+  }) {
+    return codePushClientWrapper.publishPatch(
       appId: appId,
       releaseId: releaseId,
       metadata: metadata,
@@ -158,6 +189,9 @@ More info: ${troubleshootingUrl.toLink()}.
 
   /// Whether to allow changes in native code (--allow-native-diffs).
   bool get allowNativeDiffs => argResults['allow-native-diffs'] == true;
+
+  /// Whether to print every differing instruction (--show-dex-diff).
+  bool get showDexDiff => argResults['show-dex-diff'] == true;
 
   /// Returns a function that signs data, or null if no signing is configured.
   Future<String> Function(String)? _resolveSigner() {
@@ -190,6 +224,25 @@ More info: ${troubleshootingUrl.toLink()}.
     return null;
   }
 
+  /// The managed public key (PEM) the release being patched embeds, which
+  /// the patch builds against. Null unless the release is managed-signed.
+  String? releaseManagedPublicKeyPem;
+
+  /// Gets the base64-encoded public key the patch build embeds.
+  ///
+  /// A patch builds against the key its release embeds, so its build matches
+  /// the release's. For a managed release that is the release's managed key;
+  /// otherwise the key from --public-key-path or --public-key-cmd, the same
+  /// way releases do.
+  ///
+  /// Returns null if no public key is configured.
+  Future<String?> getEncodedPublicKey() async {
+    if (releaseManagedPublicKeyPem case final pem?) {
+      return codeSigner.base64PublicKeyFromPem(pem);
+    }
+    return argResults.getEncodedPublicKey();
+  }
+
   /// Returns the public key PEM from the configured source, or null.
   Future<String?> _resolvePublicKeyPem() async {
     try {
@@ -201,10 +254,10 @@ More info: ${troubleshootingUrl.toLink()}.
       );
       throw ProcessExit(ExitCode.software.code);
     } on FormatException catch (e) {
-      logger.err(
-        '--${CommonArguments.publicKeyCmd.name} produced invalid output: '
-        '${e.message}',
-      );
+      final source = argResults.wasParsed(CommonArguments.publicKeyArg.name)
+          ? '--${CommonArguments.publicKeyArg.name} file'
+          : '--${CommonArguments.publicKeyCmd.name} output';
+      logger.err('The $source ${e.message}');
       throw ProcessExit(ExitCode.software.code);
     }
   }
@@ -243,10 +296,62 @@ More info: ${troubleshootingUrl.toLink()}.
     return signature;
   }
 
+  /// Diffs [patchArtifactPath] against [releaseArtifactPath] and describes
+  /// the result as the [PatchArtifactBundle] for [arch].
+  ///
+  /// The hash (and its signature) is of the full patch artifact, not of the
+  /// diff, since that is what the device has after applying the patch.
+  ///
+  /// If creating the diff fails, [progress] is failed with the error and the
+  /// command exits with [ExitCode.software].
+  Future<PatchArtifactBundle> createDiffBundle({
+    required Arch arch,
+    required String releaseArtifactPath,
+    required String patchArtifactPath,
+    required Progress progress,
+    String? podfileLockHash,
+  }) async {
+    final hash = sha256
+        .convert(await File(patchArtifactPath).readAsBytes())
+        .toString();
+    final hashSignature = await signHash(hash);
+
+    final String diffPath;
+    try {
+      diffPath = await artifactManager.createDiff(
+        releaseArtifactPath: releaseArtifactPath,
+        patchArtifactPath: patchArtifactPath,
+      );
+    } on Exception catch (error) {
+      progress.fail('$error');
+      throw ProcessExit(ExitCode.software.code);
+    }
+
+    return PatchArtifactBundle(
+      arch: arch.arch,
+      path: diffPath,
+      hash: hash,
+      size: await File(diffPath).length(),
+      hashSignature: hashSignature,
+      podfileLockHash: podfileLockHash,
+    );
+  }
+
   /// The link percentage for the generated patch artifact if applicable.
   /// Returns `null` if the platform does not use a linker or if the linking
   /// step has not yet been run.
   double? get linkPercentage => null;
+
+  /// The Dynamic Dispatch table cascade byte threshold to pass to the linker,
+  /// from `--dd-max-bytes`.
+  ///
+  /// Unlike `Releaser.ddMaxBytes`, `0` is passed through rather than mapped
+  /// to null: the linker reads `0` as "disable DD", while null leaves the
+  /// linker on its own default.
+  int? get ddMaxBytes {
+    final value = argResults[CommonArguments.ddMaxBytesArg.name] as String?;
+    return value == null ? null : int.tryParse(value);
+  }
 
   /// The value of `--split-debug-info-path` if specified.
   String? get splitDebugInfoPath {

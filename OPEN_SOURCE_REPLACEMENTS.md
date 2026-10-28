@@ -109,3 +109,19 @@ The open updater, local server, CLI, and patch tools must enforce:
 Open replacement work should preserve Shorebird-compatible protocol shapes where
 the CLI/updater expect them, while keeping service origins, SDK builds, and patch
 tools controlled by this workspace.
+
+## CLI authentication compatibility
+
+The open server's `/auth/login` requires a `continue` callback. The CLI retains
+that login flow for auth services mounted at `/auth`, then uses the current
+OAuth token storage and refresh implementation with `/auth/token`. Existing
+`credentials.json` logins migrate to `credentials-v2.json`. Set
+`SHOREBIRD_AUTH_FLOW=oauth` to select the standard OAuth authorization flow, or
+`SHOREBIRD_AUTH_FLOW=legacy` for an open server mounted at another path. The open
+server does not implement device authorization; follow the URL printed by
+`shorebird login` instead of using `--device`.
+
+The open macOS updater retains the whole `App.framework/App` patch diff base.
+The CLI mirrors that contract even when an `analyze_snapshot` executable is
+present; it never requires the private `aot_tools dump_blobs` implementation.
+The official snapshot-region base contract is not enabled in this open build.

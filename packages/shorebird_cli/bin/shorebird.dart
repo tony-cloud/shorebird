@@ -9,6 +9,8 @@ import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
 import 'package:shorebird_cli/src/artifact_builder/shorebird_tracer.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
+import 'package:shorebird_cli/src/broken_pipe.dart';
+import 'package:shorebird_cli/src/browser.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/checksum_checker.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
@@ -34,6 +36,11 @@ import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/shorebird_version.dart';
 
 Future<void> main(List<String> args) async {
+  // A reader that exits early (`shorebird api /apps | head -1`) makes later
+  // writes fail with a broken pipe. Exit quietly, as git and gh do, instead
+  // of crashing with a stack trace.
+  exitOnBrokenPipe(stdout);
+  exitOnBrokenPipe(stderr);
   final commandStartedAt = DateTime.now();
   final loggingStdout = runScoped(
     () => LoggingStdout(baseStdOut: stdout, logFile: currentRunLogFile),
@@ -67,6 +74,7 @@ Command: shorebird ${args.join(' ')}
             () => BuildTraceSession(commandStartedAt: commandStartedAt),
           ),
           authRef,
+          browserRef,
           bundletoolRef,
           cacheRef,
           checksumCheckerRef,
@@ -81,6 +89,7 @@ Command: shorebird ${args.join(' ')}
           gradlewRef,
           httpClientRef,
           idevicesyslogRef,
+          nonRetryingHttpClientRef,
           iosDeployRef,
           javaRef,
           linuxRef,
@@ -94,12 +103,12 @@ Command: shorebird ${args.join(' ')}
           powershellRef,
           processRef,
           pubspecEditorRef,
+          retryFailedRequestsRef,
           shorebirdAndroidArtifactsRef,
           shorebirdArtifactsRef,
           shorebirdEnvRef,
           shorebirdFlutterRef,
           shorebirdTracerRef,
-          shorebirdToolsRef,
           shorebirdValidatorRef,
           shorebirdVersionRef,
           windowsRef,

@@ -30,34 +30,66 @@ class NetworkCheckerException implements Exception {
   final String message;
 }
 
+/// {@template reachability_result}
+/// Whether a URL responded to an HTTP GET request.
+/// {@endtemplate}
+class ReachabilityResult {
+  /// {@macro reachability_result}
+  const ReachabilityResult({required this.url, this.error});
+
+  /// The URL that was checked.
+  final Uri url;
+
+  /// Why [url] could not be reached, or null if it responded.
+  final Object? error;
+
+  /// Whether [url] responded. Any HTTP response counts, whatever its status:
+  /// several of these hosts answer a bare GET with 404, and the check is only
+  /// whether the network lets us talk to them.
+  bool get reachable => error == null;
+
+  /// The JSON representation of this result.
+  Map<String, Object> toJson() => {'url': '$url', 'reachable': reachable};
+}
+
 /// {@template network_checker}
 /// Checks reachability of various Shorebird-related endpoints and logs the
 /// results.
 /// {@endtemplate}
 class NetworkChecker {
-  /// The URLs to check for network reachability.
-  static List<Uri> get urlsToCheck {
-    final hostedUri =
-        shorebirdEnv.hostedUri ?? Uri.parse(ShorebirdEnv.defaultHostedUrl);
-    final urls = [hostedUri, shorebirdEnv.authServiceUri];
-    final seen = <String>{};
-    return [
-      for (final url in urls)
-        if (seen.add(url.toString())) url,
-    ];
+  /// The configured open server and auth endpoints to probe.
+  List<Uri> get urlsToCheck => {
+    shorebirdEnv.hostedUri ?? Uri.parse(ShorebirdEnv.defaultHostedUrl),
+    shorebirdEnv.authServiceUri,
+  }.toList();
+
+  /// Checks whether [url] responds to an HTTP GET request.
+  Future<ReachabilityResult> checkUrl(Uri url) async {
+    try {
+      await httpClient.get(url);
+      return ReachabilityResult(url: url);
+    } on Object catch (e) {
+      // A mistyped override, such as a URL with no scheme, makes the client
+      // throw an [ArgumentError]: report it as unreachable, not a crash.
+      return ReachabilityResult(url: url, error: e);
+    }
   }
 
-  /// Verify that each of [urlsToCheck] responds to an HTTP GET request.
+  /// Checks each of [urlsToCheck] and returns the results, without logging.
+  Future<List<ReachabilityResult>> reachability() =>
+      Future.wait(urlsToCheck.map(checkUrl));
+
+  /// Verify that each of [urlsToCheck] responds to an HTTP GET request,
+  /// logging each result as it completes.
   Future<void> checkReachability() async {
     for (final url in urlsToCheck) {
       final progress = logger.progress('Checking reachability of $url');
-
-      try {
-        await httpClient.get(url);
+      final result = await checkUrl(url);
+      if (result.reachable) {
         progress.complete('$url ${lightGreen.wrap('OK')}');
-      } on Exception catch (e) {
+      } else {
         progress.fail('$url unreachable');
-        logger.detail('Failed to reach $url: $e');
+        logger.detail('Failed to reach $url: ${result.error}');
       }
     }
   }

@@ -1,4 +1,3 @@
-// cspell:words dexdump
 import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
@@ -11,13 +10,25 @@ import 'package:shorebird_cli/src/shorebird_env.dart';
 
 /// Hint shown when a user can bypass a native-diff warning interactively.
 const String allowNativeDiffsHint =
-    'Warning: Native changes in a patch are likely to crash your app. '
-    'Pass --allow-native-diffs to force this patch.';
+    'Warning: Patches do not include native code, and a mismatch between '
+    "your Dart code and the release's native code can crash your app. "
+    "If you don't understand these native changes, don't ship this patch. "
+    'Pass --allow-native-diffs to override this warning for this patch.';
+
+/// Advice shown after listing dependencies whose versions changed.
+const String _pinDependenciesHint =
+    'A changed dependency version is a common cause of DEX changes. '
+    'Pin dependency versions (or use Gradle dependency locking) so patch '
+    'builds resolve the same versions as the release.\n'
+    "Patches only contain Dart code, so devices keep running the release's "
+    'versions of these libraries. If these version changes explain all of '
+    "the differences above and your Dart code doesn't rely on them, it is "
+    'safe to pass --allow-native-diffs for this patch.';
 
 /// Hint shown when a user can bypass an asset-diff warning interactively.
 const String allowAssetDiffsHint =
     'Warning: Asset changes will not be included in this patch. '
-    'Pass --allow-asset-diffs to force this patch.';
+    'Pass --allow-asset-diffs to override this warning for this patch.';
 
 /// {@template diff_status}
 /// Describes the types of changes that have been detected between a patch
@@ -63,6 +74,7 @@ class PatchDiffChecker {
     required bool allowAssetChanges,
     required bool allowNativeChanges,
     bool confirmNativeChanges = true,
+    bool showDexDiff = false,
   }) async {
     final progress = logger.progress(
       'Verifying patch can be applied to release',
@@ -95,6 +107,7 @@ class PatchDiffChecker {
         );
 
       // Show detailed DEX diff information if available.
+      var dexDetailWasHidden = false;
       if (contentDiffs is AndroidFileSetDiff &&
           contentDiffs.dexDiffResults.isNotEmpty) {
         for (final dexPath
@@ -104,12 +117,35 @@ class PatchDiffChecker {
                 .where((p) => p.endsWith('.dex'))) {
           final dexResult = contentDiffs.dexDiffResults[dexPath];
           if (dexResult != null) {
-            logger.info(yellow.wrap(dexResult.describe()));
+            if (dexResult.hasHiddenCodeDiff) dexDetailWasHidden = true;
+            logger.info(
+              yellow.wrap(dexResult.describe(showFullCodeDiff: showDexDiff)),
+            );
           }
         }
+        if (!showDexDiff && dexDetailWasHidden) {
+          logger.info(
+            yellow.wrap(
+              '\nPass --show-dex-diff to see every differing instruction. '
+              'That output includes every instruction in full and any '
+              'string constants or payload data they carry.',
+            ),
+          );
+        }
+      }
+
+      // Name the dependencies whose versions moved, which usually explains a
+      // DEX change the developer didn't make.
+      if (contentDiffs is AndroidFileSetDiff &&
+          contentDiffs.dependencyVersionChanges.isNotEmpty) {
         logger.info(
           yellow.wrap(
-            '\nFor detailed DEX disassembly, run: dexdump -d <file>',
+            [
+              '\nDependency versions differ from the release:',
+              for (final change in contentDiffs.dependencyVersionChanges)
+                '  ${change.describe()}',
+              _pinDependenciesHint,
+            ].join('\n'),
           ),
         );
       }
@@ -124,6 +160,7 @@ If you don't know why you're seeing this error, visit our troubleshooting page a
 
       if (!allowNativeChanges) {
         if (!shorebirdEnv.canAcceptUserInput) {
+          logger.info(yellow.wrap(allowNativeDiffsHint));
           throw UnpatchableChangeException();
         }
 
@@ -166,6 +203,7 @@ If you don't know why you're seeing this error, visit our troubleshooting page a
 
       if (!allowAssetChanges) {
         if (!shorebirdEnv.canAcceptUserInput) {
+          logger.info(yellow.wrap(allowAssetDiffsHint));
           throw UnpatchableChangeException();
         }
 

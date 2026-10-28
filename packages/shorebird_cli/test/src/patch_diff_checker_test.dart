@@ -1,5 +1,7 @@
+// cspell:words Ljava LGreeter
 import 'dart:io';
 
+import 'package:dex/dex.dart';
 import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
@@ -13,9 +15,11 @@ import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
 import 'fakes.dart';
+import 'helpers.dart';
 import 'mocks.dart';
 
 void main() {
+  useTempWorkingDirectory();
   group(PatchDiffChecker, () {
     const assetsDiffPrettyString = 'assets diff pretty string';
     const nativeDiffPrettyString = 'native diff pretty string';
@@ -107,6 +111,219 @@ void main() {
           ).thenReturn(true);
         });
 
+        group('when the diff carries DEX results', () {
+          const dexPath = 'base/dex/classes.dex';
+
+          late AndroidFileSetDiff androidFileSetDiff;
+          late AndroidFileSetDiff androidFileSetDiffWithLiteral;
+
+          setUp(() {
+            androidFileSetDiff = const AndroidFileSetDiff(
+              addedPaths: {},
+              removedPaths: {},
+              changedPaths: {dexPath},
+              dexDiffResults: {
+                dexPath: DexDiffResult(
+                  differences: [
+                    DexDifference(
+                      kind: DexDifferenceKind.bytecodeChanged,
+                      description:
+                          'LGreeter;: bytecode changed in '
+                          'LGreeter;.matches(Ljava/lang/String;)Z',
+                      codeDiff: DexCodeDiff(
+                        oldRegion: [
+                          DexCanonicalInstruction(
+                            address: 2,
+                            tokens: '8302,M:Ljava/lang/String;.equals,32,',
+                          ),
+                        ],
+                        newRegion: [
+                          DexCanonicalInstruction(
+                            address: 2,
+                            tokens:
+                                '8302,M:Ljava/lang/String;.equalsIgnoreCase,32,',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              },
+            );
+
+            androidFileSetDiffWithLiteral = const AndroidFileSetDiff(
+              addedPaths: {},
+              removedPaths: {},
+              changedPaths: {dexPath},
+              dexDiffResults: {
+                dexPath: DexDiffResult(
+                  differences: [
+                    DexDifference(
+                      kind: DexDifferenceKind.bytecodeChanged,
+                      description:
+                          'LGreeter;: bytecode changed in '
+                          'LGreeter;.secret()Ljava/lang/String;',
+                      codeDiff: DexCodeDiff(
+                        oldRegion: [
+                          DexCanonicalInstruction(
+                            address: 0,
+                            tokens: '26,S:super-secret-token,',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              },
+            );
+
+            when(
+              () => archiveDiffer.changedFiles(any(), any()),
+            ).thenAnswer((_) async => androidFileSetDiff);
+            when(
+              () => archiveDiffer.nativeFileSetDiff(any()),
+            ).thenReturn(androidFileSetDiff);
+          });
+
+          test('names the method and the differing instructions', () async {
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+              ),
+            );
+
+            verify(
+              () => logger.info(
+                any(
+                  that: allOf(
+                    contains('LGreeter;.matches(Ljava/lang/String;)Z'),
+                    contains('equalsIgnoreCase'),
+                  ),
+                ),
+              ),
+            ).called(1);
+          });
+
+          test('does not point at the flag when nothing is hidden', () async {
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+              ),
+            );
+
+            verifyNever(
+              () => logger.info(
+                any(that: contains('Pass --show-dex-diff')),
+              ),
+            );
+          });
+
+          test('points at the flag when a literal was redacted', () async {
+            when(() => archiveDiffer.changedFiles(any(), any())).thenAnswer(
+              (_) async => androidFileSetDiffWithLiteral,
+            );
+            when(
+              () => archiveDiffer.nativeFileSetDiff(any()),
+            ).thenReturn(androidFileSetDiffWithLiteral);
+
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+              ),
+            );
+
+            verify(
+              () => logger.info(
+                any(that: contains('Pass --show-dex-diff')),
+              ),
+            ).called(1);
+          });
+
+          test('prints the literal when the flag is passed', () async {
+            when(() => archiveDiffer.changedFiles(any(), any())).thenAnswer(
+              (_) async => androidFileSetDiffWithLiteral,
+            );
+            when(
+              () => archiveDiffer.nativeFileSetDiff(any()),
+            ).thenReturn(androidFileSetDiffWithLiteral);
+
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+                showDexDiff: true,
+              ),
+            );
+
+            verify(
+              () => logger.info(any(that: contains('super-secret-token'))),
+            ).called(1);
+            verifyNever(
+              () => logger.info(any(that: contains('S:<18 chars>'))),
+            );
+          });
+
+          test('redacts a string literal on the default path', () async {
+            when(() => archiveDiffer.changedFiles(any(), any())).thenAnswer(
+              (_) async => androidFileSetDiffWithLiteral,
+            );
+            when(
+              () => archiveDiffer.nativeFileSetDiff(any()),
+            ).thenReturn(androidFileSetDiffWithLiteral);
+
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+              ),
+            );
+
+            verifyNever(
+              () => logger.info(any(that: contains('super-secret-token'))),
+            );
+            verify(
+              () => logger.info(any(that: contains('S:<18 chars>'))),
+            ).called(1);
+          });
+
+          test('does not point at the flag when it was passed', () async {
+            await runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: archiveDiffer,
+                allowAssetChanges: false,
+                allowNativeChanges: false,
+                showDexDiff: true,
+              ),
+            );
+
+            verifyNever(
+              () => logger.info(
+                any(that: contains('Pass --show-dex-diff')),
+              ),
+            );
+          });
+        });
+
         test('logs warning', () async {
           await runWithOverrides(
             () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
@@ -131,6 +348,51 @@ void main() {
               any(
                 that: contains(
                   "If you don't know why you're seeing this error",
+                ),
+              ),
+            ),
+          ).called(1);
+          verifyNever(
+            () => logger.info(
+              any(that: contains('Dependency versions differ')),
+            ),
+          );
+        });
+
+        test('names dependencies whose versions changed', () async {
+          when(() => archiveDiffer.changedFiles(any(), any())).thenAnswer(
+            (_) async => const AndroidFileSetDiff(
+              addedPaths: {},
+              removedPaths: {},
+              changedPaths: {'base/dex/classes3.dex'},
+              dependencyVersionChanges: [
+                DependencyVersionChange(
+                  name: 'io.branch.sdk.android:library',
+                  oldVersion: '5.21.2',
+                  newVersion: '5.21.3',
+                ),
+              ],
+            ),
+          );
+
+          await runWithOverrides(
+            () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+              localArchive: localArtifact,
+              releaseArchive: releaseArtifact,
+              archiveDiffer: archiveDiffer,
+              allowAssetChanges: false,
+              allowNativeChanges: true,
+            ),
+          );
+
+          verify(
+            () => logger.info(
+              any(
+                that: allOf(
+                  contains('Dependency versions differ from the release:'),
+                  contains('  io.branch.sdk.android:library 5.21.2 -> 5.21.3'),
+                  contains('Gradle dependency locking'),
+                  contains('safe to pass --allow-native-diffs for this patch.'),
                 ),
               ),
             ),
@@ -215,6 +477,9 @@ void main() {
           verifyNever(
             () => logger.confirm(any(), hint: any(named: 'hint')),
           );
+          verify(
+            () => logger.info(yellow.wrap(allowNativeDiffsHint)),
+          ).called(1);
         });
       });
 
@@ -331,6 +596,7 @@ void main() {
           verifyNever(
             () => logger.confirm(any(), hint: any(named: 'hint')),
           );
+          verify(() => logger.info(yellow.wrap(allowAssetDiffsHint))).called(1);
         });
       });
 

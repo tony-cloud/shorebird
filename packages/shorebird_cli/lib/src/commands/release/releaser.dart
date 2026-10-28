@@ -6,6 +6,9 @@ import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/code_signer.dart';
+import 'package:shorebird_cli/src/common_arguments.dart';
+import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/extensions/arg_results.dart';
 import 'package:shorebird_cli/src/flutter_version_constraints.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
@@ -13,6 +16,7 @@ import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
+import 'package:shorebird_cli/src/split_debug_info.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
@@ -42,7 +46,8 @@ abstract class Releaser {
   final String? target;
 
   /// The minimum Flutter version required to create a release of this type.
-  Version? get minimumFlutterVersion => null;
+  Version get minimumFlutterVersion =>
+      minimumReleaseFlutterVersion(releaseType);
 
   /// The type of artifact we are creating a release for.
   ReleaseType get releaseType;
@@ -60,11 +65,55 @@ abstract class Releaser {
   /// Asserts that the combination arguments passed to the command are valid.
   Future<void> assertArgsAreValid();
 
+  /// Rejects `--release-version`, which is only valid for releases whose
+  /// version cannot be inferred from the built artifact (aar, ios-framework).
+  /// Call from [assertArgsAreValid] in releasers that read the version from
+  /// the built app.
+  void assertReleaseVersionFlagNotProvided() {
+    if (argResults.wasParsed('release-version')) {
+      logger.err(
+        '''
+The "--release-version" flag is only supported for aar and ios-framework releases.
+
+To change the version of this release, change your app's version in your pubspec.yaml.''',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+  }
+
   /// Builds the release artifacts for the given platform. Returns the "primary"
   /// artifact for the platform (e.g. the AAB for Android, the IPA for iOS).
+  ///
+  /// Implementations run their Flutter build through [runReleaseBuild].
   Future<FileSystemEntity> buildReleaseArtifacts();
 
+  /// Runs a release's Flutter [build] with the arguments every release build
+  /// shares, then checks the build produced what those arguments promised.
+  ///
+  /// Before building, [clearSupplementDirectory] removes the previous build's
+  /// supplement output. [build] receives the user's forwarded arguments plus
+  /// the `--split-debug-info` default and obfuscation map options (see
+  /// [addSplitDebugInfoDefault] and [addObfuscationMapArgs]), and the encoded
+  /// public key (see [resolvePatchSigningKey]). Once it returns,
+  /// [verifyObfuscationMap] checks that an obfuscated build saved its
+  /// obfuscation map.
+  Future<T> runReleaseBuild<T>(
+    Future<T> Function(List<String> buildArgs, String? base64PublicKey) build,
+  ) async {
+    clearSupplementDirectory();
+    final base64PublicKey = await resolvePatchSigningKey();
+    final buildArgs = [...argResults.forwardedArgs];
+    addSplitDebugInfoDefault(buildArgs);
+    await addObfuscationMapArgs(buildArgs);
+    final result = await build(buildArgs, base64PublicKey);
+    verifyObfuscationMap();
+    return result;
+  }
+
   /// Uploads the release artifacts to the CodePush server.
+  ///
+  /// The supplement artifact is uploaded separately, by
+  /// [uploadSupplementArtifact].
   Future<void> uploadReleaseArtifacts({
     required Release release,
     required String appId,
@@ -96,6 +145,54 @@ abstract class Releaser {
   /// Returns null if no public key is configured.
   Future<String?> getEncodedPublicKey() => argResults.getEncodedPublicKey();
 
+  /// How this platform's build is signed for patch signing. Set by
+  /// [resolvePatchSigningKey]; null until the build runs.
+  ArtifactSigningRequest? signing;
+
+  /// Decides which public key this platform's build embeds, sets [signing]
+  /// to match, and returns the key base64-encoded, or null if the build
+  /// embeds none.
+  ///
+  /// A key passed with --public-key-path or --public-key-cmd is the
+  /// customer's, who signs every patch. Otherwise the build embeds the
+  /// managed key the server returns for the app, and Shorebird signs every
+  /// patch; a failed fetch fails the release, so it never silently goes
+  /// unsigned. With --no-patch-signing the build embeds no key.
+  Future<String?> resolvePatchSigningKey() async {
+    final customerKey = await getEncodedPublicKey();
+    if (customerKey != null) {
+      signing = const ArtifactSigningRequest(
+        mode: ReleaseSigningMode.customer,
+      );
+      return customerKey;
+    }
+    if (!argResults.patchSigningEnabled) {
+      signing = const ArtifactSigningRequest(
+        mode: ReleaseSigningMode.unsigned,
+      );
+      return null;
+    }
+    final SigningKey signingKey;
+    try {
+      signingKey = await codePushClientWrapper.getSigningKey(
+        appId: shorebirdEnv.getShorebirdYaml()!.getAppId(flavor: flavor),
+      );
+    } on ProcessExit {
+      // The fetch already said why it failed; say what the user can do.
+      logger.info(
+        'Releases embed a Shorebird-managed patch signing key by default. '
+        'To release without one (patches will be unsigned), pass '
+        '--no-${CommonArguments.patchSigningArg.name}.',
+      );
+      rethrow;
+    }
+    signing = ArtifactSigningRequest(
+      mode: ReleaseSigningMode.managed,
+      keyId: signingKey.id,
+    );
+    return codeSigner.base64PublicKeyFromPem(signingKey.publicKeyPem);
+  }
+
   /// Whether the user is building with obfuscation. Checks for `--obfuscate`
   /// both as a parsed flag and after the `--` separator, since it can be
   /// passed either to Shorebird directly or forwarded to Flutter.
@@ -118,7 +215,7 @@ abstract class Releaser {
   /// Returns null when DD should be disabled: the option is absent, or the
   /// value is `0` (the user's "disable DD" knob), or the value is malformed.
   int? get ddMaxBytes {
-    final value = argResults['dd-max-bytes'] as String?;
+    final value = argResults[CommonArguments.ddMaxBytesArg.name] as String?;
     if (value == null) return null;
     final parsed = int.tryParse(value);
     return (parsed != null && parsed > 0) ? parsed : null;
@@ -134,12 +231,13 @@ abstract class Releaser {
 
   /// Auto-adds --split-debug-info when --obfuscate is used without it.
   void addSplitDebugInfoDefault(List<String> buildArgs) {
-    if (useObfuscation &&
-        !buildArgs.any((a) => a.startsWith('--split-debug-info'))) {
-      buildArgs.add(
-        '--split-debug-info=${p.join('build', 'shorebird', 'symbols')}',
-      );
-    }
+    final splitDebugInfo = splitDebugInfoDefault(
+      obfuscate: useObfuscation,
+      hasSplitDebugInfo: buildArgs.any(
+        (a) => a.startsWith('--split-debug-info'),
+      ),
+    );
+    if (splitDebugInfo != null) buildArgs.add(splitDebugInfo);
   }
 
   /// Adds obfuscation-related gen_snapshot options to [buildArgs].
@@ -197,6 +295,19 @@ abstract class Releaser {
   /// 'android_supplement').
   String get supplementArtifactArch;
 
+  /// Deletes `build/<supplementPlatformSubdir>/shorebird/` if it exists, so
+  /// that files a previous build left there (e.g. link supplements written by
+  /// an older Flutter that did not clear the directory itself) cannot be
+  /// uploaded as part of this release.
+  void clearSupplementDirectory() {
+    final supplementDir = Directory(
+      p.join(projectRoot.path, 'build', supplementPlatformSubdir, 'shorebird'),
+    );
+    if (!supplementDir.existsSync()) return;
+    logger.detail('Deleting stale supplement directory ${supplementDir.path}');
+    supplementDir.deleteSync(recursive: true);
+  }
+
   /// Assembles the supplement directory: copies the obfuscation map (if
   /// present) into the platform supplement dir. Returns the directory, or null
   /// if empty.
@@ -235,7 +346,8 @@ abstract class Releaser {
   }
 
   /// Uploads the supplement artifact (e.g. obfuscation map) if one was
-  /// assembled. Call this at the end of [uploadReleaseArtifacts].
+  /// assembled. `shorebird release` calls this right after
+  /// [uploadReleaseArtifacts].
   ///
   // TODO(bdero): This is a separate network call from the primary artifact
   // upload, so an interruption between the two leaves the release without its
@@ -254,25 +366,8 @@ abstract class Releaser {
         platform: releaseType.releasePlatform,
         supplementDirectoryPath: supplementDir.path,
         arch: supplementArtifactArch,
+        signing: signing,
       );
-    }
-  }
-
-  /// Asserts that the current Flutter version supports obfuscation, if
-  /// obfuscation is enabled.
-  Future<void> assertObfuscationIsSupported() async {
-    if (!useObfuscation) return;
-    final flutterVersion = await shorebirdFlutter.resolveFlutterVersion(
-      shorebirdEnv.flutterRevision,
-    );
-    if (flutterVersion != null &&
-        flutterVersion < minimumObfuscationFlutterVersion) {
-      logger.err(
-        'Obfuscation on ${releaseType.releasePlatform.displayName} '
-        'requires Flutter $minimumObfuscationFlutterVersion or later '
-        '(current: $flutterVersion).',
-      );
-      throw ProcessExit(ExitCode.unavailable.code);
     }
   }
 

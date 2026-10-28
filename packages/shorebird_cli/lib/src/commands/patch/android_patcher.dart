@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
-import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/archive_analysis/android_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/commands/build_preconditions.dart';
+import 'package:shorebird_cli/src/commands/patch/android_patcher_mixin.dart';
 import 'package:shorebird_cli/src/commands/patch/patcher.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/extensions/arg_results.dart';
@@ -19,14 +19,13 @@ import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
-import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 
 /// {@template android_patcher}
 /// Functions to create an Android patch.
 /// {@endtemplate}
-class AndroidPatcher extends Patcher {
+class AndroidPatcher extends Patcher with AndroidPatcherMixin {
   /// {@macro android_patcher}
   AndroidPatcher({
     required super.argResults,
@@ -46,13 +45,10 @@ This issue was fixed in Flutter 3.24.2. Please upgrade to a newer version of Flu
 See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssueUrl), message: 'open issue tracker')}
 ''';
 
-  /// The `<arch>/libapp.so` directory resolved by [buildPatchArtifact] —
-  /// a temporary directory extracted from the built patch AAB or, when the
-  /// AAB is unreadable, AGP's stripped output. Cached so
-  /// [createPatchArtifacts] reuses it instead of decoding the AAB a second
-  /// time.
+  /// The patch AAB built by [buildPatchArtifact], which
+  /// [createPatchArtifacts] extracts each `libapp.so` from.
   /// See https://github.com/tony-cloud/shorebird/issues/3388.
-  Directory? _patchArchsBuildDir;
+  File? _patchAab;
 
   @override
   ReleaseType get releaseType => ReleaseType.android;
@@ -74,20 +70,13 @@ See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssu
     archiveDiffer: const AndroidArchiveDiffer(),
     allowAssetChanges: allowAssetDiffs,
     allowNativeChanges: allowNativeDiffs,
+    showDexDiff: showDexDiff,
   );
 
   @override
-  Future<void> assertPreconditions() async {
-    try {
-      await shorebirdValidator.validatePreconditions(
-        checkUserIsAuthenticated: true,
-        checkShorebirdInitialized: true,
-        validators: doctor.androidCommandValidators,
-      );
-    } on PreconditionFailedException catch (e) {
-      throw ProcessExit(e.exitCode.code);
-    }
-  }
+  Future<void> assertPreconditions() => assertBuildPreconditions(
+    validators: doctor.androidCommandValidators,
+  );
 
   @override
   Future<File> buildPatchArtifact({String? releaseVersion}) async {
@@ -107,30 +96,23 @@ See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssu
     final aabFile = await artifactBuilder.buildAppBundle(
       flavor: flavor,
       target: target,
+      targetPlatforms: releaseTargetPlatforms,
       args: buildArgs,
-      base64PublicKey: argResults.encodedPublicKey,
+      base64PublicKey: await getEncodedPublicKey(),
     );
 
-    final patchArchsBuildDir = _patchArchsBuildDir =
-        await ArtifactManager.androidArchsDirectoryFromAab(
-          projectRoot: projectRoot,
-          flavor: flavor,
-          aab: aabFile,
-        );
-
-    if (patchArchsBuildDir == null) {
-      logger
-        ..err('Cannot find patch build artifacts.')
-        ..info('''
-Please run `shorebird cache clean` and try again. If the issue persists, please
-file a bug report at $openShorebirdIssueUrl.
-
-Looked in:
-  - the libapp.so entries inside the built .aab
-  - build/app/intermediates/stripped_native_libs/{variant}/strip{Variant}ReleaseDebugSymbols/out/lib
-  - build/app/intermediates/stripped_native_libs/{variant}/out/lib''');
+    // When the built .aab never packaged libapp.so, fail fast with an accurate
+    // explanation rather than the generic "cannot find artifacts" message or
+    // silently diffing against a stale strip output
+    // (https://github.com/tony-cloud/shorebird/issues/3813).
+    final missingLibappMessage =
+        await ArtifactManager.describeMissingLibappInAab(aabFile);
+    if (missingLibappMessage != null) {
+      logger.err(missingLibappMessage);
       throw ProcessExit(ExitCode.software.code);
     }
+
+    _patchAab = aabFile;
     return aabFile;
   }
 
@@ -143,113 +125,39 @@ Looked in:
     Duration downloadMessageTimeout = const Duration(minutes: 1),
     String? releaseVersion,
   }) async {
-    final releaseArtifacts = await codePushClientWrapper.getReleaseArtifacts(
+    final releaseArtifactPaths = await downloadAndroidReleaseArtifacts(
       appId: appId,
       releaseId: releaseId,
-      architectures: AndroidArch.availableAndroidArchs,
-      platform: releaseType.releasePlatform,
+      downloadMessageTimeout: downloadMessageTimeout,
     );
-    final releaseArtifactPaths = <Arch, String>{};
-    final numArtifacts = releaseArtifacts.length;
 
-    // Direct users to the troubleshooting docs until we can provide a better
-    // solution.
-    // until we can provide a better solution.
-    var artifactsDownloadCompleted = false;
-    unawaited(
-      Future<void>.delayed(downloadMessageTimeout).then((_) {
-        if (artifactsDownloadCompleted) {
-          return;
+    // [buildPatchArtifact] runs before this and records the patch AAB; with
+    // no AAB (a direct call without it) this reads AGP's stripped output.
+    return ArtifactManager.withAndroidArchsDirectoryFromAab(
+      projectRoot: projectRoot,
+      flavor: flavor,
+      aab: _patchAab,
+      action: (patchArchsBuildDir) async {
+        if (patchArchsBuildDir == null) {
+          logger
+            ..err('Cannot find patch build artifacts.')
+            ..info('''
+Please run `shorebird cache clean` and try again. If the issue persists, please
+file a bug report at https://github.com/tony-cloud/shorebird/issues/new.
+
+Looked in:
+  - the libapp.so entries inside the built .aab
+  - build/app/intermediates/stripped_native_libs/{variant}/strip{Variant}ReleaseDebugSymbols/out/lib
+  - build/app/intermediates/stripped_native_libs/{variant}/out/lib''');
+          throw ProcessExit(ExitCode.software.code);
         }
-        logger.info(
-          '''
-It seems like your download is taking longer than expected. If you are on Windows, this is a known issue.
-Please refer to ${link(uri: Uri.parse(troubleshootingUrl))} for potential workarounds.''',
+
+        return createAndroidPatchArtifactBundles(
+          releaseArtifactPaths: releaseArtifactPaths,
+          patchArchsDir: patchArchsBuildDir,
         );
-      }),
+      },
     );
-
-    for (final (i, releaseArtifact) in releaseArtifacts.entries.indexed) {
-      try {
-        final releaseArtifactFile = await artifactManager
-            .downloadWithProgressUpdates(
-              Uri.parse(releaseArtifact.value.url),
-              message: 'Downloading release artifact ${i + 1}/$numArtifacts',
-            );
-        releaseArtifactPaths[releaseArtifact.key] = releaseArtifactFile.path;
-      } on Exception {
-        throw ProcessExit(ExitCode.software.code);
-      }
-    }
-
-    artifactsDownloadCompleted = true;
-
-    // [buildPatchArtifact] runs before this and caches the resolved
-    // directory; the fallback only covers a direct call without it, in which
-    // case no patch AAB exists to extract from.
-    final patchArchsBuildDir =
-        _patchArchsBuildDir ??
-        ArtifactManager.androidArchsDirectory(
-          projectRoot: projectRoot,
-          flavor: flavor,
-        );
-    if (patchArchsBuildDir == null) {
-      logger.err('Could not find patch artifacts');
-      throw ProcessExit(ExitCode.software.code);
-    }
-
-    final patchArtifactBundles = <Arch, PatchArtifactBundle>{};
-    final createDiffProgress = logger.progress('Creating patch artifacts');
-    for (final releaseArtifactPath in releaseArtifactPaths.entries) {
-      final arch = releaseArtifactPath.key;
-      final patchArtifactPath = p.join(
-        patchArchsBuildDir.path,
-        arch.androidBuildPath,
-        'libapp.so',
-      );
-      logger.detail('Creating artifact for $patchArtifactPath');
-      final patchArtifact = File(patchArtifactPath);
-      // Skip archs the build didn't produce (ndk.abiFilters / splits.abi /
-      // jniLibs.excludes). Without this, a release built for a subset of
-      // archs can't be patched without hitting PathNotFoundException
-      // (https://github.com/tony-cloud/shorebird/issues/3388).
-      if (!patchArtifact.existsSync()) {
-        logger.detail(
-          'Skipping ${arch.arch}: no libapp.so at $patchArtifactPath. '
-          'This is expected if the project filters this ABI via '
-          'ndk.abiFilters, splits.abi, or jniLibs.excludes.',
-        );
-        continue;
-      }
-      final hash = sha256.convert(await patchArtifact.readAsBytes()).toString();
-      final hashSignature = await signHash(hash);
-
-      try {
-        final diffPath = await artifactManager.createDiff(
-          releaseArtifactPath: releaseArtifactPath.value,
-          patchArtifactPath: patchArtifactPath,
-        );
-        patchArtifactBundles[releaseArtifactPath.key] = PatchArtifactBundle(
-          arch: arch.arch,
-          path: diffPath,
-          hash: hash,
-          size: await File(diffPath).length(),
-          hashSignature: hashSignature,
-        );
-      } on Exception catch (error) {
-        createDiffProgress.fail('$error');
-        throw ProcessExit(ExitCode.software.code);
-      }
-    }
-    if (patchArtifactBundles.isEmpty) {
-      createDiffProgress.fail(
-        'No patch artifacts produced: no libapp.so found for any architecture '
-        'under ${patchArchsBuildDir.path}.',
-      );
-      throw ProcessExit(ExitCode.software.code);
-    }
-    createDiffProgress.complete();
-    return patchArtifactBundles;
   }
 
   @override
