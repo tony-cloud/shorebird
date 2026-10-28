@@ -108,6 +108,9 @@ More info: ${troubleshootingUrl.toLink()}.
   /// The identifier used for any supplementary release artifacts.
   String? get supplementaryReleaseArtifactArch => null;
 
+  /// Extracted baseline supplement selected for this exact release.
+  Directory? releaseSupplementDirectory;
+
   /// The root directory of the current project.
   Directory get projectRoot => shorebirdEnv.getShorebirdProjectRoot()!;
 

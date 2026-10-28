@@ -2395,6 +2395,15 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
       group('buildDartBytecodeSnapshot', () {
         setUp(() {
           when(
+            () => shorebirdProcess.stream(
+              'flutter',
+              ['pub', 'get'],
+              workingDirectory: any(named: 'workingDirectory'),
+              runInShell: false,
+            ),
+          ).thenAnswer((_) async => ExitCode.success.code);
+
+          when(
             () => shorebirdArtifacts.getArtifactPath(
               artifact: ShorebirdArtifact.dartAotRuntime,
             ),
@@ -2443,6 +2452,33 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
             ),
           ).called(1);
         });
+
+        test(
+          'restores pinned packages before compiling a baseline delta',
+          () async {
+            await runWithOverrides(
+              () => builder.buildDartBytecodeSnapshot(
+                inputFilePath: '/app/lib/main.dart',
+                outFilePath: '/out/delta.bytecode',
+                packageConfigPath: '/app/.dart_tool/package_config.json',
+                patchBasePath: '/release/baseline.bytecode',
+              ),
+            );
+            verifyInOrder([
+              () => shorebirdProcess.stream(
+                'flutter',
+                ['pub', 'get'],
+                workingDirectory: '/app',
+                runInShell: false,
+              ),
+              () => shorebirdProcess.stream(
+                'dartaotruntime',
+                any(that: contains('--patch-base=/release/baseline.bytecode')),
+                runInShell: false,
+              ),
+            ]);
+          },
+        );
 
         test('omits package config when none is provided', () async {
           await runWithOverrides(

@@ -116,6 +116,7 @@ void main() {
       argParser = MockArgParser();
       argResults = MockArgResults();
       artifactBuilder = MockArtifactBuilder();
+      when(() => artifactBuilder.iosInterpreterBuildEnvironment).thenReturn({});
       artifactManager = MockArtifactManager();
       codePushClientWrapper = MockCodePushClientWrapper();
       codeSigner = MockCodeSigner();
@@ -179,6 +180,18 @@ void main() {
       test('is "xcarchive"', () {
         expect(patcher.primaryReleaseArtifactArch, 'xcarchive');
       });
+    });
+
+    test('interpreter mode selects the release before compiling', () {
+      platform = platform.copyWith(environment: {});
+      expect(runWithOverrides(() => patcher.requiresReleaseVersionArg), isTrue);
+    });
+
+    test('native mode retains speculative release inference', () {
+      expect(
+        runWithOverrides(() => patcher.requiresReleaseVersionArg),
+        isFalse,
+      );
     });
 
     group('supplementaryReleaseArtifactArch', () {
@@ -857,6 +870,26 @@ This may indicate that the patch contains native changes, which cannot be applie
         group('when using the interpreter patch route', () {
           setUp(() {
             platform = platform.copyWith(environment: {});
+            patcher.releaseSupplementDirectory = Directory(
+              p.join(projectRoot.path, 'baseline'),
+            )..createSync();
+            File(
+              p.join(
+                patcher.releaseSupplementDirectory!.path,
+                'baseline.bytecode',
+              ),
+            ).writeAsStringSync('baseline');
+            File(
+              p.join(patcher.releaseSupplementDirectory!.path, 'baseline.json'),
+            ).writeAsStringSync(
+              jsonEncode({
+                'sdk_hash': 'sdk',
+                'key_id': 'key',
+                'base_flavor_id': 'free',
+                'base_license_type': 'free',
+              }),
+            );
+
             File(p.join(projectRoot.path, 'lib', 'main.dart'))
               ..createSync(recursive: true)
               ..writeAsStringSync('void main() {}');
@@ -895,6 +928,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                 packageConfigPath: any(named: 'packageConfigPath'),
                 dartDefines: any(named: 'dartDefines'),
                 experiments: any(named: 'experiments'),
+                patchBasePath: any(named: 'patchBasePath'),
               ),
             ).thenAnswer(
               (invocation) async {
@@ -927,6 +961,11 @@ This may indicate that the patch contains native changes, which cannot be applie
                   projectRoot.path,
                   'build',
                   'ios_interpreter_patch.bytecode',
+                ),
+                patchBasePath: p.join(
+                  projectRoot.path,
+                  'baseline',
+                  'baseline.bytecode',
                 ),
                 packageConfigPath: p.join(
                   projectRoot.path,
@@ -970,6 +1009,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                           packageConfigPath: any(named: 'packageConfigPath'),
                           dartDefines: captureAny(named: 'dartDefines'),
                           experiments: ['records'],
+                          patchBasePath: any(named: 'patchBasePath'),
                         ),
                       ).captured.single
                       as List<String>;
@@ -1009,6 +1049,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                         packageConfigPath: any(named: 'packageConfigPath'),
                         dartDefines: captureAny(named: 'dartDefines'),
                         experiments: any(named: 'experiments'),
+                        patchBasePath: any(named: 'patchBasePath'),
                       ),
                     ).captured.single
                     as List<String>;
@@ -1056,6 +1097,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                           packageConfigPath: any(named: 'packageConfigPath'),
                           dartDefines: captureAny(named: 'dartDefines'),
                           experiments: any(named: 'experiments'),
+                          patchBasePath: any(named: 'patchBasePath'),
                         ),
                       ).captured.single
                       as List<String>;
@@ -1098,6 +1140,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                 packageConfigPath: any(named: 'packageConfigPath'),
                 dartDefines: any(named: 'dartDefines'),
                 experiments: any(named: 'experiments'),
+                patchBasePath: any(named: 'patchBasePath'),
               ),
             );
           });
@@ -1360,6 +1403,27 @@ This may indicate that the patch contains native changes, which cannot be applie
               ..writeAsBytesSync([0x28, 0xb5, 0x2f, 0xfd]);
             return transport.path;
           });
+          patcher.releaseSupplementDirectory = supplementDirectory;
+          File(
+            p.join(supplementDirectory.path, 'baseline.bytecode'),
+          ).writeAsStringSync('baseline');
+          File(
+            p.join(supplementDirectory.path, 'baseline.json'),
+          ).writeAsStringSync(
+            jsonEncode({
+              'version': 1,
+              'app_id': appId,
+              'release_id': releaseId,
+              'app_build_id': '1.2.3+4',
+              'sdk_hash': 'sdk-hash',
+              'key_id': 'test-key',
+              'base_flavor_id': 'free',
+              'base_license_type': 'free',
+              'base_snapshot_hash': open_patch.sha256Hex(
+                utf8.encode('baseline'),
+              ),
+            }),
+          );
           File(p.join(projectRoot.path, 'build', 'patch.interp'))
             ..createSync(recursive: true)
             ..writeAsBytesSync(patchBytes);
@@ -1374,7 +1438,6 @@ This may indicate that the patch contains native changes, which cannot be applie
               aotPatchFlavorId: 'pro',
               aotPatchLicenseType: 'pro',
               aotPatchSdkHash: 'sdk-hash',
-              aotPatchBaseSnapshotHash: 'base-snapshot-hash',
               aotPatchOfflineExpiresAt: '2030-01-01T00:00:00Z',
             ),
           );
@@ -1443,6 +1506,36 @@ This may indicate that the patch contains native changes, which cannot be applie
             ),
           );
         });
+
+        for (final field in [
+          'app_id',
+          'release_id',
+          'app_build_id',
+          'base_snapshot_hash',
+        ]) {
+          test(
+            'rejects a baseline supplement with mismatched $field',
+            () async {
+              final manifest = File(
+                p.join(supplementDirectory.path, 'baseline.json'),
+              );
+              final metadata = jsonDecode(manifest.readAsStringSync()) as Map;
+              metadata[field] = 'wrong-baseline';
+              manifest.writeAsStringSync(jsonEncode(metadata));
+              await expectLater(
+                () => runWithOverrides(
+                  () => patcher.createPatchArtifacts(
+                    appId: appId,
+                    releaseId: releaseId,
+                    releaseArtifact: releaseArtifactFile,
+                    releaseVersion: '1.2.3+4',
+                  ),
+                ),
+                exitsWithCode(ExitCode.usage),
+              );
+            },
+          );
+        }
 
         test(
           'signs the exact UTF-8 envelope hash, not the transport hash',
@@ -1522,7 +1615,6 @@ This may indicate that the patch contains native changes, which cannot be applie
                 aotPatchFlavorId: 'pro',
                 aotPatchLicenseType: 'pro',
                 aotPatchSdkHash: 'sdk-hash',
-                aotPatchBaseSnapshotHash: 'base-snapshot-hash',
               ),
             );
 

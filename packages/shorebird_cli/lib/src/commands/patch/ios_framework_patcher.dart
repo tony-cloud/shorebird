@@ -81,10 +81,12 @@ class IosFrameworkPatcher extends Patcher
       // forwarded with the rest.
       if (!argResults.appleCodesign) '--no-codesign',
     ];
-    final buildResult = await artifactBuilder.buildIosFramework(
-      target: target,
-      args: buildArgs,
-      base64PublicKey: await getEncodedPublicKey(),
+    final buildResult = await withInterpreterBaselineBuild(
+      () async => artifactBuilder.buildIosFramework(
+        target: target,
+        args: buildArgs,
+        base64PublicKey: await getEncodedPublicKey(),
+      ),
     );
 
     final runtimeMode = iosPatchRuntimeMode;
@@ -121,10 +123,15 @@ class IosFrameworkPatcher extends Patcher
     Directory? supplementDirectory,
     String? releaseVersion,
   }) async {
+    if (supplementDirectory != null) {
+      releaseSupplementDirectory = supplementDirectory;
+    }
     if (iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter) {
       return createInterpreterPatchArtifacts(
         appId: appId,
         releaseVersion: releaseVersion,
+        releaseId: releaseId,
+        releaseArtifact: releaseArtifact,
       );
     }
     if (iosPatchRuntimeMode != open_patch.runtimeModeNativeAot ||

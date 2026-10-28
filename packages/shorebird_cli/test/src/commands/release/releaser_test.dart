@@ -1,10 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
@@ -26,11 +29,13 @@ import '../../mocks.dart';
 /// A minimal [Releaser] for testing the behavior every platform shares.
 /// Platform tests only check that each releaser wires these helpers in.
 class _TestReleaser extends Releaser {
-  _TestReleaser({required super.argResults})
-    : super(flavor: null, target: null);
+  _TestReleaser({
+    required super.argResults,
+    this.releaseType = ReleaseType.linux,
+  }) : super(flavor: null, target: null);
 
   @override
-  ReleaseType get releaseType => ReleaseType.linux;
+  final ReleaseType releaseType;
 
   @override
   String get artifactDisplayName => 'Test app';
@@ -75,6 +80,7 @@ void main() {
 
     late ArgResults argResults;
     late ArtifactManager artifactManager;
+    late ArtifactBuilder artifactBuilder;
     late CodePushClientWrapper codePushClientWrapper;
     late CodeSigner codeSigner;
     late Directory projectRoot;
@@ -88,6 +94,7 @@ void main() {
         body,
         values: {
           artifactManagerRef.overrideWith(() => artifactManager),
+          artifactBuilderRef.overrideWith(() => artifactBuilder),
           codePushClientWrapperRef.overrideWith(() => codePushClientWrapper),
           codeSignerRef.overrideWith(() => codeSigner),
           loggerRef.overrideWith(() => logger),
@@ -112,6 +119,7 @@ void main() {
     setUp(() {
       argResults = MockArgResults();
       artifactManager = MockArtifactManager();
+      artifactBuilder = MockArtifactBuilder();
       codePushClientWrapper = MockCodePushClientWrapper();
       codeSigner = MockCodeSigner();
       projectRoot = Directory.systemTemp.createTempSync();
@@ -383,6 +391,88 @@ To change the version of this release, change your app's version in your pubspec
         ).thenAnswer((_) async => true);
       });
 
+      test(
+        'seals measured baseline policy then publishes bytecode supplement',
+        () async {
+          releaser = _TestReleaser(
+            argResults: argResults,
+            releaseType: ReleaseType.ios,
+          );
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+              aotPatchBaseFlavorId: 'free',
+              aotPatchBaseLicenseType: 'free',
+              aotPatchKeyId: 'app-key-id',
+            ),
+          );
+          when(
+            () => shorebirdEnv.shorebirdEngineRevision,
+          ).thenReturn('pinned-sdk');
+          when(() => shorebirdEnv.flutterDirectory).thenReturn(projectRoot);
+          when(() => shorebirdFlutter.getConfig()).thenReturn({});
+          when(
+            () => artifactBuilder.iosInterpreterBuildEnvironment,
+          ).thenReturn({});
+          File(p.join(projectRoot.path, 'lib', 'main.dart'))
+            ..createSync(recursive: true)
+            ..writeAsStringSync('void main() {}');
+          when(
+            () => artifactBuilder.buildDartBytecodeSnapshot(
+              inputFilePath: any(named: 'inputFilePath'),
+              outFilePath: any(named: 'outFilePath'),
+              packageConfigPath: any(named: 'packageConfigPath'),
+              dartDefines: any(named: 'dartDefines'),
+              experiments: any(named: 'experiments'),
+              patchBasePath: any(named: 'patchBasePath'),
+            ),
+          ).thenAnswer(
+            (invocation) async =>
+                File(invocation.namedArguments[#outFilePath] as String)
+                  ..writeAsBytesSync([1, 2, 3]),
+          );
+          await runWithOverrides(
+            () => releaser.runReleaseBuild((_, _) async {
+              // Flutter may recreate its supplement output during the build.
+              Directory(
+                p.join(projectRoot.path, 'build', 'test', 'shorebird'),
+              ).createSync(recursive: true);
+              return 'sealed app';
+            }),
+          );
+          final supplement = Directory(
+            p.join(projectRoot.path, 'build', 'test', 'shorebird'),
+          );
+          expect(
+            File(
+              p.join(supplement.path, 'baseline.bytecode'),
+            ).readAsBytesSync(),
+            [1, 2, 3],
+          );
+          final manifest =
+              jsonDecode(
+                    File(
+                      p.join(supplement.path, 'baseline.json'),
+                    ).readAsStringSync(),
+                  )
+                  as Map;
+          final measured = sha256.convert([1, 2, 3]).toString();
+          expect(manifest['base_snapshot_hash'], measured);
+          expect(manifest['sdk_hash'], 'pinned-sdk');
+          verify(
+            () => artifactBuilder.iosInterpreterBuildEnvironment = {
+              'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
+              'SHOREBIRD_AOT_PATCH_SDK_HASH': 'pinned-sdk',
+            },
+          ).called(1);
+          verify(
+            () => artifactBuilder.iosInterpreterBuildEnvironment =
+                <String, String>{},
+          ).called(1);
+        },
+      );
+
       test('builds with the forwarded args and returns the result', () async {
         List<String>? receivedArgs;
         final result = await runWithOverrides(
@@ -633,6 +723,33 @@ To change the version of this release, change your app's version in your pubspec
           ),
         );
       });
+
+      test(
+        'binds baseline manifest to actual published release identity',
+        () async {
+          final supplement = Directory(
+            p.join(projectRoot.path, 'build', 'test', 'shorebird'),
+          )..createSync(recursive: true);
+          final manifest = File(p.join(supplement.path, 'baseline.json'))
+            ..writeAsStringSync('{"version":1}');
+          when(
+            () => artifactManager.getReleaseSupplementDirectory(
+              platformSubdir: any(named: 'platformSubdir'),
+              create: any(named: 'create'),
+            ),
+          ).thenReturn(supplement);
+          await runWithOverrides(
+            () => releaser.uploadSupplementArtifact(
+              appId: 'app',
+              releaseId: 42,
+              releaseVersion: '2.0.0+3',
+            ),
+          );
+          final policy = jsonDecode(manifest.readAsStringSync()) as Map;
+          expect(policy['release_id'], 42);
+          expect(policy['app_build_id'], '2.0.0+3');
+        },
+      );
 
       test('uploads the supplement directory when there is one', () async {
         setObfuscate(enabled: true);

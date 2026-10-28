@@ -54,6 +54,10 @@ class IosPatcher extends Patcher
   String get primaryReleaseArtifactArch => 'xcarchive';
 
   @override
+  bool get requiresReleaseVersionArg =>
+      iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter;
+
+  @override
   String? get supplementaryReleaseArtifactArch => 'ios_supplement';
 
   @override
@@ -79,12 +83,14 @@ class IosPatcher extends Patcher
 
     // If buildIpa is called with a different codesign value than the
     // release was, we will erroneously report native diffs.
-    final ipaBuildResult = await artifactBuilder.buildIpa(
-      codesign: argResults.appleCodesign,
-      flavor: flavor,
-      target: target,
-      args: buildArgs,
-      base64PublicKey: await getEncodedPublicKey(),
+    final ipaBuildResult = await withInterpreterBaselineBuild(
+      () async => artifactBuilder.buildIpa(
+        codesign: argResults.appleCodesign,
+        flavor: flavor,
+        target: target,
+        args: buildArgs,
+        base64PublicKey: await getEncodedPublicKey(),
+      ),
     );
 
     final runtimeMode = iosPatchRuntimeMode;
@@ -123,6 +129,9 @@ class IosPatcher extends Patcher
     Directory? supplementDirectory,
     String? releaseVersion,
   }) async {
+    if (supplementDirectory != null) {
+      releaseSupplementDirectory = supplementDirectory;
+    }
     // Verify that we have built a patch .xcarchive
     if (artifactManager.getXcarchiveDirectory()?.path == null) {
       _noXcarchiveFound();
@@ -133,6 +142,8 @@ class IosPatcher extends Patcher
       return createInterpreterPatchArtifacts(
         appId: appId,
         releaseVersion: releaseVersion,
+        releaseId: releaseId,
+        releaseArtifact: releaseArtifact,
       );
     }
     if (runtimeMode != open_patch.runtimeModeNativeAot) {

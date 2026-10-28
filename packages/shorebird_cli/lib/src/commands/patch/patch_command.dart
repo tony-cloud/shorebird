@@ -753,6 +753,8 @@ Building with Flutter $flutterVersionString to determine the release version...
       platform: patcher.releaseType.releasePlatform.name,
     );
 
+    patcher.releaseSupplementDirectory = supplementDirectory;
+
     // Don't built the patch artifact twice with the same Flutter revision.
     if (lastBuiltFlutterRevision != release.flutterRevision) {
       final flutterVersionString = await shorebirdFlutter

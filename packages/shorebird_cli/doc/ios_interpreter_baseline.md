@@ -18,7 +18,33 @@ unless an explicit `aot_patch_app_build_id` is provided. Target flavor/license
 restrictions are optional: omit them when an authenticated patch may change
 `free` to `pro`.
 
-## Measure the baseline bytecode
+## Automatic release and patch preparation
+
+`shorebird release ios` and `shorebird release ios-framework` compile full
+baseline bytecode with the pinned public SDK before sealing the app. The measured
+SHA-256 is injected into the compiled policy without changing source YAML.
+When no SDK id is configured, the pinned Shorebird engine revision is used.
+The bytecode and an identity manifest are uploaded only in the private
+`ios_supplement` or `ios_framework_supplement`; they are not app bundle assets.
+
+Use `shorebird patch ios --release-version=latest` (or a concrete version)
+so the baseline and pinned signing key are selected before compilation.
+For a patch, the CLI downloads that exact release supplement, verifies its
+app/release/build/SDK/flavor/license/key identity, and compiles with
+`dart2bytecode --patch-base=<baseline.bytecode>`. The compiler emits changed
+function bodies and rejects declaration/layout/initializer changes. The
+resulting delta is AES encrypted, while the native app build used for diff
+checks keeps the released baseline policy. Both native builds disable TFA for
+explicit iOS interpreter mode; switching the mode invalidates cached kernel.
+
+Interpreter releases and patches reject `--obfuscate`: native obfuscation changes
+the symbol and library names used to locate interpreted method bodies.
+
+The source YAML still requires explicit runtime mode, base flavor/license, and
+an app-owned key id. `aot_patch_sdk_hash` and `aot_patch_base_snapshot_hash` may
+be omitted. An explicit baseline hash must match the measured bytecode.
+
+## Manually measure or audit the baseline bytecode
 
 Use the **same pinned SDK, Flutter product platform, entrypoint, package lock,
 defines, flavor, experiments, and feature flags** that the release and later
@@ -87,15 +113,15 @@ For `--local-engine` builds, use that local host's `dartaotruntime` and
 engine's `flutter_patched_sdk/platform_strong.dill`, matching the CLI artifact
 selection. Do not mix the downloaded SDK with a different local engine SDK.
 
-Pin the measured result in the source `shorebird.yaml` before sealing the IPA:
+Use this source configuration; the SDK id and bytecode hash are optional measured overrides:
 
 ```yaml
 app_id: <the app id created by the server>
 aot_patch_runtime_mode: dart-bytecode-interpreter
 aot_patch_base_flavor_id: free
 aot_patch_base_license_type: free
-aot_patch_sdk_hash: <immutable compatibility id for this pinned SDK/engine>
-aot_patch_base_snapshot_hash: <the measured lowercase 64-character SHA-256>
+# aot_patch_sdk_hash: <override for the pinned engine revision id>
+# aot_patch_base_snapshot_hash: <optional measured lowercase SHA-256>
 aot_patch_key_id: <id recognized by the app-owned AES key provider>
 patch_verification: strict
 patch_response_verification: required
@@ -110,7 +136,7 @@ Run `shorebird release ios` or `shorebird release ios-framework` with managed
 signing enabled and the same build inputs. The Flutter asset compiler forces
 strict artifact and response verification for interpreter baselines. It copies
 only public policy fields, excluding the AES key and patch-only bytecode path.
-The CLI rejects incomplete baseline policy before building or publishing.
+The CLI rejects missing app-owned policy before building or publishing.
 
 To prepare a patch, compile its full bytecode with the same SDK and intended
 target defines. Supply the AES encryption key through

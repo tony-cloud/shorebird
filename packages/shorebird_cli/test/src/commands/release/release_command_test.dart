@@ -186,6 +186,7 @@ void main() {
         () => releaser.uploadSupplementArtifact(
           appId: any(named: 'appId'),
           releaseId: any(named: 'releaseId'),
+          releaseVersion: any(named: 'releaseVersion'),
         ),
       ).thenAnswer((_) async {});
       when(
@@ -379,6 +380,7 @@ void main() {
         () => releaser.uploadSupplementArtifact(
           appId: appId,
           releaseId: release.id,
+          releaseVersion: release.version,
         ),
         () => logger.success('''
 
@@ -1314,7 +1316,13 @@ Did you mean --release-version=1.0.0+1?''',
           );
         });
       }
-      for (final field in baseline.keys.where((key) => key != 'app_id')) {
+      for (final field in baseline.keys.where(
+        (key) => !{
+          'app_id',
+          'aot_patch_sdk_hash',
+          'aot_patch_base_snapshot_hash',
+        }.contains(key),
+      )) {
         test('rejects missing $field before building', () {
           final config = {...baseline}..remove(field);
           when(
@@ -1355,6 +1363,37 @@ Did you mean --release-version=1.0.0+1?''',
           ),
         );
       });
+      test('rejects obfuscation before building an interpreter release', () {
+        when(() => releaser.useObfuscation).thenReturn(true);
+        expect(
+          () => runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          ),
+          throwsA(
+            isA<UsageException>().having(
+              (e) => e.message,
+              'message',
+              contains('Remove --obfuscate'),
+            ),
+          ),
+        );
+      });
+
+      test(
+        'derives SDK and bytecode hashes when source overrides are absent',
+        () {
+          final config = {...baseline}
+            ..remove('aot_patch_sdk_hash')
+            ..remove('aot_patch_base_snapshot_hash');
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(ShorebirdYaml.fromJson(config));
+          runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          );
+        },
+      );
+
       test('leaves native customer signing available', () {
         when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
           const ShorebirdYaml(appId: appId, aotPatchRuntimeMode: 'native-aot'),

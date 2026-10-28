@@ -1,9 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
+import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
@@ -105,9 +109,107 @@ To change the version of this release, change your app's version in your pubspec
     final buildArgs = [...argResults.forwardedArgs];
     addSplitDebugInfoDefault(buildArgs);
     await addObfuscationMapArgs(buildArgs);
-    final result = await build(buildArgs, base64PublicKey);
-    verifyObfuscationMap();
-    return result;
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    final interpreter =
+        const {
+          ReleaseType.ios,
+          ReleaseType.iosFramework,
+        }.contains(releaseType) &&
+        yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter';
+    File? baseline;
+    Map<String, String>? previousEnvironment;
+    if (interpreter) {
+      baseline =
+          await IosBytecodeBuilder(
+            projectRoot: projectRoot,
+            target: target,
+            flavor: flavor,
+          ).build(
+            outputPath: p.join(
+              projectRoot.path,
+              'build',
+              'ios_interpreter_baseline.bytecode',
+            ),
+            buildArgs: buildArgs,
+          );
+      final measured = sha256.convert(baseline.readAsBytesSync()).toString();
+      final configured = yaml!.aotPatchBaseSnapshotHash;
+      if (configured != null && configured != measured) {
+        throw ArtifactBuildException(
+          'Configured base snapshot hash differs from compiled baseline '
+          'bytecode. Remove aot_patch_base_snapshot_hash to derive it '
+          'automatically.',
+        );
+      }
+      previousEnvironment = artifactBuilder.iosInterpreterBuildEnvironment;
+      artifactBuilder.iosInterpreterBuildEnvironment = {
+        ...previousEnvironment,
+        'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
+        'SHOREBIRD_AOT_PATCH_SDK_HASH':
+            yaml.aotPatchSdkHash ?? shorebirdEnv.shorebirdEngineRevision,
+      };
+    }
+    try {
+      final result = await build(buildArgs, base64PublicKey);
+      verifyObfuscationMap();
+      if (baseline != null) {
+        final supplement = Directory(
+          p.join(
+            projectRoot.path,
+            'build',
+            supplementPlatformSubdir,
+            'shorebird',
+          ),
+        )..createSync(recursive: true);
+        baseline.copySync(
+          p.join(supplement.path, IosBytecodeBuilder.baselineFileName),
+        );
+        File(
+          p.join(supplement.path, IosBytecodeBuilder.manifestFileName),
+        ).writeAsStringSync(
+          jsonEncode({
+            'version': 1,
+            'app_id': yaml!.getAppId(flavor: flavor),
+            'compiled_app_build_id': yaml.aotPatchAppBuildId,
+            'base_flavor_id': yaml.aotPatchBaseFlavorId,
+            'base_license_type': yaml.aotPatchBaseLicenseType,
+            'flavor_id': yaml.aotPatchFlavorId,
+            'license_type': yaml.aotPatchLicenseType,
+            'obfuscation_map_hash': yaml.aotPatchObfuscationMapHash,
+            'sdk_hash':
+                yaml.aotPatchSdkHash ?? shorebirdEnv.shorebirdEngineRevision,
+            'key_id': yaml.aotPatchKeyId,
+            'base_snapshot_hash': sha256
+                .convert(baseline.readAsBytesSync())
+                .toString(),
+            'entrypoint': p.relative(
+              target != null && p.isAbsolute(target!)
+                  ? target!
+                  : p.join(projectRoot.path, target ?? 'lib/main.dart'),
+              from: projectRoot.path,
+            ),
+            'defines_sha256': sha256
+                .convert(
+                  utf8.encode(
+                    jsonEncode(
+                      IosBytecodeBuilder(
+                        projectRoot: projectRoot,
+                        target: target,
+                        flavor: flavor,
+                      ).dartDefinesForBytecode(buildArgs),
+                    ),
+                  ),
+                )
+                .toString(),
+          }),
+        );
+      }
+      return result;
+    } finally {
+      if (previousEnvironment != null) {
+        artifactBuilder.iosInterpreterBuildEnvironment = previousEnvironment;
+      }
+    }
   }
 
   /// Uploads the release artifacts to the CodePush server.
@@ -357,9 +459,20 @@ To change the version of this release, change your app's version in your pubspec
   Future<void> uploadSupplementArtifact({
     required String appId,
     required int releaseId,
+    String? releaseVersion,
   }) async {
     final supplementDir = assembleSupplementDirectory();
     if (supplementDir != null) {
+      final manifest = File(
+        p.join(supplementDir.path, IosBytecodeBuilder.manifestFileName),
+      );
+      if (manifest.existsSync()) {
+        final metadata = (jsonDecode(manifest.readAsStringSync()) as Map)
+            .cast<String, dynamic>();
+        metadata['release_id'] = releaseId;
+        metadata['app_build_id'] = releaseVersion;
+        manifest.writeAsStringSync(jsonEncode(metadata));
+      }
       await codePushClientWrapper.createSupplementReleaseArtifact(
         appId: appId,
         releaseId: releaseId,

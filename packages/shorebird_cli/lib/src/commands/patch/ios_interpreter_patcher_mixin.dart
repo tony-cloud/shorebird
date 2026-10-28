@@ -6,18 +6,16 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/patcher.dart';
-import 'package:shorebird_cli/src/common_arguments.dart';
 import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
-import 'package:shorebird_cli/src/shorebird_flutter.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
-import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 
 /// Builds and packages public, data-only iOS interpreter patches.
 mixin IosInterpreterPatcherMixin on Patcher {
@@ -31,34 +29,6 @@ mixin IosInterpreterPatcherMixin on Patcher {
     shorebirdEnv.buildDirectory.path,
     'ios_interpreter_patch.bytecode',
   );
-
-  static const _flutterVersionDefine = 'FLUTTER_VERSION';
-  static const _flutterChannelDefine = 'FLUTTER_CHANNEL';
-  static const _flutterGitUrlDefine = 'FLUTTER_GIT_URL';
-  static const _flutterFrameworkRevisionDefine = 'FLUTTER_FRAMEWORK_REVISION';
-  static const _flutterEngineRevisionDefine = 'FLUTTER_ENGINE_REVISION';
-  static const _flutterDartVersionDefine = 'FLUTTER_DART_VERSION';
-  static const _flutterReservedDefines = [
-    _flutterVersionDefine,
-    _flutterChannelDefine,
-    _flutterGitUrlDefine,
-    _flutterFrameworkRevisionDefine,
-    _flutterEngineRevisionDefine,
-    _flutterDartVersionDefine,
-    'FLUTTER_ENABLED_FEATURE_FLAGS',
-  ];
-  static const _runtimeFeatureFlags = [
-    (
-      configSetting: 'enable-windowing',
-      environmentOverride: 'FLUTTER_WINDOWING',
-      runtimeId: 'windowing',
-    ),
-    (
-      configSetting: 'enable-accessibility-evaluations',
-      environmentOverride: 'FLUTTER_ACCESSIBILITY_EVALUATIONS',
-      runtimeId: 'accessibility_evaluations',
-    ),
-  ];
 
   /// Runtime mode selected for this iOS patch.
   String get iosPatchRuntimeMode {
@@ -84,11 +54,53 @@ mixin IosInterpreterPatcherMixin on Patcher {
   Future<Map<Arch, PatchArtifactBundle>> createInterpreterPatchArtifacts({
     required String appId,
     required String? releaseVersion,
+    required int releaseId,
+    required File releaseArtifact,
   }) async {
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
     if (shorebirdYaml == null) {
       logger.err('Unable to find shorebird.yaml for iOS interpreter patch.');
       throw ProcessExit(ExitCode.software.code);
+    }
+
+    if (obfuscate) {
+      logger.err(
+        'Obfuscated releases cannot receive iOS interpreter body patches. '
+        'Create an interpreter release without --obfuscate.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final baseline = _baselineBytecode();
+    final baselineHash = open_patch.sha256Hex(baseline.readAsBytesSync());
+    final manifestFile = File(
+      p.join(baseline.parent.path, IosBytecodeBuilder.manifestFileName),
+    );
+    if (!manifestFile.existsSync()) {
+      logger.err(
+        'Interpreter release supplement has no baseline identity manifest.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final manifest = (jsonDecode(manifestFile.readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    if (manifest['version'] != 1) {
+      logger.err('Unsupported interpreter baseline manifest version.');
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    IosBytecodeBuilder.validateCompiledPolicy(releaseArtifact, manifest);
+    final expected = <String, Object?>{
+      'app_id': appId,
+      'release_id': releaseId,
+      'app_build_id': releaseVersion,
+      'base_snapshot_hash': baselineHash,
+    };
+    for (final entry in expected.entries) {
+      if (entry.value != null && manifest[entry.key] != entry.value) {
+        logger.err(
+          'Interpreter baseline supplement does not match ${entry.key}.',
+        );
+        throw ProcessExit(ExitCode.usage.code);
+      }
     }
 
     final bytecodePath = _configuredInterpreterBytecodePath(shorebirdYaml);
@@ -118,7 +130,8 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     final keyId = _requiredPatchValue(
       'aot_patch_key_id or SHOREBIRD_AOT_PATCH_KEY_ID',
       platform.environment['SHOREBIRD_AOT_PATCH_KEY_ID'] ??
-          shorebirdYaml.aotPatchKeyId,
+          shorebirdYaml.aotPatchKeyId ??
+          manifest['key_id'] as String?,
     );
     final keyHex = _requiredPatchValue(
       'SHOREBIRD_AOT_PATCH_KEY_HEX',
@@ -144,19 +157,28 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     final sdkHash = _requiredPatchValue(
       'aot_patch_sdk_hash',
       platform.environment['SHOREBIRD_AOT_PATCH_SDK_HASH'] ??
-          shorebirdYaml.aotPatchSdkHash,
+          shorebirdYaml.aotPatchSdkHash ??
+          manifest['sdk_hash'] as String?,
     );
-    final baseSnapshotHash = _requiredPatchValue(
-      'aot_patch_base_snapshot_hash',
-      platform.environment['SHOREBIRD_AOT_PATCH_BASE_SNAPSHOT_HASH'] ??
-          shorebirdYaml.aotPatchBaseSnapshotHash,
-    );
+    final configuredBaseHash =
+        platform.environment['SHOREBIRD_AOT_PATCH_BASE_SNAPSHOT_HASH'] ??
+        shorebirdYaml.aotPatchBaseSnapshotHash;
+    if (configuredBaseHash != null && configuredBaseHash != baselineHash) {
+      logger.err(
+        'Configured base snapshot hash differs from the released '
+        'baseline supplement.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final baseSnapshotHash = baselineHash;
     final baseFlavorId =
         platform.environment['SHOREBIRD_AOT_PATCH_BASE_FLAVOR_ID'] ??
-        shorebirdYaml.aotPatchBaseFlavorId;
+        shorebirdYaml.aotPatchBaseFlavorId ??
+        manifest['base_flavor_id'] as String?;
     final baseLicenseType =
         platform.environment['SHOREBIRD_AOT_PATCH_BASE_LICENSE_TYPE'] ??
-        shorebirdYaml.aotPatchBaseLicenseType;
+        shorebirdYaml.aotPatchBaseLicenseType ??
+        manifest['base_license_type'] as String?;
     final obfuscationMapHash =
         platform.environment['SHOREBIRD_AOT_PATCH_OBFUSCATION_MAP_HASH'] ??
         shorebirdYaml.aotPatchObfuscationMapHash;
@@ -165,6 +187,19 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
           shorebirdYaml.aotPatchOfflineExpiresAt,
     );
 
+    for (final entry in <String, String?>{
+      'sdk_hash': sdkHash,
+      'base_flavor_id': baseFlavorId,
+      'base_license_type': baseLicenseType,
+      'key_id': keyId,
+    }.entries) {
+      if (manifest[entry.key] != entry.value) {
+        logger.err(
+          'Interpreter baseline policy differs from patch ${entry.key}.',
+        );
+        throw ProcessExit(ExitCode.usage.code);
+      }
+    }
     final metadata = open_patch.PatchMetadata(
       appId: appId,
       appBuildId: appBuildId,
@@ -221,6 +256,55 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     }
   }
 
+  /// Builds native diff-check artifacts using the immutable released policy.
+  Future<T> withInterpreterBaselineBuild<T>(Future<T> Function() build) async {
+    if (iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
+      return build();
+    }
+    if (obfuscate) {
+      logger.err(
+        'Obfuscated releases cannot receive iOS interpreter body patches. '
+        'Create an interpreter release without --obfuscate.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final baseline = _baselineBytecode();
+    final manifestFile = File(
+      p.join(baseline.parent.path, IosBytecodeBuilder.manifestFileName),
+    );
+    if (!manifestFile.existsSync()) {
+      logger.err(
+        'Interpreter release supplement has no baseline identity manifest.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final manifest = (jsonDecode(manifestFile.readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    final previous = artifactBuilder.iosInterpreterBuildEnvironment;
+    artifactBuilder.iosInterpreterBuildEnvironment = {
+      ...previous,
+      'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': open_patch.sha256Hex(
+        baseline.readAsBytesSync(),
+      ),
+      for (final key in const {
+        'APP_BUILD_ID': 'compiled_app_build_id',
+        'BASE_FLAVOR_ID': 'base_flavor_id',
+        'BASE_LICENSE_TYPE': 'base_license_type',
+        'SDK_HASH': 'sdk_hash',
+        'KEY_ID': 'key_id',
+        'FLAVOR_ID': 'flavor_id',
+        'LICENSE_TYPE': 'license_type',
+        'OBFUSCATION_MAP_HASH': 'obfuscation_map_hash',
+      }.entries)
+        'SHOREBIRD_AOT_PATCH_${key.key}': manifest[key.value] as String? ?? '',
+    };
+    try {
+      return await build();
+    } finally {
+      artifactBuilder.iosInterpreterBuildEnvironment = previous;
+    }
+  }
+
   /// Compiles bytecode using the public SDK, or honors a configured payload.
   Future<void> buildInterpreterBytecodePatch(List<String> buildArgs) async {
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
@@ -235,29 +319,31 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       return;
     }
 
-    final inputFile = _projectRelativeFile(
-      target ?? p.join('lib', 'main.dart'),
+    final baseline = _baselineBytecode();
+    await IosBytecodeBuilder(
+      projectRoot: projectRoot,
+      target: target,
+      flavor: flavor,
+    ).build(
+      outputPath: _interpreterPatchBytecodeOutputPath,
+      buildArgs: buildArgs,
+      patchBase: baseline,
     );
-    if (!inputFile.existsSync()) {
+  }
+
+  File _baselineBytecode() {
+    final directory = releaseSupplementDirectory;
+    final baseline = directory == null
+        ? null
+        : File(p.join(directory.path, IosBytecodeBuilder.baselineFileName));
+    if (baseline == null || !baseline.existsSync()) {
       logger.err(
-        'Unable to find Dart entrypoint for iOS interpreter patch: '
-        '${inputFile.path}',
+        'This release has no interpreter baseline bytecode supplement. '
+        'Create a new interpreter release before patching it.',
       );
       throw ProcessExit(ExitCode.usage.code);
     }
-
-    final packageConfigFile = File(
-      p.join(projectRoot.path, '.dart_tool', 'package_config.json'),
-    );
-    await artifactBuilder.buildDartBytecodeSnapshot(
-      inputFilePath: inputFile.path,
-      outFilePath: _interpreterPatchBytecodeOutputPath,
-      packageConfigPath: packageConfigFile.existsSync()
-          ? packageConfigFile.path
-          : null,
-      dartDefines: _dartDefinesForBytecode(buildArgs),
-      experiments: _buildArgValues(buildArgs, 'enable-experiment'),
-    );
+    return baseline;
   }
 
   String? _configuredInterpreterBytecodePath(ShorebirdYaml? shorebirdYaml) {
@@ -280,257 +366,6 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       throw ProcessExit(ExitCode.usage.code);
     }
     return value.trim();
-  }
-
-  List<String> _dartDefinesForBytecode(List<String> buildArgs) {
-    final defines = <String>[];
-    for (final defineFilePath in _buildArgValues(
-      buildArgs,
-      CommonArguments.dartDefineFromFileArg.name,
-    )) {
-      defines.addAll(_readDartDefineFile(_projectRelativeFile(defineFilePath)));
-    }
-    defines.addAll(
-      _buildArgValues(buildArgs, CommonArguments.dartDefineArg.name),
-    );
-    if (flavor != null &&
-        !defines.any((define) => define.startsWith('FLUTTER_APP_FLAVOR='))) {
-      defines.add('FLUTTER_APP_FLAVOR=$flavor');
-    }
-    _assertNoReservedFlutterDefines(defines);
-    defines.addAll(_flutterVersionDartDefinesForBytecode());
-    if (_enabledRuntimeFeatureDefinesForBytecode() case final featureDefine?) {
-      defines.add(featureDefine);
-    }
-    return defines;
-  }
-
-  void _assertNoReservedFlutterDefines(List<String> defines) {
-    for (final reservedDefine in _flutterReservedDefines) {
-      if (defines.any((define) => define.startsWith(reservedDefine))) {
-        logger.err(
-          '$reservedDefine is used by Flutter and cannot be set using --'
-          '${CommonArguments.dartDefineArg.name} or --'
-          '${CommonArguments.dartDefineFromFileArg.name}.',
-        );
-        throw ProcessExit(ExitCode.usage.code);
-      }
-    }
-  }
-
-  List<String> _flutterVersionDartDefinesForBytecode() {
-    final versionFile = File(
-      p.join(
-        shorebirdEnv.flutterDirectory.path,
-        'bin',
-        'cache',
-        'flutter.version.json',
-      ),
-    );
-    if (!versionFile.existsSync()) return const [];
-
-    final Json versionJson;
-    try {
-      versionJson = (jsonDecode(versionFile.readAsStringSync()) as Map)
-          .cast<String, Object?>();
-    } on Object catch (error) {
-      logger.err('Unable to parse ${versionFile.path}: $error');
-      throw ProcessExit(ExitCode.software.code);
-    }
-
-    String? stringValue(String key) {
-      final value = versionJson[key];
-      return value is String && value.isNotEmpty ? value : null;
-    }
-
-    String? shortRevision(String key) {
-      final revision = stringValue(key);
-      if (revision == null) return null;
-      return revision.length > 10 ? revision.substring(0, 10) : revision;
-    }
-
-    return [
-      if (stringValue('frameworkVersion') case final value?)
-        '$_flutterVersionDefine=$value',
-      if (stringValue('channel') case final value?)
-        '$_flutterChannelDefine=$value',
-      if (stringValue('repositoryUrl') case final value?)
-        '$_flutterGitUrlDefine=$value',
-      if (shortRevision('frameworkRevision') case final value?)
-        '$_flutterFrameworkRevisionDefine=$value',
-      if (shortRevision('engineRevision') case final value?)
-        '$_flutterEngineRevisionDefine=$value',
-      if (stringValue('dartSdkVersion') case final value?)
-        '$_flutterDartVersionDefine=$value',
-    ];
-  }
-
-  String? _enabledRuntimeFeatureDefinesForBytecode() {
-    final channel = _flutterVersionJsonString('channel');
-    final runtimeIds = <String>[];
-    for (final feature in _runtimeFeatureFlags) {
-      if (_isRuntimeFeatureEnabledForBytecode(
-        configSetting: feature.configSetting,
-        environmentOverride: feature.environmentOverride,
-        channel: channel,
-      )) {
-        runtimeIds.add(feature.runtimeId);
-      }
-    }
-    if (runtimeIds.isEmpty) return null;
-    return 'FLUTTER_ENABLED_FEATURE_FLAGS=${runtimeIds.join(',')}';
-  }
-
-  bool _isRuntimeFeatureEnabledForBytecode({
-    required String configSetting,
-    required String environmentOverride,
-    required String? channel,
-  }) {
-    if (channel == 'stable' || channel == 'beta') {
-      return false;
-    }
-    return _projectFeatureConfig(configSetting) ??
-        _globalFeatureConfig(configSetting) ??
-        _environmentFeatureConfig(environmentOverride) ??
-        false;
-  }
-
-  bool? _projectFeatureConfig(String configSetting) {
-    final config = shorebirdEnv.getPubspecYaml()?.flutter?['config'];
-    if (config == null) return null;
-    if (config is! Map) {
-      logger.err(
-        'The "config" property of "flutter" in pubspec.yaml must be a map.',
-      );
-      throw ProcessExit(ExitCode.usage.code);
-    }
-    return _featureConfigBool(
-      config[configSetting],
-      name: configSetting,
-      source: 'flutter: config: in pubspec.yaml',
-    );
-  }
-
-  bool? _globalFeatureConfig(String configSetting) {
-    return _featureConfigBool(
-      shorebirdFlutter.getConfig()[configSetting],
-      name: configSetting,
-      source: 'flutter config',
-    );
-  }
-
-  bool? _environmentFeatureConfig(String environmentOverride) {
-    final value = platform.environment[environmentOverride];
-    if (value == null) return null;
-    return value.toLowerCase() == 'true';
-  }
-
-  bool? _featureConfigBool(
-    Object? value, {
-    required String name,
-    required String source,
-  }) {
-    if (value == null || value == '(Not set)') return null;
-    if (value is bool) return value;
-    if (value is String) {
-      if (value.toLowerCase() == 'true') return true;
-      if (value.toLowerCase() == 'false') return false;
-    }
-    logger.err(
-      'The "$name" property in $source must be a boolean, but got $value.',
-    );
-    throw ProcessExit(ExitCode.usage.code);
-  }
-
-  String? _flutterVersionJsonString(String key) {
-    final versionFile = File(
-      p.join(
-        shorebirdEnv.flutterDirectory.path,
-        'bin',
-        'cache',
-        'flutter.version.json',
-      ),
-    );
-    if (!versionFile.existsSync()) return null;
-    try {
-      final versionJson = (jsonDecode(versionFile.readAsStringSync()) as Map)
-          .cast<String, Object?>();
-      final value = versionJson[key];
-      return value is String && value.isNotEmpty ? value : null;
-    } on Object catch (error) {
-      logger.err('Unable to parse ${versionFile.path}: $error');
-      throw ProcessExit(ExitCode.software.code);
-    }
-  }
-
-  List<String> _buildArgValues(List<String> args, String name) {
-    final values = <String>[];
-    final longOption = '--$name';
-    for (var i = 0; i < args.length; i++) {
-      final arg = args[i];
-      if (arg == longOption && i + 1 < args.length) {
-        values.add(args[++i]);
-      } else if (arg.startsWith('$longOption=')) {
-        values.add(arg.substring(longOption.length + 1));
-      } else if (name == CommonArguments.dartDefineArg.name &&
-          arg.startsWith('-D') &&
-          arg.length > 2) {
-        values.add(arg.substring(2));
-      }
-    }
-    return values;
-  }
-
-  List<String> _readDartDefineFile(File file) {
-    if (!file.existsSync()) {
-      logger.err(
-        'Did not find the file passed to --'
-        '${CommonArguments.dartDefineFromFileArg.name}: ${file.path}',
-      );
-      throw ProcessExit(ExitCode.usage.code);
-    }
-
-    final raw = file.readAsStringSync();
-    if (raw.trimLeft().startsWith('{')) {
-      try {
-        final map = (jsonDecode(raw) as Map).cast<String, Object?>();
-        return [
-          for (final entry in map.entries) '${entry.key}=${entry.value}',
-        ];
-      } on FormatException catch (error) {
-        logger.err(
-          'Unable to parse Dart define file ${file.path}: $error',
-        );
-        throw ProcessExit(ExitCode.usage.code);
-      }
-    }
-
-    final defines = <String>[];
-    for (final line in const LineSplitter().convert(raw)) {
-      final define = _parseDartDefineEnvLine(line);
-      if (define != null) defines.add(define);
-    }
-    return defines;
-  }
-
-  String? _parseDartDefineEnvLine(String line) {
-    final trimmed = line.trim();
-    if (trimmed.isEmpty || trimmed.startsWith('#')) return null;
-    final separatorIndex = trimmed.indexOf('=');
-    if (separatorIndex <= 0) {
-      logger.err(
-        'Invalid Dart define file line for --'
-        '${CommonArguments.dartDefineFromFileArg.name}: $line',
-      );
-      throw ProcessExit(ExitCode.usage.code);
-    }
-    final key = trimmed.substring(0, separatorIndex).trim();
-    var value = trimmed.substring(separatorIndex + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.substring(1, value.length - 1);
-    }
-    return '$key=$value';
   }
 
   String? _emptyToNull(String? value) {

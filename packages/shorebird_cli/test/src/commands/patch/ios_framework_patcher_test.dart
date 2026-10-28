@@ -114,6 +114,7 @@ void main() {
       argParser = MockArgParser();
       argResults = MockArgResults();
       artifactBuilder = MockArtifactBuilder();
+      when(() => artifactBuilder.iosInterpreterBuildEnvironment).thenReturn({});
       artifactManager = MockArtifactManager();
       codePushClientWrapper = MockCodePushClientWrapper();
       codeSigner = MockCodeSigner();
@@ -179,8 +180,28 @@ void main() {
             aotPatchFlavorId: 'pro',
             aotPatchLicenseType: 'pro',
             aotPatchSdkHash: 'sdk-hash',
-            aotPatchBaseSnapshotHash: 'base-hash',
           ),
+        );
+        patcher.releaseSupplementDirectory = Directory(
+          p.join(projectRoot.path, 'baseline'),
+        )..createSync();
+        File(
+          p.join(patcher.releaseSupplementDirectory!.path, 'baseline.bytecode'),
+        ).writeAsStringSync('baseline');
+        File(
+          p.join(patcher.releaseSupplementDirectory!.path, 'baseline.json'),
+        ).writeAsStringSync(
+          jsonEncode({
+            'version': 1,
+            'app_id': 'app-id',
+            'release_id': 1,
+            'app_build_id': '1.0.0+1',
+            'sdk_hash': 'sdk-hash',
+            'key_id': 'test-key',
+            'base_flavor_id': 'free',
+            'base_license_type': 'free',
+            'base_snapshot_hash': open_patch.sha256Hex(utf8.encode('baseline')),
+          }),
         );
         File(
           p.join(projectRoot.path, 'patch.bytecode'),

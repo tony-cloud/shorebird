@@ -88,6 +88,9 @@ Map<String, String>? buildEnvironment({
 /// Builds aabs, ipas, and other artifacts produced by `flutter build`.
 /// @{endtemplate}
 class ArtifactBuilder {
+  /// Public metadata overrides applied only while sealing an interpreter build.
+  Map<String, String> iosInterpreterBuildEnvironment = const {};
+
   /// A general recommendation when building artifacts fails.
   static String runVanillaFlutterBuildRecommendation(String buildCommand) =>
       '''
@@ -418,10 +421,18 @@ ${link(uri: Uri.parse(openShorebirdIssueUrl))}
     final exitCode = await process.stream(
       executable,
       arguments,
-      environment: buildEnvironment(
-        base64PublicKey: base64PublicKey,
-        ddMaxBytes: ddMaxBytes,
-      ),
+      environment: iosInterpreterBuildEnvironment.isEmpty
+          ? buildEnvironment(
+              base64PublicKey: base64PublicKey,
+              ddMaxBytes: ddMaxBytes,
+            )
+          : {
+              ...?buildEnvironment(
+                base64PublicKey: base64PublicKey,
+                ddMaxBytes: ddMaxBytes,
+              ),
+              ...iosInterpreterBuildEnvironment,
+            },
       // Never run in shell because we always have a fully resolved
       // executable path.
       runInShell: false,
@@ -748,7 +759,23 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     String? packageConfigPath,
     List<String> dartDefines = const [],
     List<String> experiments = const [],
+    String? patchBasePath,
   }) async {
+    if (packageConfigPath != null) {
+      // Native builds reset package_config to the developer's system Flutter.
+      // Restore this release's pinned Flutter dependencies before bytecode.
+      final result = await process.stream(
+        'flutter',
+        ['pub', 'get'],
+        workingDirectory: p.dirname(p.dirname(packageConfigPath)),
+        runInShell: false,
+      );
+      if (result != ExitCode.success.code) {
+        throw ArtifactBuildException(
+          'Failed to resolve pinned bytecode dependencies',
+        );
+      }
+    }
     final arguments = [
       shorebirdArtifacts.getArtifactPath(
         artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
@@ -757,6 +784,7 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
         artifact: ShorebirdArtifact.flutterProductPlatformDill,
       )}',
       '--target=flutter',
+      if (patchBasePath != null) '--patch-base=$patchBasePath',
       if (packageConfigPath != null) '--packages=$packageConfigPath',
       for (final define in dartDefines) '-D$define',
       '-Ddart.vm.profile=false',

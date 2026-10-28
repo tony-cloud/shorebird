@@ -448,6 +448,23 @@ $error''');
       releaseArtifactRoot: releaseArtifact,
     );
 
+    final configuredBuildId = shorebirdEnv
+        .getShorebirdYaml()
+        ?.aotPatchAppBuildId;
+    if (const {
+          ReleaseType.ios,
+          ReleaseType.iosFramework,
+        }.contains(releaser.releaseType) &&
+        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter &&
+        configuredBuildId != null &&
+        configuredBuildId != releaseVersion) {
+      usageException(
+        'aot_patch_app_build_id differs from the built release version. '
+        'Remove the override to bind interpreter patches to the actual '
+        'release.',
+      );
+    }
+
     // Ensure we can create a release from what we've built.
     await ensureVersionIsReleasable(
       version: releaseVersion,
@@ -571,6 +588,7 @@ $error''');
     await releaser.uploadSupplementArtifact(
       appId: appId,
       releaseId: release.id,
+      releaseVersion: release.version,
     );
     await finalizeRelease(release: release, releaser: releaser);
 
@@ -724,13 +742,18 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
         'Customer signing remains available for native AOT releases.',
       );
     }
+    if (releaser.useObfuscation) {
+      usageException(
+        'iOS interpreter releases require stable Dart symbol names. '
+        'Remove --obfuscate; obfuscated baselines cannot receive interpreter '
+        'body patches.',
+      );
+    }
     final yaml = shorebirdEnv.getShorebirdYaml();
     final required = <String, String?>{
       'aot_patch_runtime_mode': yaml?.aotPatchRuntimeMode,
       'aot_patch_base_flavor_id': yaml?.aotPatchBaseFlavorId,
       'aot_patch_base_license_type': yaml?.aotPatchBaseLicenseType,
-      'aot_patch_sdk_hash': yaml?.aotPatchSdkHash,
-      'aot_patch_base_snapshot_hash': yaml?.aotPatchBaseSnapshotHash,
       'aot_patch_key_id': yaml?.aotPatchKeyId,
     };
     final missing = required.entries
@@ -741,9 +764,8 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       usageException(
         'Missing iOS interpreter baseline policy in shorebird.yaml: '
         '${missing.join(', ')}. Set aot_patch_runtime_mode to '
-        'dart-bytecode-interpreter. The SDK hash and base snapshot hash must '
-        'describe the release SDK and baseline Dart bytecode, respectively; '
-        'do not use the native App.framework hash. App id and release build '
+        'dart-bytecode-interpreter. The SDK id and baseline bytecode hash '
+        'are derived during the release build. App id and release build '
         'version are resolved from the build automatically.',
       );
     }
@@ -754,7 +776,8 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
         'shorebird.yaml so the release embeds its interpreter baseline policy.',
       );
     }
-    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(yaml.aotPatchBaseSnapshotHash!)) {
+    if (yaml.aotPatchBaseSnapshotHash != null &&
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(yaml.aotPatchBaseSnapshotHash!)) {
       usageException(
         'aot_patch_base_snapshot_hash must be the lowercase SHA-256 hash '
         'of the baseline Dart bytecode (64 hexadecimal characters).',
