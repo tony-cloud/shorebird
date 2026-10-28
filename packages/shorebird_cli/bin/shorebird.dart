@@ -34,6 +34,7 @@ import 'package:shorebird_cli/src/shorebird_flutter.dart';
 import 'package:shorebird_cli/src/shorebird_process.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/shorebird_version.dart';
+import 'package:shorebird_cli/src/user_config.dart';
 
 Future<void> main(List<String> args) async {
   // A reader that exits early (`shorebird api /apps | head -1`) makes later
@@ -111,6 +112,7 @@ Command: shorebird ${args.join(' ')}
           shorebirdTracerRef,
           shorebirdValidatorRef,
           shorebirdVersionRef,
+          userConfigRef,
           windowsRef,
           xcodeBuildRef,
         },

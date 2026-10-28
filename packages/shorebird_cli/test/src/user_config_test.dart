@@ -5,7 +5,10 @@ import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/user_config.dart';
 import 'package:test/test.dart';
 
+import 'helpers.dart';
+
 void main() {
+  useTempWorkingDirectory();
   group(UserConfig, () {
     late File configFile;
     late UserConfig userConfig;
