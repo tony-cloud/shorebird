@@ -261,6 +261,7 @@ void main() {
       logger = MockShorebirdLogger();
       platform = TestNativePlatform(environment: {});
       shorebirdEnv = MockShorebirdEnv();
+      when(() => shorebirdEnv.useLegacyAuthFlow).thenReturn(false);
 
       when(() => codePushClient.getCurrentUser()).thenAnswer((_) async => user);
       when(
@@ -1715,6 +1716,21 @@ void main() {
     });
 
     group('hasValidCredentials', () {
+      test('checks a fresh open-server login without refreshing it', () async {
+        when(() => shorebirdEnv.useLegacyAuthFlow).thenReturn(true);
+        writeCredentials();
+        auth = buildAuth();
+        expect(await runWithOverrides(auth.hasValidCredentials), isTrue);
+        verify(() => codePushClient.getCurrentUser()).called(1);
+        verifyNever(
+          () => httpClient.post(
+            any(),
+            headers: any(named: 'headers'),
+            body: any(named: 'body'),
+          ),
+        );
+      });
+
       group('when there are no credentials', () {
         test('returns false', () async {
           expect(await runWithOverrides(auth.hasValidCredentials), isFalse);

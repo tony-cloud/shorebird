@@ -56,10 +56,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
         (v) => v as String?,
       ),
       aotPatchKeyId: $checkedConvert('aot_patch_key_id', (v) => v as String?),
-      aotPatchKeyHex: $checkedConvert(
-        'aot_patch_key_hex',
-        (v) => v as String?,
-      ),
+      aotPatchKeyHex: $checkedConvert('aot_patch_key_hex', (v) => v as String?),
       aotPatchAppBuildId: $checkedConvert(
         'aot_patch_app_build_id',
         (v) => v as String?,

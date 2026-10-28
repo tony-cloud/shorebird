@@ -114,4 +114,3 @@ its PR; drop a change whose impact isn't clear. Everything else is in the linked
 
 Full notes: <https://github.com/shorebirdtech/shorebird/releases/tag/v<version>>
 ```
-

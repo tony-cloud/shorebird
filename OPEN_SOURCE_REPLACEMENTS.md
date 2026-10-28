@@ -114,7 +114,10 @@ tools controlled by this workspace.
 
 The open server's `/auth/login` requires a `continue` callback. The CLI retains
 that login flow for auth services mounted at `/auth`, then uses the current
-OAuth token storage and refresh implementation with `/auth/token`. Existing
+OAuth token storage with `/auth/token`. Rerunning login verifies an unexpired
+access token against the user API instead of forcing a refresh. Expired tokens
+follow the existing refresh route; the server must accept its issued refresh
+token format for renewal to succeed. Existing
 `credentials.json` logins migrate to `credentials-v2.json`. Set
 `SHOREBIRD_AUTH_FLOW=oauth` to select the standard OAuth authorization flow, or
 `SHOREBIRD_AUTH_FLOW=legacy` for an open server mounted at another path. The open

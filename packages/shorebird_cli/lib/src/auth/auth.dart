@@ -408,6 +408,18 @@ class Auth {
     if (_apiKeySource != null || isUsingGitHubActionsOidc) return true;
     if (_oauthClient == null) return false;
 
+    // The open server retains its legacy refresh contract. Verify a usable
+    // access token against the API instead of rotating it just to run login.
+    // Expired credentials still take the normal refresh path below.
+    if (shorebirdEnv.useLegacyAuthFlow &&
+        !_oauthClient!.credentials.isExpired) {
+      final user = await _buildCodePushClient(
+        httpClient: _oauthClient!,
+        hostedUri: shorebirdEnv.hostedUri,
+      ).getCurrentUser();
+      return user != null;
+    }
+
     try {
       await _currentClient(force: true);
       return true;
