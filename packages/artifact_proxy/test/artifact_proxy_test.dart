@@ -16,26 +16,58 @@ void main() {
     artifactOverrides: {
       r'flutter_infra_release/flutter/$engine/dart-sdk-linux-x64.zip',
       r'flutter_infra_release/flutter/$engine/dart-sdk-darwin-arm64.zip',
+      r'flutter_infra_release/flutter/$engine/dart-sdk-darwin-x64.zip',
+      r'flutter_infra_release/flutter/$engine/dart-sdk-windows-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm-release/symbols.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm-release/linux-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm-release/darwin-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm-release/windows-x64.zip',
       r'flutter_infra_release/flutter/$engine/android-arm64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/android-arm64-release/symbols.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm64-release/linux-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm64-release/darwin-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-arm64-release/windows-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-x64-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/android-x64-release/symbols.zip',
+      r'flutter_infra_release/flutter/$engine/android-x64-release/linux-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-x64-release/darwin-x64.zip',
+      r'flutter_infra_release/flutter/$engine/android-x64-release/windows-x64.zip',
       r'flutter_infra_release/flutter/$engine/linux-x64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/linux-x64-release/linux-x64-flutter-gtk.zip',
       r'flutter_infra_release/flutter/$engine/ios-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/flutter_patched_sdk_product.zip',
-      r'flutter_infra_release/flutter/$engine/flutter-web-sdk.zip',
       r'flutter_infra_release/flutter/$engine/darwin-arm64-release/FlutterMacOS.framework.zip',
-      r'flutter_infra_release/flutter/$engine/android-arm-release/artifacts.zip',
-      r'flutter_infra_release/flutter/$engine/android-arm-release/symbols.zip',
-      r'flutter_infra_release/flutter/$engine/android-x64-release/artifacts.zip',
-      r'flutter_infra_release/flutter/$engine/android-x64-release/symbols.zip',
-      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.pom',
+      r'flutter_infra_release/flutter/$engine/darwin-x64-release/FlutterMacOS.framework.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-x64-release/framework.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-x64-release/gen_snapshot.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-x64-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/windows-x64-release/windows-x64-flutter.zip',
       r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.jar',
-      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.jar.sha1',
+      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.pom.sha1',
+      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.maven-metadata.xml',
+      r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.maven-metadata.xml.sha1',
       r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.jar',
-      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.jar.sha1',
+      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.pom.sha1',
+      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.maven-metadata.xml',
+      r'download.flutter.io/io/flutter/arm64_v8a_release/1.0.0-$engine/arm64_v8a_release-1.0.0-$engine.maven-metadata.xml.sha1',
       r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.jar',
-      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.jar.sha1',
+      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.pom.sha1',
+      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.maven-metadata.xml',
+      r'download.flutter.io/io/flutter/armeabi_v7a_release/1.0.0-$engine/armeabi_v7a_release-1.0.0-$engine.maven-metadata.xml.sha1',
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.jar',
+      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.jar.sha1',
+      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.pom',
+      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.pom.sha1',
+      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml',
+      r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml.sha1',
+      r'flutter_infra_release/flutter/$engine/flutter-web-sdk.zip',
     },
   );
 
@@ -68,6 +100,19 @@ void main() {
       final response = await handler(request);
       expect(response.statusCode, equals(HttpStatus.notFound));
       verify(() => client.getManifest(shorebirdEngineRevision)).called(1);
+    });
+
+    test('routes every published override to the custom mirror', () async {
+      for (final override in manifest.artifactOverrides) {
+        final path = override.replaceAll(r'$engine', shorebirdEngineRevision);
+        expect(
+          await handler(buildRequest(path)),
+          isRedirectTo(
+            'http://localhost:8080/artifacts/${manifest.storageBucket}/$path',
+          ),
+          reason: path,
+        );
+      }
     });
 
     test('should proxy to Flutter artifacts '
