@@ -103,6 +103,7 @@ class BuildEnvironmentMetadata extends Equatable {
   final String operatingSystemVersion;
 
   /// The shorebird.yaml file for this project.
+  @JsonKey(toJson: _publicShorebirdYaml)
   final ShorebirdYaml shorebirdYaml;
 
   /// Whether the project uses package:shorebird_code_push.
@@ -128,4 +129,31 @@ class BuildEnvironmentMetadata extends Equatable {
     usesShorebirdCodePushPackage,
     xcodeVersion,
   ];
+}
+
+// Use an allowlist so adding local configuration fields cannot silently upload
+// credentials or filesystem paths to the build metadata endpoint.
+Map<String, dynamic> _publicShorebirdYaml(ShorebirdYaml yaml) {
+  final json = yaml.toJson();
+  const publicKeys = {
+    'app_id',
+    'flavors',
+    'base_url',
+    'auto_update',
+    'patch_verification',
+    'aot_patch_runtime_mode',
+    'aot_patch_key_id',
+    'aot_patch_app_build_id',
+    'aot_patch_base_flavor_id',
+    'aot_patch_base_license_type',
+    'aot_patch_flavor_id',
+    'aot_patch_license_type',
+    'aot_patch_sdk_hash',
+    'aot_patch_base_snapshot_hash',
+    'aot_patch_obfuscation_map_hash',
+    'aot_patch_offline_expires_at',
+  };
+  return Map.fromEntries(
+    json.entries.where((entry) => publicKeys.contains(entry.key)),
+  );
 }

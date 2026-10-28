@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
@@ -629,6 +630,32 @@ $error''');
         '--${CommonArguments.publicKeyArg.name} or '
         '--${CommonArguments.publicKeyCmd.name}.',
       );
+    }
+    if (!results.patchSigningEnabled ||
+        shorebirdYaml?.patchVerification == PatchVerification.installOnly) {
+      final nativeOptIn =
+          platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH'];
+      final nativeEnabled = const {'1', 'true', 'yes'}.contains(nativeOptIn);
+      final environmentMode = platform
+          .environment['SHOREBIRD_IOS_PATCH_RUNTIME_MODE']
+          ?.trim();
+      final runtimeMode = environmentMode != null && environmentMode.isNotEmpty
+          ? environmentMode
+          : (nativeEnabled ? open_patch.runtimeModeNativeAot : null) ??
+                shorebirdYaml?.aotPatchRuntimeMode ??
+                open_patch.runtimeModeDartBytecodeInterpreter;
+      final isIos = const {
+        ReleaseType.ios,
+        ReleaseType.iosFramework,
+      }.contains(releaser.releaseType);
+      if (isIos &&
+          runtimeMode.trim() == open_patch.runtimeModeDartBytecodeInterpreter) {
+        usageException(
+          'Encrypted iOS interpreter releases require patch signing and '
+          'patch_verification: strict. Remove --no-patch-signing and '
+          'patch_verification: install_only.',
+        );
+      }
     }
     if (shorebirdYaml?.patchVerification != null &&
         !results.patchSigningEnabled) {

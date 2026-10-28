@@ -1273,6 +1273,54 @@ Did you mean --release-version=1.0.0+1?''',
         verify(releaser.assertArgsAreValid).called(1);
       });
 
+      for (final type in [ReleaseType.ios, ReleaseType.iosFramework]) {
+        test('rejects unsigned encrypted ${type.cliName} release', () async {
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+          ).thenReturn(false);
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+          ).thenReturn(false);
+          when(
+            () => argResults[CommonArguments.patchSigningArg.name],
+          ).thenReturn(false);
+          when(() => releaser.releaseType).thenReturn(type);
+          await expectLater(
+            () => runWithOverrides(() => command.assertArgsAreValid(releaser)),
+            throwsA(
+              isA<UsageException>().having(
+                (e) => e.message,
+                'message',
+                contains('require patch signing'),
+              ),
+            ),
+          );
+        });
+        test(
+          'rejects install_only encrypted ${type.cliName} release',
+          () async {
+            when(() => releaser.releaseType).thenReturn(type);
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              const ShorebirdYaml(
+                appId: appId,
+                patchVerification: PatchVerification.installOnly,
+              ),
+            );
+            await expectLater(
+              () =>
+                  runWithOverrides(() => command.assertArgsAreValid(releaser)),
+              throwsA(
+                isA<UsageException>().having(
+                  (e) => e.message,
+                  'message',
+                  contains('patch_verification: strict'),
+                ),
+              ),
+            );
+          },
+        );
+      }
+
       group('when patch_verification is set', () {
         late Releaser releaser;
 
@@ -1287,6 +1335,7 @@ Did you mean --release-version=1.0.0+1?''',
             () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
           ).thenReturn(false);
           releaser = MockReleaser();
+          when(() => releaser.releaseType).thenReturn(ReleaseType.android);
           when(
             () => releaser.minimumFlutterVersion,
           ).thenReturn(Version(0, 0, 0));

@@ -1,10 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
-import 'package:platform/platform.dart';
+import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
@@ -22,6 +24,7 @@ import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/os/operating_system_interface.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/platform.dart' as cli_platform;
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
@@ -42,6 +45,7 @@ import '../../mocks.dart';
 void main() {
   useTempWorkingDirectory();
   group(IosFrameworkPatcher, () {
+    late TestNativePlatform platform;
     late AotTools aotTools;
     late Apple apple;
     late ArgParser argParser;
@@ -71,6 +75,7 @@ void main() {
         body,
         values: {
           aotToolsRef.overrideWith(() => aotTools),
+          cli_platform.platformRef.overrideWith(() => platform),
           appleRef.overrideWith(() => apple),
           artifactBuilderRef.overrideWith(() => artifactBuilder),
           artifactManagerRef.overrideWith(() => artifactManager),
@@ -101,6 +106,9 @@ void main() {
     });
 
     setUp(() {
+      platform = TestNativePlatform(
+        environment: {'SHOREBIRD_IOS_NATIVE_AOT_PATCH': '1'},
+      );
       apple = MockApple();
       aotTools = MockAotTools();
       argParser = MockArgParser();
@@ -153,6 +161,108 @@ void main() {
         argResults: argResults,
         flavor: null,
         target: null,
+      );
+    });
+
+    group('public interpreter route', () {
+      const keyHex =
+          '000102030405060708090a0b0c0d0e0f'
+          '101112131415161718191a1b1c1d1e1f';
+      setUp(() {
+        platform = TestNativePlatform(environment: {});
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+          const ShorebirdYaml(
+            appId: 'app-id',
+            aotPatchBytecodePath: 'patch.bytecode',
+            aotPatchKeyHex: keyHex,
+            aotPatchKeyId: 'test-key',
+            aotPatchFlavorId: 'pro',
+            aotPatchLicenseType: 'pro',
+            aotPatchSdkHash: 'sdk-hash',
+            aotPatchBaseSnapshotHash: 'base-hash',
+          ),
+        );
+        File(
+          p.join(projectRoot.path, 'patch.bytecode'),
+        ).writeAsBytesSync(utf8.encode('bytecode-data'));
+      });
+
+      test(
+        'defaults to interpreter without private linker or AOT snapshot',
+        () async {
+          final kernel = File(p.join(projectRoot.path, 'app.dill'))
+            ..createSync();
+          when(
+            () => artifactBuilder.buildIosFramework(args: any(named: 'args')),
+          ).thenAnswer((_) async => AppleBuildResult(kernelFile: kernel));
+          when(
+            () => artifactManager.getAppXcframeworkDirectory(),
+          ).thenReturn(projectRoot);
+          Directory(p.join(projectRoot.path, 'build')).createSync();
+          Directory(
+            p.join(projectRoot.path, ArtifactManager.appXcframeworkName),
+          ).createSync();
+          await runWithOverrides(patcher.buildPatchArtifact);
+          verifyNever(
+            () => artifactBuilder.buildElfAotSnapshot(
+              appDillPath: any(named: 'appDillPath'),
+              outFilePath: any(named: 'outFilePath'),
+              genSnapshotArtifact: any(named: 'genSnapshotArtifact'),
+              additionalArgs: any(named: 'additionalArgs'),
+            ),
+          );
+        },
+      );
+
+      test(
+        'packages the same encrypted full snapshot transport as IPA',
+        () async {
+          when(
+            () => artifactManager.createDiff(
+              releaseArtifactPath: any(named: 'releaseArtifactPath'),
+              patchArtifactPath: any(named: 'patchArtifactPath'),
+            ),
+          ).thenAnswer((invocation) async {
+            final base = File(
+              invocation.namedArguments[#releaseArtifactPath] as String,
+            );
+            expect(base.readAsBytesSync(), isEmpty);
+            final transport = File(p.join(projectRoot.path, 'transport.patch'))
+              ..writeAsBytesSync([0x28, 0xb5, 0x2f, 0xfd]);
+            return transport.path;
+          });
+          final bundles = await runWithOverrides(
+            () => patcher.createPatchArtifacts(
+              appId: 'app-id',
+              releaseId: 1,
+              releaseArtifact: File('unused'),
+              releaseVersion: '1.0.0+1',
+            ),
+          );
+          expect(bundles[Arch.arm64]!.path, endsWith('transport.patch'));
+          expect(bundles[Arch.arm64]!.podfileLockHash, isNull);
+          final envelope = File(
+            p.join(projectRoot.path, 'build', 'ios_interpreter_patch.vmcode'),
+          );
+          final encrypted = open_patch.EncryptedPatchArtifact.fromJson(
+            (jsonDecode(envelope.readAsStringSync()) as Map)
+                .cast<String, Object?>(),
+          );
+          expect(
+            encrypted.decrypt(open_patch.readKey(keyHex)).payload,
+            utf8.encode('bytecode-data'),
+          );
+          verifyNever(
+            () => apple.runLinker(
+              kernelFile: any(named: 'kernelFile'),
+              aotOutputFile: any(named: 'aotOutputFile'),
+              releaseArtifact: any(named: 'releaseArtifact'),
+              splitDebugInfoArgs: any(named: 'splitDebugInfoArgs'),
+              vmCodeFile: any(named: 'vmCodeFile'),
+              ddMaxBytes: any(named: 'ddMaxBytes'),
+            ),
+          );
+        },
       );
     });
 

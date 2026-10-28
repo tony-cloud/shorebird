@@ -55,7 +55,7 @@ Map<String, dynamic> _$BuildEnvironmentMetadataToJson(
   'shorebird_version': instance.shorebirdVersion,
   'operating_system': instance.operatingSystem,
   'operating_system_version': instance.operatingSystemVersion,
-  'shorebird_yaml': instance.shorebirdYaml.toJson(),
+  'shorebird_yaml': _publicShorebirdYaml(instance.shorebirdYaml),
   'uses_shorebird_code_push_package': instance.usesShorebirdCodePushPackage,
   'xcode_version': instance.xcodeVersion,
 };

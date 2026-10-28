@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:test/test.dart';
@@ -20,6 +22,26 @@ void main() {
         BuildEnvironmentMetadata.fromJson(metadata.toJson()).toJson(),
         equals(metadata.toJson()),
       );
+    });
+
+    test('uploaded JSON excludes local secrets without mutating config', () {
+      const secret = 'development-only-aes-key';
+      final yaml = ShorebirdYaml.fromJson({
+        'app_id': 'app-id',
+        'aot_patch_key_hex': secret,
+        'aot_patch_key_id': 'public-key-id',
+        'aot_patch_bytecode_path': '/local/private/patch.bytecode',
+      });
+      final metadata = BuildEnvironmentMetadata.forTest(shorebirdYaml: yaml);
+      final uploaded = jsonEncode(metadata.toJson());
+      final uploadedYaml =
+          (jsonDecode(uploaded) as Map)['shorebird_yaml'] as Map;
+      expect(uploaded, isNot(contains(secret)));
+      expect(uploadedYaml, isNot(contains('aot_patch_key_hex')));
+      expect(uploadedYaml, isNot(contains('aot_patch_bytecode_path')));
+      expect(uploadedYaml['aot_patch_key_id'], 'public-key-id');
+      expect(yaml.aotPatchKeyHex, secret);
+      expect(yaml.toJson()['aot_patch_key_hex'], secret);
     });
 
     group('copyWith', () {
