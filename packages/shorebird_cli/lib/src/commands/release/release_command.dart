@@ -722,15 +722,33 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
         open_patch.runtimeModeDartBytecodeInterpreter;
   }
 
-  /// Rejects interpreter releases without a complete runtime trust policy.
+  /// Checks response-signing compatibility and the interpreter trust policy.
   /// Runs before building or creating a release on the server.
   @visibleForTesting
   void assertIosInterpreterReleaseConfiguration(Releaser releaser) {
-    if (!const {
+    final interpreter =
+        const {
           ReleaseType.ios,
           ReleaseType.iosFramework,
-        }.contains(releaser.releaseType) ||
-        _iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
+        }.contains(releaser.releaseType) &&
+        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter;
+    if (!interpreter) {
+      final customerKey = results[CommonArguments.publicKeyArg.name] as String?;
+      final customerCommand =
+          results[CommonArguments.publicKeyCmd.name] as String?;
+      final customerSigning = customerKey != null || customerCommand != null;
+      if (customerSigning &&
+          shorebirdEnv.getShorebirdYaml()?.patchResponseVerification !=
+              PatchResponseVerification.optional) {
+        usageException(
+          'Customer-signed native releases require explicit '
+          'patch_response_verification: optional in shorebird.yaml. The server '
+          'does not hold the customer private key and cannot authenticate '
+          'patch-check responses. Artifact signatures remain verified. Use '
+          'managed signing to require authenticated responses; an explicit '
+          'required policy cannot be downgraded automatically.',
+        );
+      }
       return;
     }
     if (results.wasParsed(CommonArguments.publicKeyArg.name) ||
@@ -739,7 +757,8 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
         'Encrypted iOS interpreter releases currently require managed signing '
         'to authenticate patch offers and rollback responses. Remove '
         '--public-key-path/--public-key-cmd and use the default managed key. '
-        'Customer signing remains available for native AOT releases.',
+        'Customer signing remains available for native AOT releases with '
+        'explicit optional response verification.',
       );
     }
     if (releaser.useObfuscation) {

@@ -4,7 +4,11 @@ Interpreter releases currently use **managed patch signing**. The self-hosted
 server holds the managed RSA key and signs both artifact hashes and nonce-bound
 patch-check responses. Customer signing with `--public-key-path` or
 `--public-key-cmd` cannot authenticate those responses and is rejected for this
-mode. Customer signing remains available for native AOT releases.
+mode. Customer signing remains available for native AOT releases when source YAML
+explicitly sets `patch_response_verification: optional`. Their artifact
+signatures remain verified. A default or explicit `required` response policy is
+rejected for customer signing because the server cannot produce those
+responses. Managed native signing keeps authenticated responses by default.
 
 Before the first release, the app must install its app-owned AES key provider.
 Choose a key id that the provider recognizes. Provision the corresponding key

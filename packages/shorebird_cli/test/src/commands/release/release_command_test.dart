@@ -962,6 +962,12 @@ $exception'''),
           when(
             () => argResults[CommonArguments.publicKeyArg.name],
           ).thenReturn(file.path);
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              patchResponseVerification: PatchResponseVerification.optional,
+            ),
+          );
         });
 
         test('completes successfully', () async {
@@ -1396,11 +1402,98 @@ Did you mean --release-version=1.0.0+1?''',
 
       test('leaves native customer signing available', () {
         when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
-          const ShorebirdYaml(appId: appId, aotPatchRuntimeMode: 'native-aot'),
+          const ShorebirdYaml(
+            appId: appId,
+            aotPatchRuntimeMode: 'native-aot',
+            patchResponseVerification: PatchResponseVerification.optional,
+          ),
         );
         when(
           () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
         ).thenReturn(true);
+        runWithOverrides(
+          () => command.assertIosInterpreterReleaseConfiguration(releaser),
+        );
+      });
+    });
+
+    group('customer native response verification policy', () {
+      for (final type in ReleaseType.values) {
+        for (final mode in [
+          null,
+          PatchResponseVerification.required,
+          PatchResponseVerification.optional,
+        ]) {
+          test('${type.cliName}: customer ${mode?.name ?? 'default'}', () {
+            when(() => releaser.releaseType).thenReturn(type);
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              ShorebirdYaml(
+                appId: appId,
+                aotPatchRuntimeMode: 'native-aot',
+                patchResponseVerification: mode,
+              ),
+            );
+            when(
+              () => argResults[CommonArguments.publicKeyArg.name],
+            ).thenReturn('customer-public.pem');
+            if (mode == PatchResponseVerification.optional) {
+              runWithOverrides(
+                () =>
+                    command.assertIosInterpreterReleaseConfiguration(releaser),
+              );
+            } else {
+              expect(
+                () => runWithOverrides(
+                  () => command.assertIosInterpreterReleaseConfiguration(
+                    releaser,
+                  ),
+                ),
+                throwsA(
+                  isA<UsageException>().having(
+                    (e) => e.message,
+                    'message',
+                    contains(
+                      'require explicit patch_response_verification: optional',
+                    ),
+                  ),
+                ),
+              );
+            }
+          });
+        }
+      }
+      test(
+        'customer key commands also require explicit optional responses',
+        () {
+          when(() => releaser.releaseType).thenReturn(ReleaseType.android);
+          when(
+            () => argResults[CommonArguments.publicKeyCmd.name],
+          ).thenReturn('read-customer-public-key');
+          expect(
+            () => runWithOverrides(
+              () => command.assertIosInterpreterReleaseConfiguration(releaser),
+            ),
+            throwsA(
+              isA<UsageException>().having(
+                (error) => error.message,
+                'message',
+                contains(
+                  'require explicit patch_response_verification: optional',
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      test('managed native signing retains default required responses', () {
+        when(() => releaser.releaseType).thenReturn(ReleaseType.android);
+        when(
+          () => argResults[CommonArguments.publicKeyArg.name],
+        ).thenReturn(null);
+        when(
+          () => argResults[CommonArguments.publicKeyCmd.name],
+        ).thenReturn(null);
         runWithOverrides(
           () => command.assertIosInterpreterReleaseConfiguration(releaser),
         );
