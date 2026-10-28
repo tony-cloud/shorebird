@@ -88,3 +88,9 @@ The GitHub CI engine artifacts include a `mirror/` subtree for the override
 files listed by this manifest. Copy the contents of that subtree to
 `$SHOREBIRD_ARTIFACT_BASE_URL` alongside the manifest and `patch-*.zip`
 artifacts.
+
+Host `font-subset.zip` archives must also come from the custom engine mirror.
+They contain `const_finder.dart.snapshot`, which reads the app's kernel and must
+match the custom Dart SDK. The proxy rejects missing overrides for these tools
+instead of redirecting to an incompatible upstream snapshot. Static font assets
+can continue to use the upstream Flutter origin.

@@ -94,11 +94,11 @@ Handler artifactProxyHandler({
         return Response.found(location);
       }
 
-      // A stock SDK or release engine cannot execute our patches. Missing
-      // custom artifacts must be visible failures, never silent substitution.
-      if (_requiresCustomRuntime(normalizedPath)) {
+      // A stock SDK, kernel tool, or release engine is incompatible with our
+      // custom VM. Missing artifacts must fail without silent substitution.
+      if (_requiresCustomSdkArtifact(normalizedPath)) {
         return Response.notFound(
-          'No custom runtime artifact is published for $normalizedPath. '
+          'No custom SDK or runtime artifact is published for $normalizedPath. '
           'Build and publish this target before using code push.',
         );
       }
@@ -183,10 +183,12 @@ Uri _joinUri(Uri base, String path) {
   return base.replace(path: '$basePath/$relativePath');
 }
 
-/// Fonts and debug tools may use upstream artifacts. Production runtime
-/// binaries and snapshot compilers must match the custom VM revision.
-bool _requiresCustomRuntime(String path) {
+/// Runtime binaries and kernel tools must match the custom VM revision.
+/// font-subset.zip includes const_finder.dart.snapshot, which reads kernels.
+/// Static font assets and debug-only artifacts may still use upstream files.
+bool _requiresCustomSdkArtifact(String path) {
   return RegExp(r'/dart-sdk-[^/]+\.zip$').hasMatch(path) ||
+      path.endsWith('/font-subset.zip') ||
       path.endsWith('/flutter_patched_sdk_product.zip') ||
       RegExp(
         '/(?:android-[^/]+|ios|darwin(?:-[^/]+)?|linux-[^/]+)-release/',

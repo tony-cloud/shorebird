@@ -67,7 +67,10 @@ void main() {
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.pom.sha1',
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml',
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml.sha1',
-      r'flutter_infra_release/flutter/$engine/flutter-web-sdk.zip',
+      r'flutter_infra_release/flutter/$engine/linux-x64/font-subset.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-arm64/font-subset.zip',
+      r'flutter_infra_release/flutter/$engine/darwin-x64/font-subset.zip',
+      r'flutter_infra_release/flutter/$engine/windows-x64/font-subset.zip',
     },
   );
 
@@ -103,6 +106,7 @@ void main() {
     });
 
     test('routes every published override to the custom mirror', () async {
+      expect(manifest.artifactOverrides, hasLength(57));
       for (final override in manifest.artifactOverrides) {
         final path = override.replaceAll(r'$engine', shorebirdEngineRevision);
         expect(
@@ -166,6 +170,16 @@ void main() {
       () async {
         const artifactPrefix =
             'flutter_infra_release/flutter/$shorebirdEngineRevision';
+        when(() => client.getManifest(any())).thenAnswer(
+          (_) async => ArtifactsManifest(
+            flutterEngineRevision: manifest.flutterEngineRevision,
+            storageBucket: manifest.storageBucket,
+            artifactOverrides: {
+              ...manifest.artifactOverrides,
+              r'flutter_infra_release/flutter/$engine/flutter-web-sdk.zip',
+            },
+          ),
+        );
         const paths = [
           '$artifactPrefix/ios-release/artifacts.zip',
           '$artifactPrefix/flutter-web-sdk.zip',
@@ -192,7 +206,7 @@ void main() {
       const shorebirdPath =
           'flutter_infra_release/flutter/$shorebirdEngineRevision/android-x64-release/artifacts.zip';
       const flutterPath =
-          'flutter_infra_release/flutter/$shorebirdEngineRevision/windows-x64/font-subset.zip';
+          'flutter_infra_release/flutter/$shorebirdEngineRevision/windows-x64/flutter-cpp-client-wrapper.zip';
 
       expect(
         await handler(buildRequest(shorebirdPath)),
@@ -203,7 +217,7 @@ void main() {
       expect(
         await handler(buildRequest(flutterPath)),
         isRedirectTo(
-          'https://flutter.example.com/flutter_infra_release/flutter/${manifest.flutterEngineRevision}/windows-x64/font-subset.zip',
+          'https://flutter.example.com/flutter_infra_release/flutter/${manifest.flutterEngineRevision}/windows-x64/flutter-cpp-client-wrapper.zip',
         ),
       );
     });
@@ -211,13 +225,13 @@ void main() {
     test('should proxy to Flutter artifacts '
         'when an engine revision is detected with no override', () async {
       const path =
-          'flutter_infra_release/flutter/$shorebirdEngineRevision/windows-x64/font-subset.zip';
+          'flutter_infra_release/flutter/$shorebirdEngineRevision/windows-x64/flutter-cpp-client-wrapper.zip';
       final request = buildRequest(path);
       final response = await handler(request);
       expect(
         response,
         isRedirectTo(
-          'https://storage.googleapis.com/flutter_infra_release/flutter/${manifest.flutterEngineRevision}/windows-x64/font-subset.zip',
+          'https://storage.googleapis.com/flutter_infra_release/flutter/${manifest.flutterEngineRevision}/windows-x64/flutter-cpp-client-wrapper.zip',
         ),
       );
       verify(() => client.getManifest(shorebirdEngineRevision)).called(1);
@@ -247,6 +261,42 @@ void main() {
         expect(response.headers['location'], isNull, reason: suffix);
       }
     });
+
+    test(
+      'rejects missing SDK-compatible font tools for every supported host',
+      () async {
+        when(() => client.getManifest(any())).thenAnswer(
+          (_) async => ArtifactsManifest(
+            flutterEngineRevision: manifest.flutterEngineRevision,
+            storageBucket: manifest.storageBucket,
+            artifactOverrides: manifest.artifactOverrides
+                .where((path) => !path.endsWith('/font-subset.zip'))
+                .toSet(),
+          ),
+        );
+        for (final host in [
+          'linux-x64',
+          'darwin-arm64',
+          'darwin-x64',
+          'windows-x64',
+        ]) {
+          final path =
+              'flutter_infra_release/flutter/$shorebirdEngineRevision/$host/font-subset.zip';
+          final response = await handler(buildRequest(path));
+          expect(response.statusCode, HttpStatus.notFound, reason: host);
+          expect(response.headers['location'], isNull, reason: host);
+          expect(
+            await response.readAsString(),
+            contains(
+              path.replaceAll(
+                shorebirdEngineRevision,
+                r'$engine',
+              ),
+            ),
+          );
+        }
+      },
+    );
 
     test('should return 404 '
         'when pattern is not recognized', () async {
