@@ -1761,6 +1761,7 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             arch: patcher.primaryReleaseArtifactArch,
             platform: releasePlatform,
           ),
+          () => patcher.preflightReleaseArtifact(any()),
           () => patcher.buildPatchArtifact(releaseVersion: releaseVersion),
           () => patcher.assertUnpatchableDiffs(
             releaseArtifact: any(named: 'releaseArtifact'),
@@ -1790,6 +1791,30 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             track: DeploymentTrack.stable,
           ),
         ]);
+      });
+
+      test('rejects a mismatched compiled profile before building', () async {
+        when(() => patcher.preflightReleaseArtifact(any())).thenThrow(
+          ArtifactBuildException('Compiled structural profile mismatch.'),
+        );
+        await expectLater(
+          () => runWithOverrides(command.run),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        verifyNever(
+          () => patcher.buildPatchArtifact(
+            releaseVersion: any(named: 'releaseVersion'),
+          ),
+        );
+        verifyNever(
+          () => patcher.createPatchArtifacts(
+            appId: any(named: 'appId'),
+            releaseId: any(named: 'releaseId'),
+            releaseArtifact: any(named: 'releaseArtifact'),
+            supplementDirectory: any(named: 'supplementDirectory'),
+            releaseVersion: any(named: 'releaseVersion'),
+          ),
+        );
       });
 
       group('when building artifact throws ArtifactBuildException', () {

@@ -37,6 +37,7 @@ class ShorebirdYaml {
     this.patchVerification,
     this.patchResponseVerification,
     this.aotPatchRuntimeMode,
+    this.aotPatchStructuralUpdates,
     this.aotPatchBytecodePath,
     this.aotPatchKeyId,
     this.aotPatchKeyHex,
@@ -52,8 +53,29 @@ class ShorebirdYaml {
   });
 
   /// Creates a [ShorebirdYaml] from a JSON map.
-  factory ShorebirdYaml.fromJson(Map<dynamic, dynamic> json) =>
-      _$ShorebirdYamlFromJson(json);
+  factory ShorebirdYaml.fromJson(Map<dynamic, dynamic> json) {
+    final yaml = _$ShorebirdYamlFromJson(json);
+    if (json.containsKey('aot_patch_structural_updates') &&
+        json['aot_patch_structural_updates'] is! bool) {
+      throw CheckedFromJsonException(
+        json,
+        'aot_patch_structural_updates',
+        'ShorebirdYaml',
+        'aot_patch_structural_updates must be a boolean.',
+      );
+    }
+    if ((yaml.aotPatchStructuralUpdates ?? false) &&
+        yaml.aotPatchRuntimeMode != 'dart-bytecode-interpreter') {
+      throw CheckedFromJsonException(
+        json,
+        'aot_patch_structural_updates',
+        'ShorebirdYaml',
+        'aot_patch_structural_updates requires '
+            'aot_patch_runtime_mode: dart-bytecode-interpreter.',
+      );
+    }
+    return yaml;
+  }
 
   /// Converts this [ShorebirdYaml] to a JSON map.
   Map<String, dynamic> toJson() => _$ShorebirdYamlToJson(this);
@@ -91,6 +113,11 @@ class ShorebirdYaml {
 
   /// Runtime mode used for open AOT patch artifacts.
   final String? aotPatchRuntimeMode;
+
+  /// Opts an interpreter baseline into compatible declaration updates.
+  /// This immutable release capability defaults to body-only updates.
+  @JsonKey(includeIfNull: false)
+  final bool? aotPatchStructuralUpdates;
 
   /// Path to a full Dart bytecode patch payload for the iOS interpreter route.
   final String? aotPatchBytecodePath;

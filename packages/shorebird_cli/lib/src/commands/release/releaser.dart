@@ -131,9 +131,10 @@ To change the version of this release, change your app's version in your pubspec
               'ios_interpreter_baseline.bytecode',
             ),
             buildArgs: buildArgs,
+            structuralUpdates: yaml!.aotPatchStructuralUpdates ?? false,
           );
       final measured = sha256.convert(baseline.readAsBytesSync()).toString();
-      final configured = yaml!.aotPatchBaseSnapshotHash;
+      final configured = yaml.aotPatchBaseSnapshotHash;
       if (configured != null && configured != measured) {
         throw ArtifactBuildException(
           'Configured base snapshot hash differs from compiled baseline '
@@ -169,7 +170,8 @@ To change the version of this release, change your app's version in your pubspec
         ).writeAsStringSync(
           jsonEncode({
             'version': 1,
-            'app_id': yaml!.getAppId(flavor: flavor),
+            'structural_updates': yaml!.aotPatchStructuralUpdates ?? false,
+            'app_id': yaml.getAppId(flavor: flavor),
             'compiled_app_build_id': yaml.aotPatchAppBuildId,
             'base_flavor_id': yaml.aotPatchBaseFlavorId,
             'base_license_type': yaml.aotPatchBaseLicenseType,

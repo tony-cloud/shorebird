@@ -50,6 +50,15 @@ mixin IosInterpreterPatcherMixin on Patcher {
     return value == '1' || value == 'true' || value == 'yes';
   }
 
+  @override
+  void preflightReleaseArtifact(File releaseArchive) {
+    if (iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
+      return;
+    }
+    final manifest = _baselineManifest(_baselineBytecode());
+    IosBytecodeBuilder.validateCompiledPolicy(releaseArchive, manifest);
+  }
+
   /// Packages encrypted bytecode in the public updater transport format.
   Future<Map<Arch, PatchArtifactBundle>> createInterpreterPatchArtifacts({
     required String appId,
@@ -72,21 +81,7 @@ mixin IosInterpreterPatcherMixin on Patcher {
     }
     final baseline = _baselineBytecode();
     final baselineHash = open_patch.sha256Hex(baseline.readAsBytesSync());
-    final manifestFile = File(
-      p.join(baseline.parent.path, IosBytecodeBuilder.manifestFileName),
-    );
-    if (!manifestFile.existsSync()) {
-      logger.err(
-        'Interpreter release supplement has no baseline identity manifest.',
-      );
-      throw ProcessExit(ExitCode.usage.code);
-    }
-    final manifest = (jsonDecode(manifestFile.readAsStringSync()) as Map)
-        .cast<String, Object?>();
-    if (manifest['version'] != 1) {
-      logger.err('Unsupported interpreter baseline manifest version.');
-      throw ProcessExit(ExitCode.usage.code);
-    }
+    final manifest = _baselineManifest(baseline);
     IosBytecodeBuilder.validateCompiledPolicy(releaseArtifact, manifest);
     final expected = <String, Object?>{
       'app_id': appId,
@@ -269,17 +264,7 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       throw ProcessExit(ExitCode.usage.code);
     }
     final baseline = _baselineBytecode();
-    final manifestFile = File(
-      p.join(baseline.parent.path, IosBytecodeBuilder.manifestFileName),
-    );
-    if (!manifestFile.existsSync()) {
-      logger.err(
-        'Interpreter release supplement has no baseline identity manifest.',
-      );
-      throw ProcessExit(ExitCode.usage.code);
-    }
-    final manifest = (jsonDecode(manifestFile.readAsStringSync()) as Map)
-        .cast<String, Object?>();
+    final manifest = _baselineManifest(baseline);
     final previous = artifactBuilder.iosInterpreterBuildEnvironment;
     artifactBuilder.iosInterpreterBuildEnvironment = {
       ...previous,
@@ -308,6 +293,8 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
   /// Compiles bytecode using the public SDK, or honors a configured payload.
   Future<void> buildInterpreterBytecodePatch(List<String> buildArgs) async {
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
+    final baseline = _baselineBytecode();
+    final manifest = _baselineManifest(baseline);
     final configuredBytecodePath = _configuredInterpreterBytecodePath(
       shorebirdYaml,
     );
@@ -319,7 +306,6 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       return;
     }
 
-    final baseline = _baselineBytecode();
     await IosBytecodeBuilder(
       projectRoot: projectRoot,
       target: target,
@@ -328,7 +314,33 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       outputPath: _interpreterPatchBytecodeOutputPath,
       buildArgs: buildArgs,
       patchBase: baseline,
+      structuralUpdates: IosBytecodeBuilder.structuralUpdatesForManifest(
+        manifest,
+      ),
     );
+  }
+
+  Map<String, Object?> _baselineManifest(File baseline) {
+    final file = File(
+      p.join(baseline.parent.path, IosBytecodeBuilder.manifestFileName),
+    );
+    if (!file.existsSync()) {
+      logger.err(
+        'Interpreter release supplement has no baseline identity manifest.',
+      );
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    final manifest = (jsonDecode(file.readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    if (manifest['version'] != 1) {
+      logger.err('Unsupported interpreter baseline manifest version.');
+      throw ProcessExit(ExitCode.usage.code);
+    }
+    IosBytecodeBuilder.validateStructuralProfile(
+      shorebirdEnv.getShorebirdYaml(),
+      manifest,
+    );
+    return manifest;
   }
 
   File _baselineBytecode() {

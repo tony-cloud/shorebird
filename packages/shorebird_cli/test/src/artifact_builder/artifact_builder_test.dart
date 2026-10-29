@@ -2420,6 +2420,31 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
           ).thenReturn('platform_strong.dill');
         });
 
+        for (final baseline in <String?>[null, '/release/baseline.bytecode']) {
+          test('passes structural flag for baseline=$baseline', () async {
+            await runWithOverrides(
+              () => builder.buildDartBytecodeSnapshot(
+                inputFilePath: '/app/lib/main.dart',
+                outFilePath: '/out/patch.bytecode',
+                patchBasePath: baseline,
+                structuralUpdates: true,
+              ),
+            );
+            verify(
+              () => shorebirdProcess.stream(
+                'dartaotruntime',
+                any(
+                  that: allOf([
+                    contains('--shorebird-structural-patching'),
+                    if (baseline != null) contains('--patch-base=$baseline'),
+                  ]),
+                ),
+                runInShell: false,
+              ),
+            ).called(1);
+          });
+        }
+
         test('invokes dart2bytecode with release Flutter arguments', () async {
           final outFile = await runWithOverrides(
             () => builder.buildDartBytecodeSnapshot(

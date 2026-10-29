@@ -22,6 +22,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
         'patch_verification',
         'patch_response_verification',
         'aot_patch_runtime_mode',
+        'aot_patch_structural_updates',
         'aot_patch_bytecode_path',
         'aot_patch_key_id',
         'aot_patch_key_hex',
@@ -55,6 +56,10 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
       aotPatchRuntimeMode: $checkedConvert(
         'aot_patch_runtime_mode',
         (v) => v as String?,
+      ),
+      aotPatchStructuralUpdates: $checkedConvert(
+        'aot_patch_structural_updates',
+        (v) => v as bool?,
       ),
       aotPatchBytecodePath: $checkedConvert(
         'aot_patch_bytecode_path',
@@ -108,6 +113,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
     'patchVerification': 'patch_verification',
     'patchResponseVerification': 'patch_response_verification',
     'aotPatchRuntimeMode': 'aot_patch_runtime_mode',
+    'aotPatchStructuralUpdates': 'aot_patch_structural_updates',
     'aotPatchBytecodePath': 'aot_patch_bytecode_path',
     'aotPatchKeyId': 'aot_patch_key_id',
     'aotPatchKeyHex': 'aot_patch_key_hex',
@@ -134,6 +140,7 @@ Map<String, dynamic> _$ShorebirdYamlToJson(
   'patch_response_verification':
       _$PatchResponseVerificationEnumMap[instance.patchResponseVerification],
   'aot_patch_runtime_mode': instance.aotPatchRuntimeMode,
+  'aot_patch_structural_updates': ?instance.aotPatchStructuralUpdates,
   'aot_patch_bytecode_path': instance.aotPatchBytecodePath,
   'aot_patch_key_id': instance.aotPatchKeyId,
   'aot_patch_key_hex': instance.aotPatchKeyHex,

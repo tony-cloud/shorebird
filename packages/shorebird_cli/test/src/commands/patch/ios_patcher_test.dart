@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
@@ -883,6 +884,7 @@ This may indicate that the patch contains native changes, which cannot be applie
               p.join(patcher.releaseSupplementDirectory!.path, 'baseline.json'),
             ).writeAsStringSync(
               jsonEncode({
+                'version': 1,
                 'sdk_hash': 'sdk',
                 'key_id': 'key',
                 'base_flavor_id': 'free',
@@ -929,6 +931,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                 dartDefines: any(named: 'dartDefines'),
                 experiments: any(named: 'experiments'),
                 patchBasePath: any(named: 'patchBasePath'),
+                structuralUpdates: any(named: 'structuralUpdates'),
               ),
             ).thenAnswer(
               (invocation) async {
@@ -940,6 +943,103 @@ This may indicate that the patch contains native changes, which cannot be applie
               },
             );
           });
+
+          test('preflights the bundled profile before native compilation', () {
+            final bytes = utf8.encode('aot_patch_structural_updates: true');
+            final archive = Archive()
+              ..addFile(
+                ArchiveFile(
+                  'App.app/Frameworks/App.framework/flutter_assets/shorebird.yaml',
+                  bytes.length,
+                  bytes,
+                ),
+              );
+            final release = File(p.join(projectRoot.path, 'release.zip'))
+              ..writeAsBytesSync(ZipEncoder().encode(archive));
+            expect(
+              () => runWithOverrides(
+                () => patcher.preflightReleaseArtifact(release),
+              ),
+              throwsA(isA<ArtifactBuildException>()),
+            );
+            verifyZeroInteractions(artifactBuilder);
+          });
+
+          test(
+            'compiles structural deltas only for opted-in baselines',
+            () async {
+              final file = File(
+                p.join(
+                  patcher.releaseSupplementDirectory!.path,
+                  'baseline.json',
+                ),
+              );
+              final manifest = jsonDecode(file.readAsStringSync()) as Map;
+              manifest['structural_updates'] = true;
+              file.writeAsStringSync(jsonEncode(manifest));
+              when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+                const ShorebirdYaml(
+                  appId: 'app-id',
+                  aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+                  aotPatchStructuralUpdates: true,
+                ),
+              );
+              await runWithOverrides(patcher.buildPatchArtifact);
+              verify(
+                () => artifactBuilder.buildDartBytecodeSnapshot(
+                  inputFilePath: any(named: 'inputFilePath'),
+                  outFilePath: any(named: 'outFilePath'),
+                  packageConfigPath: any(named: 'packageConfigPath'),
+                  dartDefines: any(named: 'dartDefines'),
+                  experiments: any(named: 'experiments'),
+                  patchBasePath: any(named: 'patchBasePath'),
+                  structuralUpdates: true,
+                ),
+              ).called(1);
+            },
+          );
+
+          for (final structural in [false, true]) {
+            for (final stage in ['native', 'bytecode', 'configured bytecode']) {
+              test(
+                'rejects structural=$structural profile mismatch before $stage',
+                () async {
+                  final file = File(
+                    p.join(
+                      patcher.releaseSupplementDirectory!.path,
+                      'baseline.json',
+                    ),
+                  );
+                  final manifest = jsonDecode(file.readAsStringSync()) as Map;
+                  manifest['structural_updates'] = structural;
+                  file.writeAsStringSync(jsonEncode(manifest));
+                  when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+                    ShorebirdYaml(
+                      appId: 'app-id',
+                      aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+                      aotPatchStructuralUpdates: !structural,
+                      aotPatchBytecodePath: stage == 'configured bytecode'
+                          ? '/prebuilt/patch.bytecode'
+                          : null,
+                    ),
+                  );
+                  await expectLater(
+                    runWithOverrides(
+                      () async {
+                        if (stage == 'native') {
+                          await patcher.buildPatchArtifact();
+                        } else {
+                          await patcher.buildInterpreterBytecodePatch([]);
+                        }
+                      },
+                    ),
+                    throwsA(isA<ArtifactBuildException>()),
+                  );
+                  verifyZeroInteractions(artifactBuilder);
+                },
+              );
+            }
+          }
 
           test('generates a bytecode patch and skips native AOT', () async {
             await runWithOverrides(patcher.buildPatchArtifact);
@@ -1010,6 +1110,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                           dartDefines: captureAny(named: 'dartDefines'),
                           experiments: ['records'],
                           patchBasePath: any(named: 'patchBasePath'),
+                          structuralUpdates: any(named: 'structuralUpdates'),
                         ),
                       ).captured.single
                       as List<String>;
@@ -1050,6 +1151,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                         dartDefines: captureAny(named: 'dartDefines'),
                         experiments: any(named: 'experiments'),
                         patchBasePath: any(named: 'patchBasePath'),
+                        structuralUpdates: any(named: 'structuralUpdates'),
                       ),
                     ).captured.single
                     as List<String>;
@@ -1098,6 +1200,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                           dartDefines: captureAny(named: 'dartDefines'),
                           experiments: any(named: 'experiments'),
                           patchBasePath: any(named: 'patchBasePath'),
+                          structuralUpdates: any(named: 'structuralUpdates'),
                         ),
                       ).captured.single
                       as List<String>;
@@ -1141,6 +1244,7 @@ This may indicate that the patch contains native changes, which cannot be applie
                 dartDefines: any(named: 'dartDefines'),
                 experiments: any(named: 'experiments'),
                 patchBasePath: any(named: 'patchBasePath'),
+                structuralUpdates: any(named: 'structuralUpdates'),
               ),
             );
           });

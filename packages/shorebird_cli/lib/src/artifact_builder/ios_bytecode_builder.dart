@@ -6,6 +6,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
+import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -34,11 +35,12 @@ class IosBytecodeBuilder {
   /// Baseline identity and compatibility metadata in the release supplement.
   static const manifestFileName = 'baseline.json';
 
-  /// Compiles a baseline, or a body-only delta when [patchBase] is supplied.
+  /// Compiles a baseline or a delta using the release's immutable profile.
   Future<File> build({
     required String outputPath,
     required List<String> buildArgs,
     File? patchBase,
+    bool structuralUpdates = false,
   }) async {
     final input = _projectRelativeFile(target ?? p.join('lib', 'main.dart'));
     if (!input.existsSync()) {
@@ -58,6 +60,7 @@ class IosBytecodeBuilder {
       dartDefines: dartDefinesForBytecode(buildArgs),
       experiments: _buildArgValues(buildArgs, 'enable-experiment'),
       patchBasePath: patchBase?.path,
+      structuralUpdates: structuralUpdates,
     );
   }
 
@@ -92,16 +95,52 @@ class IosBytecodeBuilder {
     ),
   ];
 
+  /// Reads the explicit capability, retaining old v1 manifests as body-only.
+  static bool structuralUpdatesForManifest(Map<String, Object?> manifest) {
+    if (manifest.containsKey('structural_updates') &&
+        manifest['structural_updates'] is! bool) {
+      throw ArtifactBuildException(
+        'Interpreter baseline structural_updates must be a boolean.',
+      );
+    }
+    return manifest['structural_updates'] == true;
+  }
+
+  /// Prevents patch source configuration from changing the released profile.
+  static bool validateStructuralProfile(
+    ShorebirdYaml? source,
+    Map<String, Object?> manifest,
+  ) {
+    final enabled = structuralUpdatesForManifest(manifest);
+    if ((source?.aotPatchStructuralUpdates ?? false) != enabled) {
+      throw ArtifactBuildException(
+        'aot_patch_structural_updates differs from the released interpreter '
+        'baseline. Match the release profile, or create a new release to '
+        'change its structural update capability.',
+      );
+    }
+    return enabled;
+  }
+
   /// Cross-checks supplement identity against a bundled policy, when present.
   static void validateCompiledPolicy(
     File release,
     Map<String, Object?> manifest,
   ) {
+    final structuralUpdates = structuralUpdatesForManifest(manifest);
     // Some legacy release archives do not contain bundled Flutter assets.
-    if (!release.existsSync() || release.lengthSync() < 4) return;
+    if (!release.existsSync() || release.lengthSync() < 4) {
+      if (structuralUpdates) {
+        throw ArtifactBuildException(
+          'Structural updates require a release with a compiled profile.',
+        );
+      }
+      return;
+    }
     final stream = InputFileStream(release.path);
     try {
       final archive = ZipDecoder().decodeStream(stream);
+      var foundPolicy = false;
       for (final file in archive.files) {
         if (!file.isFile ||
             !file.name.endsWith('/flutter_assets/shorebird.yaml') ||
@@ -109,8 +148,18 @@ class IosBytecodeBuilder {
           continue;
         }
         final yaml = loadYaml(utf8.decode(file.content as List<int>));
+        foundPolicy = true;
         if (yaml is! YamlMap) {
           throw const FormatException('Invalid compiled policy');
+        }
+        final structural = yaml['aot_patch_structural_updates'];
+        if ((yaml.containsKey('aot_patch_structural_updates') &&
+                structural is! bool) ||
+            (structural ?? false) != structuralUpdates) {
+          throw ArtifactBuildException(
+            'Release compiled structural update profile differs from '
+            'baseline supplement.',
+          );
         }
         for (final entry in const {
           'app_id': 'app_id',
@@ -144,6 +193,11 @@ class IosBytecodeBuilder {
             'verification policy.',
           );
         }
+      }
+      if (structuralUpdates && !foundPolicy) {
+        throw ArtifactBuildException(
+          'Structural updates require a release with a compiled profile.',
+        );
       }
     } on FormatException {
       throw ArtifactBuildException(

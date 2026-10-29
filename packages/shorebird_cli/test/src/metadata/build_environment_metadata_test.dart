@@ -30,6 +30,8 @@ void main() {
         'app_id': 'app-id',
         'aot_patch_key_hex': secret,
         'aot_patch_key_id': 'public-key-id',
+        'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+        'aot_patch_structural_updates': true,
         'patch_response_verification': 'required',
         'aot_patch_bytecode_path': '/local/private/patch.bytecode',
       });
@@ -41,6 +43,7 @@ void main() {
       expect(uploadedYaml, isNot(contains('aot_patch_key_hex')));
       expect(uploadedYaml, isNot(contains('aot_patch_bytecode_path')));
       expect(uploadedYaml['aot_patch_key_id'], 'public-key-id');
+      expect(uploadedYaml['aot_patch_structural_updates'], isTrue);
       expect(uploadedYaml['patch_response_verification'], 'required');
       expect(yaml.aotPatchKeyHex, secret);
       expect(yaml.toJson()['aot_patch_key_hex'], secret);

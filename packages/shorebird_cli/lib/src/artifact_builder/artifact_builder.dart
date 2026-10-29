@@ -760,6 +760,7 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     List<String> dartDefines = const [],
     List<String> experiments = const [],
     String? patchBasePath,
+    bool structuralUpdates = false,
   }) async {
     if (packageConfigPath != null) {
       // Native builds reset package_config to the developer's system Flutter.
@@ -784,6 +785,7 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
         artifact: ShorebirdArtifact.flutterProductPlatformDill,
       )}',
       '--target=flutter',
+      if (structuralUpdates) '--shorebird-structural-patching',
       if (patchBasePath != null) '--patch-base=$patchBasePath',
       if (packageConfigPath != null) '--packages=$packageConfigPath',
       for (final define in dartDefines) '-D$define',

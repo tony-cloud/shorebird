@@ -391,87 +391,102 @@ To change the version of this release, change your app's version in your pubspec
         ).thenAnswer((_) async => true);
       });
 
-      test(
-        'seals measured baseline policy then publishes bytecode supplement',
-        () async {
-          releaser = _TestReleaser(
-            argResults: argResults,
-            releaseType: ReleaseType.ios,
-          );
-          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
-            const ShorebirdYaml(
-              appId: appId,
-              aotPatchRuntimeMode: 'dart-bytecode-interpreter',
-              aotPatchBaseFlavorId: 'free',
-              aotPatchBaseLicenseType: 'free',
-              aotPatchKeyId: 'app-key-id',
-            ),
-          );
-          when(
-            () => shorebirdEnv.shorebirdEngineRevision,
-          ).thenReturn('pinned-sdk');
-          when(() => shorebirdEnv.flutterDirectory).thenReturn(projectRoot);
-          when(() => shorebirdFlutter.getConfig()).thenReturn({});
-          when(
-            () => artifactBuilder.iosInterpreterBuildEnvironment,
-          ).thenReturn({});
-          File(p.join(projectRoot.path, 'lib', 'main.dart'))
-            ..createSync(recursive: true)
-            ..writeAsStringSync('void main() {}');
-          when(
-            () => artifactBuilder.buildDartBytecodeSnapshot(
-              inputFilePath: any(named: 'inputFilePath'),
-              outFilePath: any(named: 'outFilePath'),
-              packageConfigPath: any(named: 'packageConfigPath'),
-              dartDefines: any(named: 'dartDefines'),
-              experiments: any(named: 'experiments'),
-              patchBasePath: any(named: 'patchBasePath'),
-            ),
-          ).thenAnswer(
-            (invocation) async =>
-                File(invocation.namedArguments[#outFilePath] as String)
-                  ..writeAsBytesSync([1, 2, 3]),
-          );
-          await runWithOverrides(
-            () => releaser.runReleaseBuild((_, _) async {
-              // Flutter may recreate its supplement output during the build.
-              Directory(
-                p.join(projectRoot.path, 'build', 'test', 'shorebird'),
-              ).createSync(recursive: true);
-              return 'sealed app';
-            }),
-          );
-          final supplement = Directory(
-            p.join(projectRoot.path, 'build', 'test', 'shorebird'),
-          );
-          expect(
-            File(
-              p.join(supplement.path, 'baseline.bytecode'),
-            ).readAsBytesSync(),
-            [1, 2, 3],
-          );
-          final manifest =
-              jsonDecode(
-                    File(
-                      p.join(supplement.path, 'baseline.json'),
-                    ).readAsStringSync(),
-                  )
-                  as Map;
-          final measured = sha256.convert([1, 2, 3]).toString();
-          expect(manifest['base_snapshot_hash'], measured);
-          expect(manifest['sdk_hash'], 'pinned-sdk');
-          verify(
-            () => artifactBuilder.iosInterpreterBuildEnvironment = {
-              'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
-              'SHOREBIRD_AOT_PATCH_SDK_HASH': 'pinned-sdk',
-            },
-          ).called(1);
-          verify(
-            () => artifactBuilder.iosInterpreterBuildEnvironment =
-                <String, String>{},
-          ).called(1);
-        },
-      );
+      for (final structural in [false, true]) {
+        test(
+          'seals structural=$structural baseline policy and supplement',
+          () async {
+            releaser = _TestReleaser(
+              argResults: argResults,
+              releaseType: ReleaseType.ios,
+            );
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              ShorebirdYaml(
+                appId: appId,
+                aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+                aotPatchStructuralUpdates: structural,
+                aotPatchBaseFlavorId: 'free',
+                aotPatchBaseLicenseType: 'free',
+                aotPatchKeyId: 'app-key-id',
+              ),
+            );
+            when(
+              () => shorebirdEnv.shorebirdEngineRevision,
+            ).thenReturn('pinned-sdk');
+            when(() => shorebirdEnv.flutterDirectory).thenReturn(projectRoot);
+            when(() => shorebirdFlutter.getConfig()).thenReturn({});
+            when(
+              () => artifactBuilder.iosInterpreterBuildEnvironment,
+            ).thenReturn({});
+            File(p.join(projectRoot.path, 'lib', 'main.dart'))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('void main() {}');
+            when(
+              () => artifactBuilder.buildDartBytecodeSnapshot(
+                inputFilePath: any(named: 'inputFilePath'),
+                outFilePath: any(named: 'outFilePath'),
+                packageConfigPath: any(named: 'packageConfigPath'),
+                dartDefines: any(named: 'dartDefines'),
+                experiments: any(named: 'experiments'),
+                patchBasePath: any(named: 'patchBasePath'),
+                structuralUpdates: any(named: 'structuralUpdates'),
+              ),
+            ).thenAnswer(
+              (invocation) async =>
+                  File(invocation.namedArguments[#outFilePath] as String)
+                    ..writeAsBytesSync([1, 2, 3]),
+            );
+            await runWithOverrides(
+              () => releaser.runReleaseBuild((_, _) async {
+                // Flutter may recreate its supplement output during the build.
+                Directory(
+                  p.join(projectRoot.path, 'build', 'test', 'shorebird'),
+                ).createSync(recursive: true);
+                return 'sealed app';
+              }),
+            );
+            final supplement = Directory(
+              p.join(projectRoot.path, 'build', 'test', 'shorebird'),
+            );
+            expect(
+              File(
+                p.join(supplement.path, 'baseline.bytecode'),
+              ).readAsBytesSync(),
+              [1, 2, 3],
+            );
+            final manifest =
+                jsonDecode(
+                      File(
+                        p.join(supplement.path, 'baseline.json'),
+                      ).readAsStringSync(),
+                    )
+                    as Map;
+            final measured = sha256.convert([1, 2, 3]).toString();
+            expect(manifest['base_snapshot_hash'], measured);
+            expect(manifest['structural_updates'], structural);
+            verify(
+              () => artifactBuilder.buildDartBytecodeSnapshot(
+                inputFilePath: any(named: 'inputFilePath'),
+                outFilePath: any(named: 'outFilePath'),
+                packageConfigPath: any(named: 'packageConfigPath'),
+                dartDefines: any(named: 'dartDefines'),
+                experiments: any(named: 'experiments'),
+                structuralUpdates: structural,
+              ),
+            ).called(1);
+            expect(manifest['sdk_hash'], 'pinned-sdk');
+            verify(
+              () => artifactBuilder.iosInterpreterBuildEnvironment = {
+                'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
+                'SHOREBIRD_AOT_PATCH_SDK_HASH': 'pinned-sdk',
+              },
+            ).called(1);
+            verify(
+              () => artifactBuilder.iosInterpreterBuildEnvironment =
+                  <String, String>{},
+            ).called(1);
+          },
+        );
+      }
 
       test('builds with the forwarded args and returns the result', () async {
         List<String>? receivedArgs;

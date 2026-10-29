@@ -6,6 +6,49 @@ import '../helpers.dart';
 void main() {
   useTempWorkingDirectory();
   group('ShorebirdYaml', () {
+    for (final enabled in [false, true]) {
+      test('serializes strict structural profile $enabled', () {
+        final yaml = ShorebirdYaml.fromJson({
+          'app_id': 'app',
+          'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+          'aot_patch_structural_updates': enabled,
+        });
+        expect(yaml.aotPatchStructuralUpdates, enabled);
+        expect(yaml.toJson()['aot_patch_structural_updates'], enabled);
+      });
+    }
+    for (final invalid in <Object?>['true', 'false', 1, null]) {
+      test('rejects non-boolean structural profile $invalid', () {
+        expect(
+          () => ShorebirdYaml.fromJson({
+            'app_id': 'app',
+            'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+            'aot_patch_structural_updates': invalid,
+          }),
+          throwsA(isA<Exception>()),
+        );
+      });
+    }
+    for (final mode in <String?>[null, 'native-aot']) {
+      test('rejects structural opt-in outside interpreter mode $mode', () {
+        expect(
+          () => checkedYamlDecode(
+            'app_id: app\n'
+            '${mode == null ? '' : 'aot_patch_runtime_mode: $mode\n'}'
+            'aot_patch_structural_updates: true\n',
+            (map) => ShorebirdYaml.fromJson(map!),
+          ),
+          throwsA(
+            isA<ParsedYamlException>().having(
+              (error) => error.message,
+              'message',
+              contains('aot_patch_runtime_mode: dart-bytecode-interpreter'),
+            ),
+          ),
+        );
+      });
+    }
+
     test('can be deserialized without flavors', () {
       const yaml = '''
 app_id: test_app_id

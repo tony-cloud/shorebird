@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
+import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:test/test.dart';
 
 import '../helpers.dart';
@@ -47,6 +48,69 @@ patch_public_key: pinned-public-key
   test('accepts compiled policy matching the private baseline manifest', () {
     IosBytecodeBuilder.validateCompiledPolicy(releaseWith(policy), manifest);
   });
+  test('older manifests retain body-only capabilities', () {
+    expect(IosBytecodeBuilder.structuralUpdatesForManifest(manifest), isFalse);
+    expect(
+      IosBytecodeBuilder.validateStructuralProfile(
+        const ShorebirdYaml(appId: 'app'),
+        manifest,
+      ),
+      isFalse,
+    );
+  });
+  test('structural manifests require a compiled release profile', () {
+    expect(
+      () => IosBytecodeBuilder.validateCompiledPolicy(
+        File('missing-release.zip'),
+        {...manifest, 'structural_updates': true},
+      ),
+      throwsA(isA<ArtifactBuildException>()),
+    );
+  });
+  for (final enabled in [false, true]) {
+    test('validates the compiled structural profile $enabled', () {
+      final baseline = {...manifest, 'structural_updates': enabled};
+      IosBytecodeBuilder.validateCompiledPolicy(
+        releaseWith('$policy\naot_patch_structural_updates: $enabled\n'),
+        baseline,
+      );
+      expect(
+        () => IosBytecodeBuilder.validateCompiledPolicy(
+          releaseWith('$policy\naot_patch_structural_updates: ${!enabled}\n'),
+          baseline,
+        ),
+        throwsA(isA<ArtifactBuildException>()),
+      );
+      expect(
+        () => IosBytecodeBuilder.validateStructuralProfile(
+          ShorebirdYaml(appId: 'app', aotPatchStructuralUpdates: !enabled),
+          baseline,
+        ),
+        throwsA(isA<ArtifactBuildException>()),
+      );
+    });
+  }
+  test(
+    'refuses malformed structural profile in manifest and bundled policy',
+    () {
+      for (final invalid in <Object?>['true', 1, null]) {
+        expect(
+          () => IosBytecodeBuilder.structuralUpdatesForManifest({
+            ...manifest,
+            'structural_updates': invalid,
+          }),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+      }
+      expect(
+        () => IosBytecodeBuilder.validateCompiledPolicy(
+          releaseWith('$policy\naot_patch_structural_updates: "false"\n'),
+          manifest,
+        ),
+        throwsA(isA<ArtifactBuildException>()),
+      );
+    },
+  );
   test('refuses a supplement from a different compiled baseline', () {
     expect(
       () => IosBytecodeBuilder.validateCompiledPolicy(

@@ -753,7 +753,9 @@ Building with Flutter $flutterVersionString to determine the release version...
       platform: patcher.releaseType.releasePlatform.name,
     );
 
-    patcher.releaseSupplementDirectory = supplementDirectory;
+    patcher
+      ..releaseSupplementDirectory = supplementDirectory
+      ..preflightReleaseArtifact(releaseArchive);
 
     // Don't built the patch artifact twice with the same Flutter revision.
     if (lastBuiltFlutterRevision != release.flutterRevision) {

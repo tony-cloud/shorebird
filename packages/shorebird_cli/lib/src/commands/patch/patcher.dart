@@ -111,6 +111,9 @@ More info: ${troubleshootingUrl.toLink()}.
   /// Extracted baseline supplement selected for this exact release.
   Directory? releaseSupplementDirectory;
 
+  /// Validates downloaded release policy before building its patch.
+  void preflightReleaseArtifact(File releaseArchive) {}
+
   /// The root directory of the current project.
   Directory get projectRoot => shorebirdEnv.getShorebirdProjectRoot()!;
 
