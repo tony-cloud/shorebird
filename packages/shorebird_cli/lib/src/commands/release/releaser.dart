@@ -117,22 +117,28 @@ To change the version of this release, change your app's version in your pubspec
         }.contains(releaseType) &&
         yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter';
     File? baseline;
+    List<String>? bytecodeDartDefines;
     Map<String, String>? previousEnvironment;
     if (interpreter) {
-      baseline =
-          await IosBytecodeBuilder(
-            projectRoot: projectRoot,
-            target: target,
-            flavor: flavor,
-          ).build(
-            outputPath: p.join(
-              projectRoot.path,
-              'build',
-              'ios_interpreter_baseline.bytecode',
-            ),
-            buildArgs: buildArgs,
-            structuralUpdates: yaml!.aotPatchStructuralUpdates ?? false,
-          );
+      await shorebirdFlutter.refreshVersionMetadata();
+      final bytecodeBuilder = IosBytecodeBuilder(
+        projectRoot: projectRoot,
+        target: target,
+        flavor: flavor,
+      );
+      bytecodeDartDefines = List.unmodifiable(
+        bytecodeBuilder.dartDefinesForBytecode(buildArgs),
+      );
+      baseline = await bytecodeBuilder.build(
+        outputPath: p.join(
+          projectRoot.path,
+          'build',
+          'ios_interpreter_baseline.bytecode',
+        ),
+        buildArgs: buildArgs,
+        dartDefines: bytecodeDartDefines,
+        structuralUpdates: yaml!.aotPatchStructuralUpdates ?? false,
+      );
       final measured = sha256.convert(baseline.readAsBytesSync()).toString();
       final configured = yaml.aotPatchBaseSnapshotHash;
       if (configured != null && configured != measured) {
@@ -190,18 +196,9 @@ To change the version of this release, change your app's version in your pubspec
                   : p.join(projectRoot.path, target ?? 'lib/main.dart'),
               from: projectRoot.path,
             ),
+            'dart_defines': bytecodeDartDefines,
             'defines_sha256': sha256
-                .convert(
-                  utf8.encode(
-                    jsonEncode(
-                      IosBytecodeBuilder(
-                        projectRoot: projectRoot,
-                        target: target,
-                        flavor: flavor,
-                      ).dartDefinesForBytecode(buildArgs),
-                    ),
-                  ),
-                )
+                .convert(utf8.encode(jsonEncode(bytecodeDartDefines)))
                 .toString(),
           }),
         );

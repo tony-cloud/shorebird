@@ -944,6 +944,75 @@ This may indicate that the patch contains native changes, which cannot be applie
             );
           });
 
+          test(
+            'reuses baseline Flutter metadata and accepts changed app defines',
+            () async {
+              const releasedDefines = [
+                'LICENSE_TYPE=free',
+                'FLUTTER_VERSION=3.45.0-0.0.pre.708',
+                'FLUTTER_CHANNEL=stable',
+                'FLUTTER_GIT_URL=https://baseline.example/flutter.git',
+                'FLUTTER_FRAMEWORK_REVISION=05484abcde',
+                'FLUTTER_ENGINE_REVISION=baseline12',
+                'FLUTTER_DART_VERSION=3.13.0 (build 0a)',
+              ];
+              final manifestFile = File(
+                p.join(
+                  patcher.releaseSupplementDirectory!.path,
+                  'baseline.json',
+                ),
+              );
+              final manifest =
+                  jsonDecode(manifestFile.readAsStringSync()) as Map;
+              manifest['dart_defines'] = releasedDefines;
+              manifest['defines_sha256'] = sha256
+                  .convert(utf8.encode(jsonEncode(releasedDefines)))
+                  .toString();
+              manifestFile.writeAsStringSync(jsonEncode(manifest));
+              await runWithOverrides(
+                () => patcher.buildInterpreterBytecodePatch([
+                  '--dart-define=LICENSE_TYPE=pro',
+                ]),
+              );
+              final compiledDefines =
+                  verify(
+                        () => artifactBuilder.buildDartBytecodeSnapshot(
+                          inputFilePath: any(named: 'inputFilePath'),
+                          outFilePath: any(named: 'outFilePath'),
+                          packageConfigPath: any(named: 'packageConfigPath'),
+                          dartDefines: captureAny(named: 'dartDefines'),
+                          experiments: any(named: 'experiments'),
+                          patchBasePath: any(named: 'patchBasePath'),
+                        ),
+                      ).captured.single
+                      as List<String>;
+              expect(compiledDefines, contains('LICENSE_TYPE=pro'));
+              expect(compiledDefines, isNot(contains('LICENSE_TYPE=free')));
+              expect(compiledDefines, containsAll(releasedDefines.skip(1)));
+              expect(
+                compiledDefines.where(
+                  (define) => define.startsWith('FLUTTER_VERSION='),
+                ),
+                ['FLUTTER_VERSION=3.45.0-0.0.pre.708'],
+              );
+            },
+          );
+
+          test('rejects corrupted captured baseline defines', () async {
+            final manifestFile = File(
+              p.join(patcher.releaseSupplementDirectory!.path, 'baseline.json'),
+            );
+            final manifest = jsonDecode(manifestFile.readAsStringSync()) as Map;
+            manifest['dart_defines'] = ['FLUTTER_VERSION=corrupted'];
+            manifest['defines_sha256'] = 'wrong-hash';
+            manifestFile.writeAsStringSync(jsonEncode(manifest));
+            await expectLater(
+              runWithOverrides(() => patcher.buildInterpreterBytecodePatch([])),
+              throwsA(isA<ArtifactBuildException>()),
+            );
+            verifyZeroInteractions(artifactBuilder);
+          });
+
           test('preflights the bundled profile before native compilation', () {
             final bytes = utf8.encode('aot_patch_structural_updates: true');
             final archive = Archive()

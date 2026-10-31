@@ -137,6 +137,66 @@ void main() {
       when(() => precacheProcessResult.stderr).thenReturn('');
     });
 
+    group('refreshVersionMetadata', () {
+      late File versionFile;
+
+      setUp(() {
+        versionFile =
+            File(
+                p.join(
+                  flutterDirectory.path,
+                  'bin',
+                  'cache',
+                  'flutter.version.json',
+                ),
+              )
+              ..createSync(recursive: true)
+              ..writeAsStringSync('{"frameworkRevision":"stale"}');
+      });
+
+      test('removes stale metadata before running the pinned tool', () async {
+        when(
+          () => process.run('flutter', ['--version', '--machine']),
+        ).thenAnswer(
+          (_) async {
+            expect(versionFile.existsSync(), isFalse);
+            versionFile.writeAsStringSync('{"frameworkRevision":"current"}');
+            return versionProcessResult;
+          },
+        );
+        when(() => versionProcessResult.exitCode).thenReturn(0);
+        await runWithOverrides(shorebirdFlutter.refreshVersionMetadata);
+        expect(versionFile.readAsStringSync(), contains('current'));
+      });
+
+      test('fails if the tool cannot regenerate metadata', () async {
+        when(
+          () => process.run('flutter', ['--version', '--machine']),
+        ).thenAnswer(
+          (_) async => versionProcessResult,
+        );
+        when(() => versionProcessResult.exitCode).thenReturn(1);
+        when(() => versionProcessResult.stderr).thenReturn('version failure');
+        await expectLater(
+          runWithOverrides(shorebirdFlutter.refreshVersionMetadata),
+          throwsA(isA<ProcessException>()),
+        );
+      });
+
+      test('fails if successful tool does not generate metadata', () async {
+        when(
+          () => process.run('flutter', ['--version', '--machine']),
+        ).thenAnswer(
+          (_) async => versionProcessResult,
+        );
+        when(() => versionProcessResult.exitCode).thenReturn(0);
+        await expectLater(
+          runWithOverrides(shorebirdFlutter.refreshVersionMetadata),
+          throwsA(isA<ProcessException>()),
+        );
+      });
+    });
+
     group('precacheArgs', () {
       group('when running on macOS', () {
         setUp(() {

@@ -391,6 +391,14 @@ To change the version of this release, change your app's version in your pubspec
         ).thenAnswer((_) async => true);
       });
 
+      const refreshedDefines = [
+        'FOO=bar',
+        'FLUTTER_VERSION=3.45.0-0.0.pre.708',
+        'FLUTTER_CHANNEL=stable',
+        'FLUTTER_FRAMEWORK_REVISION=05484abcde',
+        'FLUTTER_DART_VERSION=3.13.0 (build 0a)',
+      ];
+
       for (final structural in [false, true]) {
         test(
           'seals structural=$structural baseline policy and supplement',
@@ -413,6 +421,31 @@ To change the version of this release, change your app's version in your pubspec
               () => shorebirdEnv.shorebirdEngineRevision,
             ).thenReturn('pinned-sdk');
             when(() => shorebirdEnv.flutterDirectory).thenReturn(projectRoot);
+            final versionFile =
+                File(
+                    p.join(
+                      projectRoot.path,
+                      'bin',
+                      'cache',
+                      'flutter.version.json',
+                    ),
+                  )
+                  ..createSync(recursive: true)
+                  ..writeAsStringSync(
+                    jsonEncode({'frameworkVersion': '3.45.0-0.0.pre.704'}),
+                  );
+            when(() => shorebirdFlutter.refreshVersionMetadata()).thenAnswer(
+              (_) async {
+                versionFile.writeAsStringSync(
+                  jsonEncode({
+                    'frameworkVersion': '3.45.0-0.0.pre.708',
+                    'channel': 'stable',
+                    'frameworkRevision': '05484abcdef123',
+                    'dartSdkVersion': '3.13.0 (build 0a)',
+                  }),
+                );
+              },
+            );
             when(() => shorebirdFlutter.getConfig()).thenReturn({});
             when(
               () => artifactBuilder.iosInterpreterBuildEnvironment,
@@ -437,6 +470,10 @@ To change the version of this release, change your app's version in your pubspec
             );
             await runWithOverrides(
               () => releaser.runReleaseBuild((_, _) async {
+                // A later tool invocation must not change manifest inputs.
+                versionFile.writeAsStringSync(
+                  jsonEncode({'frameworkVersion': '3.45.0-0.0.pre.999'}),
+                );
                 // Flutter may recreate its supplement output during the build.
                 Directory(
                   p.join(projectRoot.path, 'build', 'test', 'shorebird'),
@@ -463,12 +500,20 @@ To change the version of this release, change your app's version in your pubspec
             final measured = sha256.convert([1, 2, 3]).toString();
             expect(manifest['base_snapshot_hash'], measured);
             expect(manifest['structural_updates'], structural);
+            expect(manifest['dart_defines'], refreshedDefines);
+            expect(
+              manifest['defines_sha256'],
+              sha256
+                  .convert(utf8.encode(jsonEncode(refreshedDefines)))
+                  .toString(),
+            );
+            verify(() => shorebirdFlutter.refreshVersionMetadata()).called(1);
             verify(
               () => artifactBuilder.buildDartBytecodeSnapshot(
                 inputFilePath: any(named: 'inputFilePath'),
                 outFilePath: any(named: 'outFilePath'),
                 packageConfigPath: any(named: 'packageConfigPath'),
-                dartDefines: any(named: 'dartDefines'),
+                dartDefines: refreshedDefines,
                 experiments: any(named: 'experiments'),
                 structuralUpdates: structural,
               ),

@@ -621,6 +621,39 @@ class ShorebirdFlutter {
     return '${version ?? 'unknown'} (${shortRevisionString(revision)})';
   }
 
+  /// Regenerates version metadata before compiling an interpreter baseline.
+  ///
+  /// Flutter can reuse flutter.version.json after a local checkout changes.
+  /// Let the pinned Flutter tool derive it before capturing compiler defines.
+  Future<void> refreshVersionMetadata() async {
+    final versionFile = File(
+      p.join(
+        shorebirdEnv.flutterDirectory.path,
+        'bin',
+        'cache',
+        'flutter.version.json',
+      ),
+    );
+    if (versionFile.existsSync()) versionFile.deleteSync();
+    final args = ['--version', '--machine'];
+    final result = await process.run(executable, args);
+    if (result.exitCode != ExitCode.success.code) {
+      throw ProcessException(
+        executable,
+        args,
+        'Failed to refresh Flutter version metadata: ${result.stderr}',
+        result.exitCode,
+      );
+    }
+    if (!versionFile.existsSync()) {
+      throw ProcessException(
+        executable,
+        args,
+        'Flutter did not generate ${versionFile.path}.',
+      );
+    }
+  }
+
   /// Returns the current Shorebird Flutter version and revision.
   /// Returns unknown if the version check fails.
   Future<String> getVersionAndRevision() async {

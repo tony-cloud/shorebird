@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
@@ -39,6 +40,7 @@ class IosBytecodeBuilder {
   Future<File> build({
     required String outputPath,
     required List<String> buildArgs,
+    List<String>? dartDefines,
     File? patchBase,
     bool structuralUpdates = false,
   }) async {
@@ -57,7 +59,7 @@ class IosBytecodeBuilder {
       inputFilePath: input.path,
       outFilePath: outputPath,
       packageConfigPath: packages.path,
-      dartDefines: dartDefinesForBytecode(buildArgs),
+      dartDefines: dartDefines ?? dartDefinesForBytecode(buildArgs),
       experiments: _buildArgValues(buildArgs, 'enable-experiment'),
       patchBasePath: patchBase?.path,
       structuralUpdates: structuralUpdates,
@@ -73,13 +75,16 @@ class IosBytecodeBuilder {
   static const _flutterFrameworkRevisionDefine = 'FLUTTER_FRAMEWORK_REVISION';
   static const _flutterEngineRevisionDefine = 'FLUTTER_ENGINE_REVISION';
   static const _flutterDartVersionDefine = 'FLUTTER_DART_VERSION';
-  static const _flutterReservedDefines = [
+  static const _flutterVersionDefines = [
     _flutterVersionDefine,
     _flutterChannelDefine,
     _flutterGitUrlDefine,
     _flutterFrameworkRevisionDefine,
     _flutterEngineRevisionDefine,
     _flutterDartVersionDefine,
+  ];
+  static const _flutterReservedDefines = [
+    ..._flutterVersionDefines,
     'FLUTTER_ENABLED_FEATURE_FLAGS',
   ];
   static const _runtimeFeatureFlags = [
@@ -209,7 +214,10 @@ class IosBytecodeBuilder {
   }
 
   /// Resolves project and Flutter defines identically for both builds.
-  List<String> dartDefinesForBytecode(List<String> buildArgs) {
+  List<String> dartDefinesForBytecode(
+    List<String> buildArgs, {
+    Map<String, Object?>? baselineManifest,
+  }) {
     final defines = <String>[];
     for (final defineFilePath in _buildArgValues(
       buildArgs,
@@ -225,11 +233,37 @@ class IosBytecodeBuilder {
       defines.add('FLUTTER_APP_FLAVOR=$flavor');
     }
     _assertNoReservedFlutterDefines(defines);
-    defines.addAll(_flutterVersionDartDefinesForBytecode());
+    defines.addAll(
+      _releasedFlutterVersionDefines(baselineManifest) ??
+          _flutterVersionDartDefinesForBytecode(),
+    );
     if (_enabledRuntimeFeatureDefinesForBytecode() case final featureDefine?) {
       defines.add(featureDefine);
     }
     return defines;
+  }
+
+  List<String>? _releasedFlutterVersionDefines(
+    Map<String, Object?>? manifest,
+  ) {
+    if (manifest == null || !manifest.containsKey('dart_defines')) return null;
+    final recorded = manifest['dart_defines'];
+    if (recorded is! List || recorded.any((value) => value is! String)) {
+      throw ArtifactBuildException(
+        'Interpreter baseline dart_defines must be a list of strings.',
+      );
+    }
+    if (sha256.convert(utf8.encode(jsonEncode(recorded))).toString() !=
+        manifest['defines_sha256']) {
+      throw ArtifactBuildException(
+        'Interpreter baseline Dart defines do not match defines_sha256.',
+      );
+    }
+    // Application defines may change for patches. Flutter version constants
+    // must retain the values compiled into the baseline static initializers.
+    return recorded.cast<String>().where((define) {
+      return _flutterVersionDefines.any((name) => define.startsWith('$name='));
+    }).toList();
   }
 
   void _assertNoReservedFlutterDefines(List<String> defines) {

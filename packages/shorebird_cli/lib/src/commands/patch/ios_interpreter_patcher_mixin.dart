@@ -306,13 +306,18 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       return;
     }
 
-    await IosBytecodeBuilder(
+    final bytecodeBuilder = IosBytecodeBuilder(
       projectRoot: projectRoot,
       target: target,
       flavor: flavor,
-    ).build(
+    );
+    await bytecodeBuilder.build(
       outputPath: _interpreterPatchBytecodeOutputPath,
       buildArgs: buildArgs,
+      dartDefines: bytecodeBuilder.dartDefinesForBytecode(
+        buildArgs,
+        baselineManifest: manifest,
+      ),
       patchBase: baseline,
       structuralUpdates: IosBytecodeBuilder.structuralUpdatesForManifest(
         manifest,
