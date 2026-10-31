@@ -11,6 +11,8 @@ import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/portable_zip_namespace_validator.dart';
+import 'package:shorebird_cli/src/archive_analysis/release_supplement_validator.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/cache_pruning.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
@@ -287,6 +289,58 @@ class ArtifactManager {
       final archive = ZipDecoder().decodeStream(inputStream);
       await extractArchiveToDisk(archive, outputDirectory.path);
       inputStream.closeSync();
+    });
+  }
+
+  /// Validates and extracts a release supplement containing only regular files
+  /// and directories. Every ZIP record is checked before extraction writes.
+  Future<void> extractReleaseSupplement({
+    required File zipFile,
+    required Directory outputDirectory,
+  }) async {
+    await Isolate.run(() async {
+      final input = InputFileStream(zipFile.path);
+      try {
+        final directory = const PortableZipNamespaceValidator(
+          'Release supplement',
+        ).readValidatedDirectory(input);
+        final headers = {
+          for (final header in directory.fileHeaders) header.filename: header,
+        };
+        // Decode the same open input that was validated, including local names.
+        input.position = 0;
+        final archive = ZipDecoder().decodeStream(input);
+        for (final entry in archive) {
+          final path = entry.name.replaceAll(r'\', '/');
+          final outputPath = p.joinAll([
+            outputDirectory.path,
+            ...path.split('/'),
+          ]);
+          if (path.endsWith('/')) {
+            await Directory(outputPath).create(recursive: true);
+            continue;
+          }
+          // The generic archive extractor skips directories and suppresses
+          // content write errors. Supplements must preserve both directories
+          // and failures so the caller can remove any partial output.
+          try {
+            final bytes = const ReleaseSupplementValidator()
+                .readValidatedContent(entry, headers[entry.name]!);
+            final output = OutputFileStream(outputPath);
+            try {
+              output.writeBytes(bytes);
+            } finally {
+              await output.close();
+            }
+          } finally {
+            // Drop one entry's decompressed buffer without closing the input
+            // shared by the remaining entries.
+            entry.clear();
+          }
+        }
+      } finally {
+        input.closeSync();
+      }
     });
   }
 

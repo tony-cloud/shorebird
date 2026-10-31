@@ -71,7 +71,7 @@ class _ControlledReleaseArtifactManager extends ArtifactManager {
   }
 
   @override
-  Future<void> extractZip({
+  Future<void> extractReleaseSupplement({
     required File zipFile,
     required Directory outputDirectory,
   }) async {
@@ -287,7 +287,7 @@ void main() {
         ),
       ).thenAnswer((_) async => File(''));
       when(
-        () => artifactManager.extractZip(
+        () => artifactManager.extractReleaseSupplement(
           zipFile: any(named: 'zipFile'),
           outputDirectory: any(named: 'outputDirectory'),
         ),
@@ -1138,6 +1138,67 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             ).called(1);
           });
 
+          for (final error in [
+            const FormatException('Unsafe ZIP path: untrusted\nname'),
+            const FileSystemException('Extraction write failed'),
+          ]) {
+            test('cleans up and stops patching on $error', () async {
+              late Directory output;
+              when(
+                () => artifactManager.extractReleaseSupplement(
+                  zipFile: any(named: 'zipFile'),
+                  outputDirectory: any(named: 'outputDirectory'),
+                ),
+              ).thenAnswer((invocation) async {
+                output =
+                    invocation.namedArguments[#outputDirectory] as Directory;
+                File(p.join(output.path, 'partial')).writeAsBytesSync([1]);
+                throw error;
+              });
+
+              await expectLater(
+                () => runWithOverrides(() => command.createPatch(patcher)),
+                exitsWithCode(ExitCode.software),
+              );
+
+              expect(output.existsSync(), isFalse);
+              verify(
+                () =>
+                    logger.err('Failed to extract release supplement safely.'),
+              ).called(1);
+              verifyNever(() => logger.err(any(that: contains('untrusted'))));
+              verifyNever(
+                () => artifactManager.extractZip(
+                  zipFile: any(named: 'zipFile'),
+                  outputDirectory: any(named: 'outputDirectory'),
+                ),
+              );
+              verifyNever(
+                () => patcher.buildPatchArtifact(
+                  releaseVersion: any(named: 'releaseVersion'),
+                ),
+              );
+              verifyNever(
+                () => patcher.createPatchArtifacts(
+                  appId: any(named: 'appId'),
+                  releaseId: any(named: 'releaseId'),
+                  releaseArtifact: any(named: 'releaseArtifact'),
+                  supplementDirectory: any(named: 'supplementDirectory'),
+                  releaseVersion: any(named: 'releaseVersion'),
+                ),
+              );
+              verifyNever(
+                () => patcher.uploadPatchArtifacts(
+                  appId: any(named: 'appId'),
+                  releaseId: any(named: 'releaseId'),
+                  metadata: any(named: 'metadata'),
+                  artifacts: any(named: 'artifacts'),
+                  track: any(named: 'track'),
+                ),
+              );
+            });
+          }
+
           test('deletes the extracted supplement once patched', () async {
             await runWithOverrides(() => command.createPatch(patcher));
 
@@ -1184,14 +1245,14 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
           });
 
           group('when the supplement contains an obfuscation map', () {
-            // Wire up extractZip to actually write the obfuscation_map.json
+            // Write the obfuscation_map.json when extracting the supplement
             // so PatchCommand's `if (obfuscationMapFile != null)` block
             // fires. The flutter-version gating that drops --strip on
             // Android 3.44+ depends on `release.flutterRevision` resolving
             // to a Version, so we mock that per-test.
             setUp(() {
               when(
-                () => artifactManager.extractZip(
+                () => artifactManager.extractReleaseSupplement(
                   zipFile: any(named: 'zipFile'),
                   outputDirectory: any(named: 'outputDirectory'),
                 ),

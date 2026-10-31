@@ -557,10 +557,18 @@ Building with Flutter $flutterVersionString to determine the release version...
     File? obfuscationMapFile;
     if (supplementArchive != null) {
       supplementDirectory = Directory.systemTemp.createTempSync();
-      await artifactManager.extractZip(
-        zipFile: supplementArchive,
-        outputDirectory: supplementDirectory,
-      );
+      try {
+        await artifactManager.extractReleaseSupplement(
+          zipFile: supplementArchive,
+          outputDirectory: supplementDirectory,
+        );
+      } on Object {
+        supplementDirectory.deleteTemporarySync();
+        // Archive paths can contain control characters; keep this error safe
+        // to display without echoing untrusted entry names.
+        logger.err('Failed to extract release supplement safely.');
+        throw ProcessExit(ExitCode.software.code);
+      }
       final candidateMapFile = File(
         p.join(supplementDirectory.path, 'obfuscation_map.json'),
       );

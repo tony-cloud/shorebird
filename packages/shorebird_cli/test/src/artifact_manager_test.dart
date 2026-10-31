@@ -723,6 +723,56 @@ void main() {
       });
     });
 
+    group('extractReleaseSupplement', () {
+      test(
+        'preserves all regular supplement artifacts and directories',
+        () async {
+          final root = createSystemTemp();
+          final output = Directory(p.join(root.path, 'output'))..createSync();
+          final contents = <String, List<int>>{
+            'obfuscation_map.json': [123, 125],
+            'baseline.bytecode': [0, 1, 255, 42],
+            'baseline.json': [123, 125, 10],
+            'App.ct.link': [1, 2, 3],
+            'App.class_table.json': [123, 125],
+            'App.ft.link': [4, 5, 6],
+            'App.field_table.json': [123, 125],
+            'App.dt.link': [7, 8, 9],
+            'App.dispatch_table.json': [123, 125],
+            'App.dd.link': [10, 11],
+            'App.dd_callers.link': [12, 13],
+            'App.dd_resolution.tsv': [65, 9, 66],
+            'future/metadata.bin': [0, 7, 128, 255],
+          };
+          final archive = Archive()..add(ArchiveFile.directory('empty/'));
+          for (final entry in contents.entries) {
+            archive.add(
+              ArchiveFile(entry.key, entry.value.length, entry.value),
+            );
+          }
+          final zip = File(p.join(root.path, 'supplement.zip'))
+            ..writeAsBytesSync(ZipEncoder().encode(archive));
+
+          await artifactManager.extractReleaseSupplement(
+            zipFile: zip,
+            outputDirectory: output,
+          );
+
+          for (final entry in contents.entries) {
+            expect(
+              File(p.join(output.path, entry.key)).readAsBytesSync(),
+              entry.value,
+            );
+          }
+          expect(Directory(p.join(output.path, 'empty')).existsSync(), isTrue);
+          expect(
+            output.listSync(recursive: true).whereType<File>(),
+            hasLength(contents.length),
+          );
+        },
+      );
+    });
+
     group('androidArchsDirectory', () {
       late Directory projectRoot;
       late Directory strippedNativeLibsDirectory;
