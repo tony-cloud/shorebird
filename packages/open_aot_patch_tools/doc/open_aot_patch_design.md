@@ -2,9 +2,9 @@
 
 This package produces compact, flavor-aware patch artifacts without relying on
 `DART_DYNAMIC_MODULES`. Native AOT artifacts are still useful for host,
-Android, macOS, and development-device iOS validation, but iOS App Store patch
-delivery must use a no-DDM interpreter runtime mode instead of downloaded native
-snapshot text.
+Android, macOS, Linux, Windows, and development-device iOS validation. The iOS
+App Store candidate route uses the no-DDM interpreter runtime mode; App Store
+acceptance remains a separate distribution gate.
 
 The public-source boundary is documented in
 `../../../OPEN_SOURCE_REPLACEMENTS.md`. The Shorebird runtime updater itself is
@@ -19,7 +19,7 @@ The artifact metadata names the runtime mode required by the patch payload:
 - `native-aot`: patched isolate snapshot data/instructions are selected before
   isolate startup, matching Flutter's existing snapshot mapping flow. VM data
   and VM instructions remain from the base runtime.
-- `dart-bytecode-interpreter`: iOS App Store-safe payloads are data consumed by
+- `dart-bytecode-interpreter`: iOS candidate payloads are data consumed by
   already-reviewed VM interpreter code. This is not `DART_DYNAMIC_MODULES`, and
   the VM must reject dynamic-module payloads for this project.
 
@@ -35,15 +35,22 @@ This keeps the design compatible with iOS constraints:
 
 ## Delivery Security
 
-AES-256-GCM protects downloaded patch artifacts in transit and at rest. The
-metadata is authenticated as AAD, and the decrypted compact payload is
-hash-checked. When a base snapshot is supplied, `verify --base=<file>` also
+AES-256-GCM protects the encrypted delivery artifact. Its metadata is
+authenticated as AAD, and the decrypted compact payload is hash-checked. Native
+reconstruction writes a plaintext executable to the installed patch cache, so
+this envelope does not protect that native cache at rest. The iOS interpreter
+path retains the encrypted artifact and passes decrypted bytecode as data to the
+VM. When a base snapshot is supplied, `verify --base=<file>` also
 reconstructs the patch snapshot and checks it against the metadata
 `patch_snapshot_hash`.
 
-AES is not the compatibility boundary. Apps should still pin or sign patch
-metadata and enforce app id, build id, flavor id, license type, SDK hash, base
-snapshot hash, target OS, and target architecture before accepting a patch.
+AES does not replace the compatibility or publisher-authentication checks.
+The production iOS interpreter route requires managed artifact signing,
+`patch_verification: strict` and `patch_response_verification: required`, including
+authenticated patch offers and rollback responses. Unsigned, customer-signed or
+`install_only` interpreter release configurations are rejected. Verifiers also
+enforce app id, build id, flavor id, license type, SDK hash, base snapshot hash,
+target OS and architecture.
 For license upgrades, artifacts may also include `base_flavor_id` and
 `base_license_type`; verifiers can require those fields to prove the patch is a
 specific transition such as `free -> pro` rather than a generic pro artifact.
@@ -84,9 +91,11 @@ native-AOT handoff for iOS App Store delivery.
 For `dart-bytecode-interpreter` artifacts, the linker always emits
 `full-snapshot` payloads. The current open runtime has no compact-diff
 reconstruction bridge inside the VM, so interpreter patches must decrypt to
-bytecode data. Product iOS now has an initial AOT-safe replacement mapper for
-bytecode that describes already-loaded libraries/classes/functions; broader
-payload shapes still need compiler and runtime work.
+bytecode data. The default profile replaces bodies of existing functions. An
+explicit structural release profile additionally supports additive declarations
+and fields within the contract below. Compact interpreter reconstruction remains
+unimplemented; a patch delta produced with `--patch-base` is still packaged as a
+`full-snapshot` interpreter payload rather than `binary-diff-v1`.
 
 The binary diff format is deterministic and reconstructs the full patched
 snapshot from the base snapshot before runtime loading. Future SDK-integrated
@@ -108,6 +117,39 @@ It compiles a `free` base AOT snapshot and a `pro` patch snapshot, reuses the
 base obfuscation map for the patch build, encrypts the patch artifact, verifies
 wrong-key and wrong-flavor failures, reconstructs the patched `.vmcode`, and
 runs it to confirm `license:pro` and `pro-feature:enabled`.
+
+## Structural Interpreter Profile
+
+`aot_patch_structural_updates: true` opts the native release, full baseline
+bytecode and patch compiler into the same structural profile. Flutter forwards
+`--no-tfa --shorebird-structural-patching` to the AOT frontend and the structural
+flag to the snapshot and bytecode compilers. Patches compile with `--patch-base`
+against the private release supplement's `baseline.bytecode`. Its `baseline.json`
+records the immutable capability and identity; a patch cannot enable the profile
+for a body-only release. Both profiles prohibit interpreter obfuscation.
+
+The profile supports new libraries, generic classes, functions, methods,
+constructors and static fields. Existing function bodies can change while their
+signatures remain fixed. Added instance fields on existing ordinary mutable
+classes use GC-traced VM extension storage, preserving old object layout and
+field values. Declaration initializers run lazily for existing objects; new
+constructors initialize new objects normally. Added fields need a declaration
+initializer, nullable default or `late`; constructor-only nonnullable
+initialization cannot replay construction for existing objects.
+
+Removed declarations, changed existing signatures/initializers/fields,
+inheritance, interfaces and type parameters are rejected. Existing const, deeply
+immutable and native-wrapper classes cannot gain instance fields. New
+native/external functions and replacement `dart:` libraries are unsupported.
+This is additive structural support, not unrestricted replacement parity.
+
+Installation occurs once in a fresh single-isolate group before it becomes
+runnable. Once declaration registration starts, failure poisons the group; the
+embedder must destroy it and recreate a fresh baseline group. Host development
+and PRODUCT runtime tests cover interface dispatch, added fields, compacting GC,
+weak cycles, isolate copies and the real encrypted API. See the
+[SDK protocol](../../../../dart-sdk/docs/shorebird-structural-patching.md) for the
+complete compiler/runtime contract and acceptance commands.
 
 ## iOS App Store Handoff
 
@@ -159,7 +201,7 @@ dart run open_aot_patch_tools link \
   --full-snapshot=true
 ```
 
-For App Store-safe iOS artifacts, the linker must use:
+For the iOS interpreter candidate route, the linker uses:
 
 ```sh
 dart run open_aot_patch_tools link \
@@ -176,7 +218,6 @@ dart run open_aot_patch_tools link \
   --target-os=ios \
   --target-arch=arm64 \
   --runtime-mode=dart-bytecode-interpreter \
-  --obfuscation-map-hash=<sha256-of-base-obfuscation-map> \
   --offline-expires-at=2030-01-01T00:00:00Z
 ```
 
@@ -193,9 +234,14 @@ The open CLI now follows that route for `shorebird patch ios`. By default, iOS
 patch builds compile the patch target to Dart bytecode with `dart2bytecode`,
 write `build/ios_interpreter_patch.bytecode`, wrap that payload as
 `open-aot-vmcode-encrypted-v1`, and upload the encrypted interpreter artifact.
-The bytecode compile forwards user Dart defines, `FLUTTER_APP_FLAVOR`, and the
-standard Flutter version/revision/Dart SDK defines from
-`bin/cache/flutter.version.json`. It also mirrors Flutter's
+Before baseline compilation, the CLI regenerates Flutter version metadata with
+the pinned tool. It captures the exact resolved Dart defines once, passes those
+values to the baseline compiler, and stores them with their hash in
+`baseline.json`. Patches retain the six recorded Flutter version/revision/Dart
+SDK defines, while user application defines and `FLUTTER_APP_FLAVOR` may change.
+Legacy manifests without captured defines retain the old resolution behavior;
+a release whose bytecode and manifest disagreed needs a fresh baseline.
+The bytecode compile also mirrors Flutter's
 `FLUTTER_ENABLED_FEATURE_FLAGS` define for enabled runtime-id features. User
 attempts to override those reserved Flutter defines are rejected.
 `aot_patch_bytecode_path` and `SHOREBIRD_IOS_INTERPRETER_PATCH_PATH` are local
@@ -218,6 +264,9 @@ metadata:
 
 ```yaml
 aot_patch_runtime_mode: dart-bytecode-interpreter
+patch_verification: strict
+patch_response_verification: required
+aot_patch_structural_updates: false # true only for an opted-in release baseline
 aot_patch_key_id: test-key
 aot_patch_app_build_id: 1.2.3+4
 aot_patch_base_flavor_id: free
@@ -233,10 +282,12 @@ generated bytecode payload.
 
 Set `SHOREBIRD_AOT_PATCH_KEY_HEX` when running the CLI so the key is not bundled
 with the reviewed app. Embedding `aot_patch_key_hex` in `shorebird.yaml` remains
-a development bridge only; strict iOS route checks reject it. The production
-replacement should supply the runtime AES key through an app-owned callback or
-platform key source while keeping the same VM validation and bytecode reload
-path.
+a development bridge only; strict iOS route checks reject it. The implemented
+`FlutterDartProject.shorebirdAotPatchKeyProvider` supplies the runtime AES key from
+an app-owned source. Native encrypted delivery has the equivalent
+`shorebird_set_patch_decryption_key_provider` callback. Provisioning from an
+authenticated app service remains the application's responsibility; never derive
+a secret from a public device identifier.
 
 The Flutter engine patch cache is prepared for this handoff:
 
@@ -248,28 +299,40 @@ The Flutter engine patch cache is prepared for this handoff:
   that list is reserved for native snapshot symbol lookup.
 - Encrypted interpreter artifacts are decrypted to data and handed to the VM
   patch API; no downloaded native text is mapped executable.
-- Product iOS includes the first no-DDM function replacement mapper for changed
-  existing functions. New libraries/classes/top-level helpers and compact
-  interpreter reconstruction remain future work.
+- Product iOS includes no-DDM body replacement and the explicit additive
+  structural profile. Compact interpreter reconstruction remains future work.
 - VM snapshot symbols continue to resolve from the signed base App.framework.
 
-The macOS device/simulator verification pass should build the same
-`license_flavor_patch_test` flavor pair with `--target-os=ios`,
-`--target-arch=arm64`, and `--runtime-mode=dart-bytecode-interpreter`, install
-the encrypted `free -> pro` patch, confirm the status label changes to
-`license:pro` / `pro-feature:enabled`, and confirm wrong-key and wrong-flavor
-artifacts fail before the isolate starts. The current open runtime has the
-metadata, SDK safety gate, encrypted artifact-to-bytecode handoff, no-DDM VM API
-guard, and initial product-AOT replacement mapper; the compatible interpreter
-payload compiler, production key callback, compact interpreter reconstruction,
-and real-device behavior verification remain the next implementation steps.
+Current acceptance evidence is recorded in the workspace
+[platform testing record](../../../../docs/PLATFORM_TESTING.md). Host development
+and PRODUCT runtime tests cover the implemented structural profile and encrypted
+C API. On October 29, a distribution-signed structural release displayed
+`license:free` on a physical iPad without a debugger. That establishes baseline
+startup only. Patch compilation exposed nullable FFI reader and Flutter metadata
+consistency defects; their fixes require a new release and the complete
+publish/download/install/restart test. No current device structural patch success
+is claimed. Historical June seeded proofs do not validate the current merged
+profile. TestFlight/App Store distribution and size/performance measurements
+remain outstanding.
+
+The supported native CI matrix runs by default; web is an experimental manual
+build only. Run
+[40803323899](https://github.com/tony-cloud/shorebird-workspace/actions/runs/40803323899)
+completed with 27 passed, 2 failed and 5 skipped jobs, including Windows SDK
+configuration and engine-packaging failures. Follow-up verification remains
+pending; the available artifacts do not yet establish complete all-platform
+acceptance.
 
 ## Obfuscation
 
-Release and patch builds should both use Dart `--obfuscate`. Patch builds should
-pass the release build's obfuscation map through
-`gen_snapshot --load-obfuscation-map=<file>` so existing symbols keep their
-release names and new patch-only symbols receive fresh names without collisions.
+Interpreter release and patch builds must not use `--obfuscate`, including the
+structural profile. The mapper requires stable Dart declaration identities, and
+the CLI rejects obfuscated interpreter releases and patches.
+
+For supported native-AOT builds that use name obfuscation, reuse the release
+obfuscation map with `gen_snapshot --load-obfuscation-map=<file>` so existing
+symbols retain their release names. Bind its hash in artifact metadata. This
+native-AOT flow does not enable obfuscation for interpreter patches.
 
 ## Control-Flow Obfuscation Plan
 

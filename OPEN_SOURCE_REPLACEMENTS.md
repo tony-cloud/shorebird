@@ -1,6 +1,9 @@
 # Open Replacement Audit
 
-Last verified: 2026-06-25.
+Status reconciled: 2026-10-31. See the workspace
+[platform testing record](../docs/PLATFORM_TESTING.md) for dated evidence and
+remaining acceptance gates. The current replacement is not fully validated on
+all supported platforms.
 
 This workspace is intended to build and operate without closed Shorebird
 services or closed SDK artifacts. Local forks/submodules are the source of truth:
@@ -55,7 +58,7 @@ Override these values with `SHOREBIRD_HOSTED_URL`,
 `SHOREBIRD_ARTIFACT_BASE_URL`, `SHOREBIRD_FLUTTER_STORAGE_BASE_URL`, and
 `SHOREBIRD_FLUTTER_GIT_URL` when pointing the CLI at a public mirror.
 Full SDK CI runs upload `open-shorebird-artifact-mirror`, which is assembled
-from the produced patch-tool, metadata, engine, and web artifacts. They also
+from the produced patch-tool, metadata, engine, and optional web artifacts. They also
 upload `open-shorebird-release-manifest`, which validates checksum sidecars and
 records provenance for the CLI, server, SDK, engine, and mirror archives. After
 downloading CI artifacts manually, run the root
@@ -87,13 +90,51 @@ The root workflow `.github/workflows/open-shorebird-ci.yml` builds:
 - public updater `patch-*.zip` mirror artifacts
 - self-hosted `shorebird-server` binaries
 - custom Dart SDK artifacts
-- Linux, Android, web, iOS, and macOS engine/SDK artifacts on manual
-  `full_sdk_build=true` runs
+- the native SDK/engine matrix for Linux, Android, iOS, macOS, and Windows by
+  default on pushes and pull requests; manual dispatch can disable heavy builds
+  with `full_sdk_build=false`
+- experimental web SDK artifacts only on manual dispatch with
+  `run_unsupported_web_build=true`; web is excluded from the supported matrix
 
 `../scripts/verify_ci_workflow.sh` is the executable contract for this audit. It
 rejects closed hosted defaults, `DART_DYNAMIC_MODULES=true`, legacy
 `aot-tools.dill` publishing, missing checksum sidecars, missing source tests, and
 missing required artifact jobs.
+
+## Interpreter Profiles and Evidence
+
+The default iOS interpreter profile replaces existing function bodies. A release
+can opt into `aot_patch_structural_updates: true` to support additive libraries,
+classes, functions, methods, constructors, static fields, and instance fields on
+existing ordinary mutable classes. Flutter forwards the structural compiler
+profile with `--no-tfa`; the same profile must be present in the native release,
+full bytecode baseline, and patch delta. The CLI binds this capability to the
+released baseline. An old body-only release cannot gain structural capability
+through a patch.
+
+Existing signatures, initializers, inheritance and field definitions cannot
+change, and declarations cannot be removed. Added fields on existing const,
+deeply immutable or native-wrapper classes are unsupported. Constructor-only
+nonnullable fields need a declaration initializer or `late` for existing objects.
+Interpreter release and patch builds prohibit obfuscation because declaration
+identities must remain stable. See the
+[SDK structural protocol and limitations](../dart-sdk/docs/shorebird-structural-patching.md).
+
+Host development and PRODUCT runtime tests cover structural dispatch, added
+fields, GC, cross-isolate copies, and the actual encrypted install API. On
+October 29, a distribution-signed structural baseline rendered `license:free` on
+a physical iPad without a debugger. That is baseline startup evidence only; no
+current structural patch has completed the device download/install/restart
+lifecycle. Patch compilation exposed a nullable FFI reader defect and mismatched
+Flutter version metadata. Their fixes require a fresh release and device test.
+Earlier June seeded patch results describe older snapshots.
+
+CI run [40803323899](https://github.com/tony-cloud/shorebird-workspace/actions/runs/40803323899)
+completed with 27 passed, 2 failed and 5 skipped jobs. Windows SDK configuration
+and Windows engine packaging failed; the engine itself compiled. Follow-up
+verification after local fixes remains pending. This run does not establish a
+complete publishable all-platform artifact mirror. Size and performance impact
+have not been benchmarked, and App Store/TestFlight distribution remains unproven.
 
 ## Security Boundary
 
@@ -101,10 +142,29 @@ The open updater, local server, CLI, and patch tools must enforce:
 
 - patch metadata compatibility: app id, release/build id, platform, arch,
   SDK hash, base snapshot hash, flavor id, and license type
-- cryptographic integrity through hash pinning/signing where supported
-- AES-GCM delivery confidentiality and tamper detection for encrypted interpreter
-  payloads
+- artifact signatures and authenticated update/rollback responses for managed
+  signing, with strict signature verification at boot for iOS interpreter releases
+- AES-GCM confidentiality and tamper detection for encrypted interpreter payloads
+  and the native encrypted delivery envelope
 - limited offline-license expiry through `offline_expires_at`
+
+The iOS interpreter route requires managed signing, `patch_verification: strict`
+and `patch_response_verification: required`; unsigned releases, customer signing
+and bundled `aot_patch_key_hex` values are rejected by the strict route. The
+implemented `FlutterDartProject.shorebirdAotPatchKeyProvider` callback supplies
+runtime AES keys from an app-owned source. The CLI takes its producer key from
+`SHOREBIRD_AOT_PATCH_KEY_HEX`. Applications must provision keys through their
+own authenticated service; a public device identifier is not a secret.
+
+Native encrypted delivery uses the app-owned
+`shorebird_set_patch_decryption_key_provider` callback and authenticated server
+response metadata. The updater reconstructs the executable into a plaintext
+installed cache. Encrypted delivery does not provide native executable at-rest
+confidentiality. Native customer signing requires explicit
+`patch_response_verification: optional` until a publisher supplies a response
+signing service. Existing tests cover signed responses, rollback, key rejection,
+restart persistence and boot identity; they do not prove resistance to complete
+device-storage rollback.
 
 Open replacement work should preserve Shorebird-compatible protocol shapes where
 the CLI/updater expect them, while keeping service origins, SDK builds, and patch
