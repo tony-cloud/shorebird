@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:args/args.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:platform/platform.dart';
@@ -10,6 +11,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/commands/commands.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
+import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -34,6 +36,7 @@ void main() {
     late ShorebirdEnv shorebirdEnv;
     late Windows windows;
     late WindowsPatcher patcher;
+    late ShorebirdLogger logger;
 
     R runWithOverrides<R>(R Function() body) {
       return runScoped(
@@ -45,6 +48,7 @@ void main() {
           powershellRef.overrideWith(() => powershell),
           shorebirdEnvRef.overrideWith(() => shorebirdEnv),
           windowsRef.overrideWith(() => windows),
+          loggerRef.overrideWith(() => logger),
         },
       );
     }
@@ -64,6 +68,8 @@ void main() {
       powershell = MockPowershell();
       shorebirdEnv = MockShorebirdEnv();
       windows = MockWindows();
+      logger = MockShorebirdLogger();
+      when(() => logger.progress(any())).thenReturn(MockProgress());
 
       when(
         () => artifactManager.getWindowsReleaseDirectory(),
@@ -108,6 +114,60 @@ void main() {
     test('patches data/app.so in the release directory', () {
       expect(runWithOverrides(() => patcher.appDirectory), releaseDirectory);
       expect(patcher.dartLibraryPathSegments, ['data', 'app.so']);
+    });
+
+    group('validates archives before extraction', () {
+      File archiveWith(String path) {
+        final archive = Archive()..addFile(ArchiveFile(path, 1, [1]));
+        return File('${releaseDirectory.path}/release.zip')
+          ..writeAsBytesSync(ZipEncoder().encode(archive));
+      }
+
+      for (final discoverVersion in [true, false]) {
+        final operation = discoverVersion ? 'version lookup' : 'patch creation';
+        Future<Object?> invoke(File archive) => runWithOverrides(
+          () => discoverVersion
+              ? patcher.extractReleaseVersionFromArtifact(archive)
+              : patcher.createPatchArtifacts(
+                  appId: 'app',
+                  releaseId: 1,
+                  releaseArtifact: archive,
+                ),
+        );
+
+        test(
+          '$operation rejects an invalid asset path before extraction',
+          () async {
+            final archive = archiveWith('data/flutter_assets/CON.txt');
+            await expectLater(invoke(archive), throwsFormatException);
+            verifyNever(
+              () => artifactManager.extractZip(
+                zipFile: any(named: 'zipFile'),
+                outputDirectory: any(named: 'outputDirectory'),
+              ),
+            );
+            verifyNever(() => powershell.getProductVersion(any()));
+          },
+        );
+
+        test('$operation allows a valid archive to reach extraction', () async {
+          final archive = archiveWith('data/app.so');
+          final reachedExtractor = StateError('mock extractor reached');
+          when(
+            () => artifactManager.extractZip(
+              zipFile: any(named: 'zipFile'),
+              outputDirectory: any(named: 'outputDirectory'),
+            ),
+          ).thenThrow(reachedExtractor);
+          await expectLater(invoke(archive), throwsA(same(reachedExtractor)));
+          verify(
+            () => artifactManager.extractZip(
+              zipFile: archive,
+              outputDirectory: any(named: 'outputDirectory'),
+            ),
+          ).called(1);
+        });
+      }
     });
 
     group('buildApp', () {

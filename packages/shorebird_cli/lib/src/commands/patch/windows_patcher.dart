@@ -5,6 +5,7 @@ import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/archive_analysis/windows_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
+import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/desktop_patcher.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
@@ -53,6 +54,31 @@ class WindowsPatcher extends DesktopPatcher {
 
   @override
   List<String> get dartLibraryPathSegments => const ['data', 'app.so'];
+
+  @override
+  Future<String> extractReleaseVersionFromArtifact(File artifact) async {
+    // Version discovery can run before the normal archive comparison.
+    await archiveDiffer.validateArchive(artifact);
+    return super.extractReleaseVersionFromArtifact(artifact);
+  }
+
+  @override
+  Future<Map<Arch, PatchArtifactBundle>> createPatchArtifacts({
+    required String appId,
+    required int releaseId,
+    required File releaseArtifact,
+    Directory? supplementDirectory,
+    String? releaseVersion,
+  }) async {
+    await archiveDiffer.validateArchive(releaseArtifact);
+    return super.createPatchArtifacts(
+      appId: appId,
+      releaseId: releaseId,
+      releaseArtifact: releaseArtifact,
+      supplementDirectory: supplementDirectory,
+      releaseVersion: releaseVersion,
+    );
+  }
 
   @override
   Future<Directory> buildApp({

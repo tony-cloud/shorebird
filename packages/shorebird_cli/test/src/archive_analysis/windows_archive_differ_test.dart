@@ -18,6 +18,8 @@ void main() {
       'data/flutter_assets/NativeAssetsManifest.json',
       r'data\flutter_assets\NativeAssetsManifest.json',
       'DATA/FLUTTER_ASSETS/NATIVEASSETSMANIFEST.JSON',
+      'data/flutter_aſſets/NativeAssetsManifest.json',
+      'data/flutter_assets/NativeAſſetsManifeſt.json',
     ]) {
       test('recognizes frozen lookup map $manifest', () async {
         final bytes = utf8.encode('{"native-assets":{}}');
@@ -95,6 +97,201 @@ void main() {
           expect(differ.isNativeFilePath(path), isFalse);
         });
       }
+    });
+
+    group('archive namespace', () {
+      Future<void> expectRejected(File archive) async {
+        await expectLater(
+          differ.validateArchive(archive),
+          throwsFormatException,
+        );
+        await expectLater(differ.fileHashes(archive), throwsFormatException);
+      }
+
+      for (final path in [
+        '',
+        '/',
+        '/data/image.png',
+        r'\data\image.png',
+        r'\\server\share\image.png',
+        'C:/data/image.png',
+        r'C:\data\image.png',
+        'C:image.png',
+        '../image.png',
+        'data/../image.png',
+        r'data\..\image.png',
+        'data/./image.png',
+        'data//image.png',
+        'data/image.png/',
+        'data/image.png.',
+        'data/image.png ',
+        'data./image.png',
+        'data /image.png',
+        'data/image.png:stream',
+        'data/image.png\x00',
+        'data/line\nbreak.png',
+        'data/im<age.png',
+        'data/im>age.png',
+        'data/im"age.png',
+        'data/im|age.png',
+        'data/im?age.png',
+        'data/im*age.png',
+        'CON',
+        'data/nUl.txt',
+        'data/NUL .txt',
+        'data/NUL .txt/image.png',
+        'data/PRN/image.png',
+        'AUX.json',
+        'COM1.txt',
+        'COM1 .txt',
+        'lpt9',
+        'COM¹.txt',
+        'LPT²/image.png',
+        r'CONIN$',
+        r'conout$.txt',
+        r'CLOCK$',
+      ]) {
+        test('rejects unsafe nonnative Windows path ${jsonEncode(path)}', () {
+          return expectRejected(
+            _writeZip('unsafe.zip', [
+              (path, [1]),
+            ]),
+          );
+        });
+      }
+
+      for (final aliases in [
+        ('data/app.so', 'DATA/APP.SO'),
+        ('data/σ.png', 'DATA/ς.PNG'),
+        ('data/flutter_assets/image.png', r'DATA\FLUTTER_ASSETS\IMAGE.PNG'),
+        ('data/', 'DATA/'),
+        ('data/', r'data\'),
+        ('data', 'DATA/'),
+      ]) {
+        test('rejects duplicate nonnative identities $aliases', () async {
+          await expectRejected(
+            _writeZip('duplicate.zip', [
+              (aliases.$1, []),
+              (aliases.$2, []),
+            ]),
+          );
+        });
+      }
+
+      for (final parentFirst in [true, false]) {
+        test(
+          'rejects file ancestors regardless of entry order $parentFirst',
+          () {
+            final entries = [
+              ('plugins', [1]),
+              (r'PLUGINS\nested\plugin.dll', [2]),
+            ];
+            return expectRejected(
+              _writeZip(
+                'ancestor.zip',
+                parentFirst ? entries : entries.reversed.toList(),
+              ),
+            );
+          },
+        );
+      }
+
+      test('rejects Unicode case aliases for file ancestors', () {
+        return expectRejected(
+          _writeZip('ancestor.zip', [
+            ('σ', [1]),
+            ('ς/plugin.dll', [2]),
+          ]),
+        );
+      });
+
+      test('rejects nonnative local and central filename disagreement', () {
+        final archive = _writeZip('alias.zip', [
+          ('data/one.png', [1]),
+        ]);
+        final bytes = archive.readAsBytesSync()
+          ..setRange(30, 42, utf8.encode('data/two.png'));
+        archive.writeAsBytesSync(bytes);
+        return expectRejected(archive);
+      });
+
+      for (final attributes in [
+        0xa1ff0000, // Symbolic link.
+        0x11ff0000, // FIFO.
+        0x21ff0000, // Character device.
+        0x61ff0000, // Block device.
+        0xc1ff0000, // Socket.
+        0x41ff0000, // Directory without a trailing separator.
+        0x10, // DOS directory without a trailing separator.
+        0x08, // DOS volume label.
+        0x40, // Windows device.
+        0x400, // Windows reparse point.
+      ]) {
+        test('rejects nonnative special type $attributes', () {
+          final archive = _writeZip('special.zip', [
+            ('data/image.png', [1]),
+          ], attributes: attributes);
+          return expectRejected(archive);
+        });
+      }
+
+      test('rejects a regular file marked with a directory separator', () {
+        return expectRejected(
+          _writeZip('directory.zip', [
+            ('data/', []),
+          ], attributes: 0x81a40000),
+        );
+      });
+
+      test(
+        'supports directory records, implicit parents and Windows names',
+        () async {
+          final archive = _writeZip('safe.zip', [
+            ('plugins/', []),
+            (r'plugins\Nested\', []),
+            (r'plugins\Nested\Plugin.DLL', [1]),
+            ('data/app.so', [2]),
+            ('data/flutter_assets/Com10 café.png', [3]),
+            ('data/flutter_assets/.metadata', [4]),
+            ('data/flutter_assets/image .png', [5]),
+          ]);
+          await expectLater(differ.validateArchive(archive), completes);
+          expect(await differ.fileHashes(archive), {
+            'plugins/': '0',
+            r'plugins\Nested\': '0',
+            r'plugins\Nested\Plugin.DLL': sha256.convert([1]).toString(),
+            'data/app.so': getCrc32([2]).toString(),
+            'data/flutter_assets/Com10 café.png': getCrc32([3]).toString(),
+            'data/flutter_assets/.metadata': getCrc32([4]).toString(),
+            'data/flutter_assets/image .png': getCrc32([5]).toString(),
+          });
+        },
+      );
+
+      for (final attributes in [0x10, 0x41ed0010]) {
+        test('supports ordinary directory attributes $attributes', () async {
+          final archive = _writeZip('directory.zip', [
+            ('data/', []),
+          ], attributes: attributes);
+          await expectLater(differ.validateArchive(archive), completes);
+          expect(await differ.fileHashes(archive), {'data/': '0'});
+        });
+      }
+
+      test('supports ordinary encoded ZIPs', () async {
+        final archive = Archive()
+          ..add(ArchiveFile.directory('data/'))
+          ..add(ArchiveFile('runner.exe', 3, [1, 2, 3]))
+          ..add(ArchiveFile('data/app.so', 1, [4]));
+        final file = File('encoded.zip')
+          ..writeAsBytesSync(ZipEncoder().encode(archive));
+        await expectLater(differ.validateArchive(file), completes);
+        expect(await differ.fileHashes(file), {
+          'data/': '0',
+          'runner.exe': sha256.convert([1, 2, 3]).toString(),
+          'data/app.so': getCrc32([4]).toString(),
+        });
+      });
     });
 
     group('fileHashes', () {
@@ -346,6 +543,7 @@ File _writeZip(
   bool compress = false,
   bool descriptor = false,
   bool zip64Local = false,
+  int attributes = 0,
 }) {
   final output = OutputMemoryStream();
   final central = OutputMemoryStream();
@@ -400,7 +598,7 @@ File _writeZip(
       ..writeUint16(0)
       ..writeUint16(0)
       ..writeUint16(0)
-      ..writeUint32(0)
+      ..writeUint32(attributes)
       ..writeUint32(offset)
       ..writeBytes(filename);
   }
