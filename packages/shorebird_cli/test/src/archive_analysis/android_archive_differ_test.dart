@@ -58,6 +58,42 @@ void main() {
       expect(differ.isNativeFilePath('classes.jar'), isTrue);
     });
 
+    for (final root in [
+      'base/assets/flutter_assets',
+      'assets/flutter_assets',
+    ]) {
+      final manifest = '$root/NativeAssetsManifest.json';
+      test('classifies and hashes the frozen lookup map at $root', () async {
+        final bytes = utf8.encode('{"native-assets":{}}');
+        expect(differ.isNativeFilePath(manifest), isTrue);
+        expect(differ.isAssetFilePath(manifest), isFalse);
+        final archive = _androidZip('manifest.zip', [(manifest, bytes)]);
+        expect(
+          (await differ.fileHashes(archive))[manifest],
+          sha256.convert(bytes).toString(),
+        );
+        final nested = '$root/assets/NativeAssetsManifest.json';
+        expect(differ.isNativeFilePath(nested), isFalse);
+        expect(differ.isAssetFilePath(nested), isTrue);
+      });
+      test('rejects duplicate lookup maps at $root', () async {
+        final archive = _androidZip('duplicate.zip', [
+          (manifest, [1]),
+          (manifest, [2]),
+        ]);
+        await expectLater(differ.fileHashes(archive), throwsFormatException);
+      });
+      test('validates lookup map local ZIP records at $root', () async {
+        final archive = _androidZip('malformed.zip', [
+          (manifest, [1]),
+        ]);
+        final bytes = archive.readAsBytesSync();
+        ByteData.sublistView(bytes).setUint32(14, 0, Endian.little);
+        archive.writeAsBytesSync(bytes);
+        await expectLater(differ.fileHashes(archive), throwsFormatException);
+      });
+    }
+
     group('patchable Dart library paths', () {
       for (final prefix in ['base/lib', 'lib', 'jni']) {
         for (final abi in ['armeabi-v7a', 'arm64-v8a', 'x86_64']) {

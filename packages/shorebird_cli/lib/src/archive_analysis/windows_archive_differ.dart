@@ -19,10 +19,15 @@ class WindowsArchiveDiffer extends ArchiveDiffer {
 
   bool _isDirectoryPath(String path) => _archivePath(path).endsWith('/');
 
+  bool _isNativeAssetsManifestPath(String path) =>
+      p.posix.normalize(_archivePath(path)).toLowerCase() ==
+      'data/flutter_assets/nativeassetsmanifest.json';
+
   @override
   bool isAssetFilePath(String filePath) {
     // Empty directories do not affect the patch.
     return !_isDirectoryPath(filePath) &&
+        !_isNativeAssetsManifestPath(filePath) &&
         p.posix.split(_archivePath(filePath)).contains('flutter_assets');
   }
 
@@ -35,7 +40,9 @@ class WindowsArchiveDiffer extends ArchiveDiffer {
   bool isNativeFilePath(String filePath) {
     final extension = p.posix.extension(_archivePath(filePath)).toLowerCase();
     return !_isDirectoryPath(filePath) &&
-        (extension == '.exe' || extension == '.dll');
+        (extension == '.exe' ||
+            extension == '.dll' ||
+            _isNativeAssetsManifestPath(filePath));
   }
 
   @override

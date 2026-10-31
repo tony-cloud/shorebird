@@ -15,11 +15,15 @@ class LinuxBundleDiffer extends ArchiveDiffer {
   /// {@macro linux_bundle_differ}
   const LinuxBundleDiffer();
 
+  static const _nativeAssetsManifest =
+      'data/flutter_assets/NativeAssetsManifest.json';
+
   bool _isDirectoryPath(String path) => path.endsWith('/');
 
   @override
   bool isAssetFilePath(String filePath) =>
       !_isDirectoryPath(filePath) &&
+      filePath != _nativeAssetsManifest &&
       p.posix.split(filePath).contains('flutter_assets');
 
   @override
@@ -31,7 +35,8 @@ class LinuxBundleDiffer extends ArchiveDiffer {
     // Unix executable permissions when reading the ZIP, regardless of name.
     return !_isDirectoryPath(filePath) &&
         !isDartFilePath(filePath) &&
-        RegExp(r'\.so(?:\.[^/]+)?$').hasMatch(filePath);
+        (filePath == _nativeAssetsManifest ||
+            RegExp(r'\.so(?:\.[^/]+)?$').hasMatch(filePath));
   }
 
   @override

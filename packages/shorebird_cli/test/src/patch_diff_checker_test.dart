@@ -1,4 +1,5 @@
 // cspell:words Ljava LGreeter
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -105,6 +106,138 @@ void main() {
     });
 
     group('confirmUnpatchableDiffsIfNecessary', () {
+      for (final (platform, differ, dartLibrary, manifest) in [
+        (
+          'Android AAB',
+          const AndroidArchiveDiffer(),
+          'base/lib/arm64-v8a/libapp.so',
+          'base/assets/flutter_assets/NativeAssetsManifest.json',
+        ),
+        (
+          'Android APK',
+          const AndroidArchiveDiffer(),
+          'lib/arm64-v8a/libapp.so',
+          'assets/flutter_assets/NativeAssetsManifest.json',
+        ),
+        (
+          'Android AAR',
+          const AndroidArchiveDiffer(),
+          'jni/arm64-v8a/libapp.so',
+          'assets/flutter_assets/NativeAssetsManifest.json',
+        ),
+        (
+          'Linux',
+          const LinuxBundleDiffer(),
+          'lib/libapp.so',
+          'data/flutter_assets/NativeAssetsManifest.json',
+        ),
+        (
+          'Windows',
+          const WindowsArchiveDiffer(),
+          'data/app.so',
+          'data/flutter_assets/NativeAssetsManifest.json',
+        ),
+      ]) {
+        group('$platform frozen native-assets lookup map', () {
+          final oldMap = utf8.encode(
+            '{"native-assets":{"asset":"lib/one.so"}}',
+          );
+          final newMap = utf8.encode(
+            '{"native-assets":{"asset":"lib/two.so"}}',
+          );
+
+          File bundle(
+            String path,
+            int dartVersion,
+            Map<String, List<int>> assets,
+          ) {
+            final archive = Archive()
+              ..addFile(ArchiveFile(dartLibrary, 1, [dartVersion]));
+            for (final entry in assets.entries) {
+              archive.addFile(
+                ArchiveFile(entry.key, entry.value.length, entry.value),
+              );
+            }
+            return File(path)..writeAsBytesSync(ZipEncoder().encode(archive));
+          }
+
+          Future<DiffStatus> check({bool allowNative = false}) =>
+              runWithOverrides(
+                () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                  localArchive: localArtifact,
+                  releaseArchive: releaseArtifact,
+                  archiveDiffer: differ,
+                  // Asset consent must not authorize native lookup changes.
+                  allowAssetChanges: true,
+                  allowNativeChanges: allowNative,
+                ),
+              );
+
+          setUp(() {
+            when(() => shorebirdEnv.canAcceptUserInput).thenReturn(false);
+          });
+
+          for (final change in ['changed', 'added', 'removed']) {
+            test('asset override cannot bypass $change native map', () async {
+              bundle(releaseArtifact.path, 1, {
+                if (change != 'added') manifest: oldMap,
+              });
+              bundle(localArtifact.path, 2, {
+                if (change != 'removed') manifest: newMap,
+              });
+              await expectLater(
+                check(),
+                throwsA(isA<UnpatchableChangeException>()),
+              );
+              verify(
+                () => logger.warn(
+                  'Your app contains native changes, '
+                  'which cannot be applied with a patch.',
+                ),
+              ).called(1);
+            });
+          }
+
+          test('unchanged map permits canonical Dart-only update', () async {
+            bundle(releaseArtifact.path, 1, {manifest: oldMap});
+            bundle(localArtifact.path, 2, {manifest: oldMap});
+            final status = await check();
+            expect(status.hasNativeChanges, isFalse);
+            expect(status.hasAssetChanges, isFalse);
+            verifyNever(() => logger.warn(any()));
+          });
+
+          test(
+            'same-name nested user asset remains an ordinary asset',
+            () async {
+              final nested = manifest.replaceFirst(
+                'NativeAssetsManifest.json',
+                'assets/NativeAssetsManifest.json',
+              );
+              bundle(releaseArtifact.path, 1, {
+                manifest: oldMap,
+                nested: oldMap,
+              });
+              bundle(localArtifact.path, 2, {manifest: oldMap, nested: newMap});
+              final status = await check();
+              expect(status.hasNativeChanges, isFalse);
+              expect(status.hasAssetChanges, isTrue);
+            },
+          );
+
+          test(
+            'explicit native override retains native change metadata',
+            () async {
+              bundle(releaseArtifact.path, 1, {manifest: oldMap});
+              bundle(localArtifact.path, 2, {manifest: newMap});
+              final status = await check(allowNative: true);
+              expect(status.hasNativeChanges, isTrue);
+              expect(status.hasAssetChanges, isFalse);
+            },
+          );
+        });
+      }
+
       for (final (platform, differ, runner, dartLibrary) in [
         ('Windows', const WindowsArchiveDiffer(), 'runner.exe', 'data/app.so'),
         ('Linux', const LinuxBundleDiffer(), 'my_app', 'lib/libapp.so'),

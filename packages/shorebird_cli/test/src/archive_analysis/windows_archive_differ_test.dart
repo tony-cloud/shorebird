@@ -14,6 +14,46 @@ void main() {
   const differ = WindowsArchiveDiffer();
 
   group(WindowsArchiveDiffer, () {
+    for (final manifest in [
+      'data/flutter_assets/NativeAssetsManifest.json',
+      r'data\flutter_assets\NativeAssetsManifest.json',
+      'DATA/FLUTTER_ASSETS/NATIVEASSETSMANIFEST.JSON',
+    ]) {
+      test('recognizes frozen lookup map $manifest', () async {
+        final bytes = utf8.encode('{"native-assets":{}}');
+        expect(differ.isNativeFilePath(manifest), isTrue);
+        expect(differ.isAssetFilePath(manifest), isFalse);
+        final archive = _writeZip('manifest.zip', [
+          (manifest, bytes),
+        ], crc: 123);
+        expect(
+          (await differ.fileHashes(archive))[manifest],
+          sha256.convert(bytes).toString(),
+        );
+      });
+    }
+    test(
+      'only the root lookup map is native and aliases cannot duplicate it',
+      () async {
+        const manifest = 'data/flutter_assets/NativeAssetsManifest.json';
+        const nested = 'data/flutter_assets/assets/NativeAssetsManifest.json';
+        expect(differ.isNativeFilePath(nested), isFalse);
+        expect(differ.isAssetFilePath(nested), isTrue);
+        final archive = _writeZip('duplicate.zip', [
+          (manifest, [1]),
+          (r'DATA\FLUTTER_ASSETS\NATIVEASSETSMANIFEST.JSON', [2]),
+        ]);
+        await expectLater(differ.fileHashes(archive), throwsFormatException);
+        final malformed = _writeZip('malformed.zip', [
+          (manifest, [1]),
+        ]);
+        final bytes = malformed.readAsBytesSync();
+        ByteData.sublistView(bytes).setUint32(14, 0, Endian.little);
+        malformed.writeAsBytesSync(bytes);
+        await expectLater(differ.fileHashes(malformed), throwsFormatException);
+      },
+    );
+
     test('classifies assets and Dart independently of host separators', () {
       for (final separator in ['/', r'\']) {
         expect(

@@ -93,13 +93,14 @@ class AndroidArchiveDiffer extends ArchiveDiffer {
           final localName = header.file?.filename;
           if (localName != null &&
               localName != path &&
-              (_isCodeFilePath(localName) || _isCodeFilePath(path))) {
+              (_requiresNativeValidation(localName) ||
+                  _requiresNativeValidation(path))) {
             throw FormatException(
               'Inconsistent Android code ZIP filename',
               path,
             );
           }
-          if (!_isCodeFilePath(path)) {
+          if (!_requiresNativeValidation(path)) {
             // Preserve asset and metadata comparison behavior.
             hashes[path] = header.crc32.toString();
             continue;
@@ -264,6 +265,7 @@ class AndroidArchiveDiffer extends ArchiveDiffer {
 
   @override
   bool isAssetFilePath(String filePath) {
+    if (_isNativeAssetsManifestPath(filePath)) return false;
     const assetDirNames = ['assets', 'res'];
     const assetFileNames = ['AssetManifest.json'];
 
@@ -284,11 +286,19 @@ class AndroidArchiveDiffer extends ArchiveDiffer {
 
   @override
   bool isNativeFilePath(String filePath) =>
-      _isCodeFilePath(filePath) && !isDartFilePath(filePath);
+      _requiresNativeValidation(filePath) && !isDartFilePath(filePath);
 
-  bool _isCodeFilePath(String filePath) =>
-      !filePath.endsWith('/') &&
-      const {'.dex', '.so', '.jar', '.class'}.contains(
-        p.posix.extension(filePath).toLowerCase(),
-      );
+  // Normalize only to recognize aliases of the frozen root lookup map; the
+  // native ZIP checks above reject ambiguous separators and path components.
+  bool _isNativeAssetsManifestPath(String path) => const {
+    'base/assets/flutter_assets/NativeAssetsManifest.json',
+    'assets/flutter_assets/NativeAssetsManifest.json',
+  }.contains(p.posix.normalize(path.replaceAll(r'\', '/')));
+
+  bool _requiresNativeValidation(String filePath) =>
+      _isNativeAssetsManifestPath(filePath) ||
+      (!filePath.endsWith('/') &&
+          const {'.dex', '.so', '.jar', '.class'}.contains(
+            p.posix.extension(filePath).toLowerCase(),
+          ));
 }

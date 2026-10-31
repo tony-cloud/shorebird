@@ -15,6 +15,37 @@ void main() {
   const differ = LinuxBundleDiffer();
 
   group(LinuxBundleDiffer, () {
+    test(
+      'the root native lookup map uses native comparison and ZIP validation',
+      () async {
+        const manifest = 'data/flutter_assets/NativeAssetsManifest.json';
+        const nested = 'data/flutter_assets/assets/NativeAssetsManifest.json';
+        final bytes = utf8.encode('{"native-assets":{}}');
+        expect(differ.isNativeFilePath(manifest), isTrue);
+        expect(differ.isAssetFilePath(manifest), isFalse);
+        expect(differ.isNativeFilePath(nested), isFalse);
+        expect(differ.isAssetFilePath(nested), isTrue);
+        final archive = _writeZip('manifest.zip', [
+          _Entry(manifest, bytes),
+          _Entry(nested, bytes),
+        ], crc: 123);
+        expect(await differ.fileHashes(archive), {
+          manifest: _nativeHash(bytes),
+          nested: '123',
+        });
+        final duplicate = _writeZip('duplicate.zip', [
+          _Entry(manifest, bytes),
+          _Entry(manifest, bytes),
+        ]);
+        await expectLater(differ.fileHashes(duplicate), throwsFormatException);
+        final malformed = _writeZip('malformed.zip', [_Entry(manifest, bytes)]);
+        final zip = malformed.readAsBytesSync();
+        ByteData.sublistView(zip).setUint32(14, 0, Endian.little);
+        malformed.writeAsBytesSync(zip);
+        await expectLater(differ.fileHashes(malformed), throwsFormatException);
+      },
+    );
+
     test('identifies assets independently of the host platform', () {
       expect(differ.isAssetFilePath('data/flutter_assets/image.png'), isTrue);
       expect(differ.isAssetFilePath('data/flutter_assets/'), isFalse);
