@@ -1,6 +1,7 @@
 // cspell:words Ljava LGreeter
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:dex/dex.dart';
 import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
@@ -104,6 +105,75 @@ void main() {
     });
 
     group('confirmUnpatchableDiffsIfNecessary', () {
+      group('with real Windows ZIP archives', () {
+        File bundle(
+          String path,
+          List<int> nativeBytes, {
+          List<int> dartBytes = const [1],
+        }) {
+          final archive = Archive()
+            ..addFile(
+              ArchiveFile('runner.exe', nativeBytes.length, nativeBytes),
+            )
+            ..addFile(ArchiveFile('data/app.so', dartBytes.length, dartBytes));
+          return File(path)..writeAsBytesSync(ZipEncoder().encode(archive));
+        }
+
+        Future<DiffStatus> check({bool allowNativeChanges = false}) =>
+            runWithOverrides(
+              () => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
+                localArchive: localArtifact,
+                releaseArchive: releaseArtifact,
+                archiveDiffer: const WindowsArchiveDiffer(),
+                allowAssetChanges: false,
+                allowNativeChanges: allowNativeChanges,
+              ),
+            );
+
+        setUp(() {
+          when(() => shorebirdEnv.canAcceptUserInput).thenReturn(false);
+          bundle(releaseArtifact.path, [1, 2, 3]);
+          bundle(localArtifact.path, [4, 5, 6]);
+        });
+
+        test('rejects native changes without an override', () async {
+          await expectLater(
+            check(),
+            throwsA(isA<UnpatchableChangeException>()),
+          );
+          verify(
+            () => logger.warn(
+              'Your app contains native changes, '
+              'which cannot be applied with a patch.',
+            ),
+          ).called(1);
+          verifyNever(() => logger.confirm(any(), hint: any(named: 'hint')));
+        });
+
+        test(
+          'explicit override retains warnings and native change metadata',
+          () async {
+            final status = await check(allowNativeChanges: true);
+            expect(status.hasNativeChanges, isTrue);
+            expect(status.hasAssetChanges, isFalse);
+            verify(
+              () => logger.warn(
+                'Your app contains native changes, '
+                'which cannot be applied with a patch.',
+              ),
+            ).called(1);
+          },
+        );
+
+        test('allows Dart-only changes with identical native bytes', () async {
+          bundle(localArtifact.path, [1, 2, 3], dartBytes: [2]);
+          final status = await check();
+          expect(status.hasNativeChanges, isFalse);
+          expect(status.hasAssetChanges, isFalse);
+          verifyNever(() => logger.warn(any()));
+        });
+      });
+
       group('when native diffs are detected', () {
         setUp(() {
           when(

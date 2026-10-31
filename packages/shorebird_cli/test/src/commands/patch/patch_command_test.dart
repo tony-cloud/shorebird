@@ -2564,6 +2564,25 @@ Please re-run the release command for this version or create a new release.'''),
           );
 
           verify(() => logger.info('Not publishing.')).called(1);
+          verifyNever(
+            () => patcher.createPatchArtifacts(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              releaseArtifact: any(named: 'releaseArtifact'),
+              supplementDirectory: any(named: 'supplementDirectory'),
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+          verifyNever(() => patcher.updatedCreatePatchMetadata(any()));
+          verifyNever(
+            () => patcher.uploadPatchArtifacts(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              metadata: any(named: 'metadata'),
+              artifacts: any(named: 'artifacts'),
+              track: any(named: 'track'),
+            ),
+          );
         });
       });
     });
