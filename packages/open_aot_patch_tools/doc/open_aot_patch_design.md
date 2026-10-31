@@ -306,13 +306,14 @@ The Flutter engine patch cache is prepared for this handoff:
 Current acceptance evidence is recorded in the workspace
 [platform testing record](../../../../docs/PLATFORM_TESTING.md). Host development
 and PRODUCT runtime tests cover the implemented structural profile and encrypted
-C API. On October 29, a distribution-signed structural release displayed
-`license:free` on a physical iPad without a debugger. That establishes baseline
-startup only. Patch compilation exposed nullable FFI reader and Flutter metadata
-consistency defects; their fixes require a new release and the complete
-publish/download/install/restart test. No current device structural patch success
-is claimed. Historical June seeded proofs do not validate the current merged
-profile. TestFlight/App Store distribution and size/performance measurements
+C API. On October 31, a fresh distribution-signed release and encrypted structural
+patch completed the real CLI/server/updater lifecycle on a physical iPad without
+a debugger. The updated app rendered a new generic widget and validated a helper
+plus added fields before reporting `license:pro`. A deliberately wrong AES key
+returned the clean baseline; a fresh valid patch recovered and survived another
+cold app launch. Canonical download/install events reached the fixed server.
+The test covers the additive profile, not unrestricted existing class/signature
+replacement. TestFlight/App Store distribution and size/performance measurements
 remain outstanding.
 
 The supported native CI matrix runs by default; web is an experimental manual

@@ -122,12 +122,15 @@ identities must remain stable. See the
 
 Host development and PRODUCT runtime tests cover structural dispatch, added
 fields, GC, cross-isolate copies, and the actual encrypted install API. On
-October 29, a distribution-signed structural baseline rendered `license:free` on
-a physical iPad without a debugger. That is baseline startup evidence only; no
-current structural patch has completed the device download/install/restart
-lifecycle. Patch compilation exposed a nullable FFI reader defect and mismatched
-Flutter version metadata. Their fixes require a fresh release and device test.
-Earlier June seeded patch results describe older snapshots.
+October 31, a distribution-signed structural release completed the real
+CLI/server/updater download/install/restart lifecycle on a physical iPad without
+a debugger. It rendered a new generic widget and checked a new helper and fields
+on an existing mutable class before reporting `license:pro`. A deliberately wrong
+AES key caused clean baseline fallback; a fresh valid patch then recovered and
+persisted across another cold app launch. The server recorded the device's
+canonical download/install events. This proves the additive profile; it does not
+remove the structural restrictions above. See the
+[current platform evidence](../docs/PLATFORM_TESTING.md).
 
 CI run [40803323899](https://github.com/tony-cloud/shorebird-workspace/actions/runs/40803323899)
 completed with 27 passed, 2 failed and 5 skipped jobs. Windows SDK configuration
