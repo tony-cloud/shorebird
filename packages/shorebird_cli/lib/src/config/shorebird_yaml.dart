@@ -34,6 +34,7 @@ class ShorebirdYaml {
     this.flavors,
     this.baseUrl,
     this.autoUpdate,
+    this.nativePatchMaxBytes,
     this.patchVerification,
     this.patchResponseVerification,
     this.aotPatchRuntimeMode,
@@ -55,6 +56,20 @@ class ShorebirdYaml {
 
   /// Creates a [ShorebirdYaml] from a JSON map.
   factory ShorebirdYaml.fromJson(Map<dynamic, dynamic> json) {
+    if (json.containsKey('native_patch_max_bytes')) {
+      final value = json['native_patch_max_bytes'];
+      // Validate the checked-in release policy before generated num.toInt can
+      // truncate a double or saturate an out-of-range JSON number.
+      if (value is! int || value <= 0 || value > 0x7fffffffffffffff) {
+        throw CheckedFromJsonException(
+          json,
+          'native_patch_max_bytes',
+          'ShorebirdYaml',
+          'native_patch_max_bytes must be a positive integer no greater than '
+              '9223372036854775807.',
+        );
+      }
+    }
     final yaml = _$ShorebirdYamlFromJson(json);
     if (json.containsKey('aot_patch_structural_updates') &&
         json['aot_patch_structural_updates'] is! bool) {
@@ -125,6 +140,12 @@ class ShorebirdYaml {
 
   /// Whether or not to automatically update the app.
   final bool? autoUpdate;
+
+  /// Optional expanded native image budget in the checked-in shorebird.yaml.
+  /// The release policy must be a positive integer
+  /// no greater than 9223372036854775807.
+  @JsonKey(includeIfNull: false)
+  final int? nativePatchMaxBytes;
 
   /// The patch verification mode for the app.
   final PatchVerification? patchVerification;

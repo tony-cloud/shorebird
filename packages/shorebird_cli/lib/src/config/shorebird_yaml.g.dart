@@ -19,6 +19,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
         'flavors',
         'base_url',
         'auto_update',
+        'native_patch_max_bytes',
         'patch_verification',
         'patch_response_verification',
         'aot_patch_runtime_mode',
@@ -46,6 +47,10 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
       ),
       baseUrl: $checkedConvert('base_url', (v) => v as String?),
       autoUpdate: $checkedConvert('auto_update', (v) => v as bool?),
+      nativePatchMaxBytes: $checkedConvert(
+        'native_patch_max_bytes',
+        (v) => (v as num?)?.toInt(),
+      ),
       patchVerification: $checkedConvert(
         'patch_verification',
         (v) => $enumDecodeNullable(_$PatchVerificationEnumMap, v),
@@ -115,6 +120,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
     'appId': 'app_id',
     'baseUrl': 'base_url',
     'autoUpdate': 'auto_update',
+    'nativePatchMaxBytes': 'native_patch_max_bytes',
     'patchVerification': 'patch_verification',
     'patchResponseVerification': 'patch_response_verification',
     'aotPatchRuntimeMode': 'aot_patch_runtime_mode',
@@ -142,6 +148,7 @@ Map<String, dynamic> _$ShorebirdYamlToJson(
   'flavors': instance.flavors,
   'base_url': instance.baseUrl,
   'auto_update': instance.autoUpdate,
+  'native_patch_max_bytes': ?instance.nativePatchMaxBytes,
   'patch_verification': _$PatchVerificationEnumMap[instance.patchVerification],
   'patch_response_verification':
       _$PatchResponseVerificationEnumMap[instance.patchResponseVerification],

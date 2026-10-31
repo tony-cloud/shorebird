@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:checked_yaml/checked_yaml.dart';
+import 'package:json_annotation/json_annotation.dart';
 import 'package:shorebird_cli/src/config/config.dart';
 import 'package:test/test.dart';
 import '../helpers.dart';
@@ -6,6 +9,139 @@ import '../helpers.dart';
 void main() {
   useTempWorkingDirectory();
   group('ShorebirdYaml', () {
+    group('nativePatchMaxBytes', () {
+      test('leaves the legacy JSON unchanged when absent', () {
+        final yaml = ShorebirdYaml.fromJson({'app_id': 'app'});
+        expect(yaml.nativePatchMaxBytes, isNull);
+        expect(yaml.toJson(), {
+          'app_id': 'app',
+          'flavors': null,
+          'base_url': null,
+          'auto_update': null,
+          'patch_verification': null,
+          'patch_response_verification': null,
+          'aot_patch_runtime_mode': null,
+          'aot_patch_bytecode_path': null,
+          'aot_patch_key_id': null,
+          'aot_patch_key_hex': null,
+          'aot_patch_app_build_id': null,
+          'aot_patch_base_flavor_id': null,
+          'aot_patch_base_license_type': null,
+          'aot_patch_flavor_id': null,
+          'aot_patch_license_type': null,
+          'aot_patch_sdk_hash': null,
+          'aot_patch_base_snapshot_hash': null,
+          'aot_patch_obfuscation_map_hash': null,
+          'aot_patch_offline_expires_at': null,
+        });
+      });
+
+      for (final bytes in [1, 536870912, 0x7fffffffffffffff]) {
+        test('round-trips $bytes with flavors and security fields', () {
+          final yaml = checkedYamlDecode(
+            '''
+app_id: app
+flavors:
+  paid: paid-app
+base_url: https://example.com
+auto_update: false
+patch_verification: strict
+patch_response_verification: required
+native_patch_max_bytes: $bytes
+''',
+            (map) => ShorebirdYaml.fromJson(map!),
+          );
+          expect(yaml.nativePatchMaxBytes, bytes);
+          expect(yaml.getAppId(flavor: 'paid'), 'paid-app');
+          expect(yaml.autoUpdate, isFalse);
+          expect(yaml.patchVerification, PatchVerification.strict);
+          expect(
+            yaml.patchResponseVerification,
+            PatchResponseVerification.required,
+          );
+          final json = yaml.toJson();
+          expect(json['native_patch_max_bytes'], bytes);
+          expect(json['flavors'], {'paid': 'paid-app'});
+          expect(json['patch_verification'], 'strict');
+          expect(json['patch_response_verification'], 'required');
+          expect(ShorebirdYaml.fromJson(json).toJson(), json);
+        });
+      }
+
+      for (final value in <Object?>[
+        null,
+        true,
+        false,
+        '1024',
+        1.0,
+        1.5,
+        double.infinity,
+        double.nan,
+        0,
+        -1,
+        BigInt.one << 63,
+      ]) {
+        test('rejects invalid JSON value $value before conversion', () {
+          expect(
+            () => ShorebirdYaml.fromJson({
+              'app_id': 'app',
+              'native_patch_max_bytes': value,
+            }),
+            throwsA(
+              isA<CheckedFromJsonException>()
+                  .having((error) => error.key, 'key', 'native_patch_max_bytes')
+                  .having(
+                    (error) => error.message,
+                    'message',
+                    contains('positive integer no greater than'),
+                  ),
+            ),
+          );
+        });
+      }
+
+      test('rejects overflowing decoded JSON instead of saturating it', () {
+        final json =
+            jsonDecode(
+                  '{"app_id":"app",'
+                  '"native_patch_max_bytes":9223372036854775808}',
+                )
+                as Map<String, dynamic>;
+        expect(
+          () => ShorebirdYaml.fromJson(json),
+          throwsA(isA<CheckedFromJsonException>()),
+        );
+      });
+
+      for (final value in [
+        'null',
+        'true',
+        'false',
+        '"1024"',
+        '1.0',
+        '1.5',
+        '0',
+        '-1',
+        '9223372036854775808',
+      ]) {
+        test('rejects invalid checked-in YAML value $value', () {
+          expect(
+            () => checkedYamlDecode(
+              'app_id: app\nnative_patch_max_bytes: $value\n',
+              (map) => ShorebirdYaml.fromJson(map!),
+            ),
+            throwsA(
+              isA<ParsedYamlException>().having(
+                (error) => error.message,
+                'message',
+                contains('positive integer no greater than'),
+              ),
+            ),
+          );
+        });
+      }
+    });
+
     for (final enabled in [false, true]) {
       test('round-trips full replacement profile $enabled', () {
         final yaml = ShorebirdYaml.fromJson({
