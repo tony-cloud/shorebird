@@ -251,7 +251,7 @@ mixin ApplePodfileLockPatcherMixin on Patcher, ApplePatcherMixin {
         .confirmUnpatchableDiffsIfNecessary(
           localArchive: patchArchive,
           releaseArchive: releaseArchive,
-          archiveDiffer: const AppleArchiveDiffer(),
+          archiveDiffer: archiveDifferOverride ?? const AppleArchiveDiffer(),
           allowAssetChanges: allowAssetDiffs,
           allowNativeChanges: allowNativeDiffs,
           confirmNativeChanges: false,

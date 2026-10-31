@@ -38,6 +38,7 @@ class ShorebirdYaml {
     this.patchResponseVerification,
     this.aotPatchRuntimeMode,
     this.aotPatchStructuralUpdates,
+    this.aotPatchFullReplacement,
     this.aotPatchBytecodePath,
     this.aotPatchKeyId,
     this.aotPatchKeyHex,
@@ -72,6 +73,26 @@ class ShorebirdYaml {
         'ShorebirdYaml',
         'aot_patch_structural_updates requires '
             'aot_patch_runtime_mode: dart-bytecode-interpreter.',
+      );
+    }
+    if (json.containsKey('aot_patch_full_replacement') &&
+        json['aot_patch_full_replacement'] is! bool) {
+      throw CheckedFromJsonException(
+        json,
+        'aot_patch_full_replacement',
+        'ShorebirdYaml',
+        'aot_patch_full_replacement must be a boolean.',
+      );
+    }
+    if ((yaml.aotPatchFullReplacement ?? false) &&
+        (yaml.aotPatchRuntimeMode != 'dart-bytecode-interpreter' ||
+            (yaml.aotPatchStructuralUpdates ?? false))) {
+      throw CheckedFromJsonException(
+        json,
+        'aot_patch_full_replacement',
+        'ShorebirdYaml',
+        'Full replacement requires the interpreter runtime '
+            'and cannot be combined with additive structural updates.',
       );
     }
     return yaml;
@@ -118,6 +139,10 @@ class ShorebirdYaml {
   /// This immutable release capability defaults to body-only updates.
   @JsonKey(includeIfNull: false)
   final bool? aotPatchStructuralUpdates;
+
+  /// Replaces the complete application domain at boot in a new native release.
+  @JsonKey(includeIfNull: false)
+  final bool? aotPatchFullReplacement;
 
   /// Path to a full Dart bytecode patch payload for the iOS interpreter route.
   final String? aotPatchBytecodePath;

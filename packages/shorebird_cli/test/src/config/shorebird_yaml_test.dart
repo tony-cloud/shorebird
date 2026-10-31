@@ -7,6 +7,40 @@ void main() {
   useTempWorkingDirectory();
   group('ShorebirdYaml', () {
     for (final enabled in [false, true]) {
+      test('round-trips full replacement profile $enabled', () {
+        final yaml = ShorebirdYaml.fromJson({
+          'app_id': 'app',
+          'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+          'aot_patch_full_replacement': enabled,
+        });
+        expect(yaml.aotPatchFullReplacement, enabled);
+        expect(yaml.toJson()['aot_patch_full_replacement'], enabled);
+      });
+    }
+    for (final extra in <Map<String, Object?>>[
+      {'aot_patch_full_replacement': 'true'},
+      {'aot_patch_full_replacement': null},
+      {
+        'aot_patch_full_replacement': true,
+        'aot_patch_structural_updates': true,
+      },
+      {
+        'aot_patch_full_replacement': true,
+        'aot_patch_runtime_mode': 'native-aot',
+      },
+    ]) {
+      test('rejects invalid full replacement configuration $extra', () {
+        expect(
+          () => ShorebirdYaml.fromJson({
+            'app_id': 'app',
+            'aot_patch_runtime_mode': 'dart-bytecode-interpreter',
+            ...extra,
+          }),
+          throwsA(isA<Exception>()),
+        );
+      });
+    }
+    for (final enabled in [false, true]) {
       test('serializes strict structural profile $enabled', () {
         final yaml = ShorebirdYaml.fromJson({
           'app_id': 'app',

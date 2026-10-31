@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
@@ -43,6 +44,8 @@ class IosBytecodeBuilder {
     List<String>? dartDefines,
     File? patchBase,
     bool structuralUpdates = false,
+    bool fullReplacement = false,
+    String? hostAbi,
   }) async {
     final input = _projectRelativeFile(target ?? p.join('lib', 'main.dart'));
     if (!input.existsSync()) {
@@ -63,6 +66,8 @@ class IosBytecodeBuilder {
       experiments: _buildArgValues(buildArgs, 'enable-experiment'),
       patchBasePath: patchBase?.path,
       structuralUpdates: structuralUpdates,
+      fullReplacement: fullReplacement,
+      hostAbi: hostAbi,
     );
   }
 
@@ -111,12 +116,61 @@ class IosBytecodeBuilder {
     return manifest['structural_updates'] == true;
   }
 
+  /// Reads the separate immutable complete-domain release capability.
+  static bool fullReplacementForManifest(Map<String, Object?> manifest) {
+    if (manifest.containsKey('full_replacement') &&
+        manifest['full_replacement'] is! bool) {
+      throw ArtifactBuildException(
+        'Interpreter baseline full_replacement must be a boolean.',
+      );
+    }
+    final full = manifest['full_replacement'] == true;
+    if (full && structuralUpdatesForManifest(manifest)) {
+      throw ArtifactBuildException(
+        'Full replacement and additive profiles are exclusive.',
+      );
+    }
+    return full;
+  }
+
+  /// Checks that the private baseline is the exact released full-domain
+  /// wrapper.
+  static FullReplacementBundle fullReplacementBaseline(
+    File baseline,
+    Map<String, Object?> manifest,
+  ) {
+    try {
+      final bytes = baseline.readAsBytesSync();
+      final bundle = FullReplacementBundle.decode(bytes);
+      if (!fullReplacementForManifest(manifest) ||
+          !bundle.manifest.isBaseline ||
+          bundle.manifest.hostAbiHex != manifest['host_abi'] ||
+          sha256.convert(bytes).toString() != manifest['base_snapshot_hash']) {
+        throw const FormatException(
+          'Baseline wrapper does not match release metadata.',
+        );
+      }
+      return bundle;
+    } on FormatException catch (error) {
+      throw ArtifactBuildException(
+        'Invalid full replacement baseline: ${error.message}',
+      );
+    }
+  }
+
   /// Prevents patch source configuration from changing the released profile.
   static bool validateStructuralProfile(
     ShorebirdYaml? source,
     Map<String, Object?> manifest,
   ) {
     final enabled = structuralUpdatesForManifest(manifest);
+    if ((source?.aotPatchFullReplacement ?? false) !=
+        fullReplacementForManifest(manifest)) {
+      throw ArtifactBuildException(
+        'aot_patch_full_replacement differs from '
+        'the released baseline. Create a new release to change profiles.',
+      );
+    }
     if ((source?.aotPatchStructuralUpdates ?? false) != enabled) {
       throw ArtifactBuildException(
         'aot_patch_structural_updates differs from the released interpreter '
@@ -133,9 +187,10 @@ class IosBytecodeBuilder {
     Map<String, Object?> manifest,
   ) {
     final structuralUpdates = structuralUpdatesForManifest(manifest);
+    final fullReplacement = fullReplacementForManifest(manifest);
     // Some legacy release archives do not contain bundled Flutter assets.
     if (!release.existsSync() || release.lengthSync() < 4) {
-      if (structuralUpdates) {
+      if (structuralUpdates || fullReplacement) {
         throw ArtifactBuildException(
           'Structural updates require a release with a compiled profile.',
         );
@@ -158,6 +213,38 @@ class IosBytecodeBuilder {
           throw const FormatException('Invalid compiled policy');
         }
         final structural = yaml['aot_patch_structural_updates'];
+        final full = yaml['aot_patch_full_replacement'];
+        if ((yaml.containsKey('aot_patch_full_replacement') && full is! bool) ||
+            (full ?? false) != fullReplacement) {
+          throw ArtifactBuildException(
+            'Release compiled full replacement '
+            'profile differs from baseline supplement.',
+          );
+        }
+        if (fullReplacement) {
+          const assetName = 'shorebird_replacement_base.sbr';
+          final assetPath = p.posix.join(p.posix.dirname(file.name), assetName);
+          final assets = archive.files
+              .where((entry) => entry.isFile && entry.name == assetPath)
+              .toList();
+          if (yaml['aot_patch_replacement_base'] != assetName ||
+              yaml['aot_patch_host_abi'] != manifest['host_abi'] ||
+              assets.length != 1) {
+            throw const FormatException(
+              'Invalid bundled replacement base binding.',
+            );
+          }
+          final bytes = assets.single.content as List<int>;
+          final bundle = FullReplacementBundle.decode(bytes);
+          if (!bundle.manifest.isBaseline ||
+              bundle.manifest.hostAbiHex != manifest['host_abi'] ||
+              sha256.convert(bytes).toString() !=
+                  manifest['base_snapshot_hash']) {
+            throw const FormatException(
+              'Bundled replacement base differs from supplement.',
+            );
+          }
+        }
         if ((yaml.containsKey('aot_patch_structural_updates') &&
                 structural is! bool) ||
             (structural ?? false) != structuralUpdates) {
@@ -199,7 +286,7 @@ class IosBytecodeBuilder {
           );
         }
       }
-      if (structuralUpdates && !foundPolicy) {
+      if ((structuralUpdates || fullReplacement) && !foundPolicy) {
         throw ArtifactBuildException(
           'Structural updates require a release with a compiled profile.',
         );

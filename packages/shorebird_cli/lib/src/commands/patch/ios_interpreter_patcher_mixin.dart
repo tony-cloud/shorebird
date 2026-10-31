@@ -5,8 +5,11 @@ import 'dart:math';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
+import 'package:shorebird_cli/src/archive_analysis/archive_differ.dart';
+import 'package:shorebird_cli/src/archive_analysis/full_replacement_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/patcher.dart';
 import 'package:shorebird_cli/src/config/config.dart';
@@ -19,6 +22,22 @@ import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.da
 
 /// Builds and packages public, data-only iOS interpreter patches.
 mixin IosInterpreterPatcherMixin on Patcher {
+  String? _comparisonReleaseBaseHash;
+  String? _comparisonCurrentBaseHash;
+  bool _preparedFullReplacement = false;
+
+  @override
+  ArchiveDiffer? get archiveDifferOverride {
+    if (_comparisonReleaseBaseHash == null ||
+        _comparisonCurrentBaseHash == null) {
+      return null;
+    }
+    return FullReplacementArchiveDiffer(
+      releaseBaseHash: _comparisonReleaseBaseHash!,
+      comparisonBaseHash: _comparisonCurrentBaseHash!,
+    );
+  }
+
   /// Podfile.lock hash when patching an application rather than a framework.
   String? get interpreterPodfileLockHash => null;
 
@@ -114,6 +133,21 @@ iOS interpreter patch bytecode does not exist: ${bytecodeFile.path}''',
       throw ProcessExit(ExitCode.software.code);
     }
     final patchSnapshot = bytecodeFile.readAsBytesSync();
+    if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
+      final released = IosBytecodeBuilder.fullReplacementBaseline(
+        baseline,
+        manifest,
+      );
+      open_patch.FullReplacementBundle.decode(
+        patchSnapshot,
+      ).validateUpdateAgainst(released);
+    } else if (patchSnapshot.length >= 8 &&
+        utf8.decode(patchSnapshot.take(7).toList(), allowMalformed: true) ==
+            'SBRPLCE') {
+      throw ArtifactBuildException(
+        'Full replacement payload cannot target a legacy release.',
+      );
+    }
     if (_looksLikeNativeExecutable(patchSnapshot)) {
       logger.err(
         '''
@@ -252,7 +286,10 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
   }
 
   /// Builds native diff-check artifacts using the immutable released policy.
-  Future<T> withInterpreterBaselineBuild<T>(Future<T> Function() build) async {
+  Future<T> withInterpreterBaselineBuild<T>(
+    Future<T> Function() build, {
+    List<String> buildArgs = const [],
+  }) async {
     if (iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
       return build();
     }
@@ -265,12 +302,51 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     }
     final baseline = _baselineBytecode();
     final manifest = _baselineManifest(baseline);
+    File? comparisonBase;
+    _preparedFullReplacement = false;
+    _comparisonReleaseBaseHash = null;
+    _comparisonCurrentBaseHash = null;
+    if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
+      await buildInterpreterBytecodePatch(buildArgs);
+      final configured = _configuredInterpreterBytecodePath(
+        shorebirdEnv.getShorebirdYaml(),
+      );
+      final patchFile = configured == null
+          ? File(_interpreterPatchBytecodeOutputPath)
+          : _projectRelativeFile(configured);
+      final published =
+          open_patch.FullReplacementBundle.decode(
+            patchFile.readAsBytesSync(),
+          )..validateUpdateAgainst(
+            IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest),
+          );
+      comparisonBase =
+          File(
+              p.join(
+                shorebirdEnv.buildDirectory.path,
+                'ios_interpreter_comparison_base.sbr',
+              ),
+            )
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(published.asBaseline().encode());
+      _comparisonReleaseBaseHash = open_patch.sha256Hex(
+        baseline.readAsBytesSync(),
+      );
+      _comparisonCurrentBaseHash = open_patch.sha256Hex(
+        comparisonBase.readAsBytesSync(),
+      );
+      _preparedFullReplacement = true;
+    }
     final previous = artifactBuilder.iosInterpreterBuildEnvironment;
     artifactBuilder.iosInterpreterBuildEnvironment = {
       ...previous,
       'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': open_patch.sha256Hex(
-        baseline.readAsBytesSync(),
+        (comparisonBase ?? baseline).readAsBytesSync(),
       ),
+      if (comparisonBase != null) ...{
+        'SHOREBIRD_AOT_REPLACEMENT_BASE': comparisonBase.absolute.path,
+        'SHOREBIRD_AOT_HOST_ABI': manifest['host_abi']! as String,
+      },
       for (final key in const {
         'APP_BUILD_ID': 'compiled_app_build_id',
         'BASE_FLAVOR_ID': 'base_flavor_id',
@@ -285,6 +361,9 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     };
     try {
       return await build();
+    } on Object {
+      _preparedFullReplacement = false;
+      rethrow;
     } finally {
       artifactBuilder.iosInterpreterBuildEnvironment = previous;
     }
@@ -292,13 +371,27 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
 
   /// Compiles bytecode using the public SDK, or honors a configured payload.
   Future<void> buildInterpreterBytecodePatch(List<String> buildArgs) async {
+    if (_preparedFullReplacement) return;
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
     final baseline = _baselineBytecode();
     final manifest = _baselineManifest(baseline);
+    IosReplacementHost? replacementHost;
+    if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
+      IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest);
+      replacementHost = await iosReplacementHostResolver.resolve()
+        ..validateReleased(manifest);
+    }
     final configuredBytecodePath = _configuredInterpreterBytecodePath(
       shorebirdYaml,
     );
     if (configuredBytecodePath != null) {
+      if (replacementHost != null) {
+        open_patch.FullReplacementBundle.decode(
+          _projectRelativeFile(configuredBytecodePath).readAsBytesSync(),
+        ).validateUpdateAgainst(
+          IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest),
+        );
+      }
       logger.info(
         'Using configured iOS interpreter bytecode patch: '
         '${_projectRelativeFile(configuredBytecodePath).path}.',
@@ -322,6 +415,8 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       structuralUpdates: IosBytecodeBuilder.structuralUpdatesForManifest(
         manifest,
       ),
+      fullReplacement: replacementHost != null,
+      hostAbi: replacementHost?.hostAbi,
     );
   }
 

@@ -91,6 +91,7 @@ class IosPatcher extends Patcher
         args: buildArgs,
         base64PublicKey: await getEncodedPublicKey(),
       ),
+      buildArgs: buildArgs,
     );
 
     final runtimeMode = iosPatchRuntimeMode;

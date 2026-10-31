@@ -761,7 +761,21 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     List<String> experiments = const [],
     String? patchBasePath,
     bool structuralUpdates = false,
+    bool fullReplacement = false,
+    String? hostAbi,
   }) async {
+    if (fullReplacement &&
+        (structuralUpdates ||
+            hostAbi == null ||
+            !RegExp(r'^[0-9a-f]{64}$').hasMatch(hostAbi))) {
+      throw ArtifactBuildException(
+        'Full replacement requires a host ABI '
+        'fingerprint and excludes additive structural updates.',
+      );
+    }
+    if (!fullReplacement && hostAbi != null) {
+      throw ArtifactBuildException('Host ABI requires full replacement.');
+    }
     if (packageConfigPath != null) {
       // Native builds reset package_config to the developer's system Flutter.
       // Restore this release's pinned Flutter dependencies before bytecode.
@@ -777,6 +791,58 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
         );
       }
     }
+    var source = inputFilePath;
+    String? projectRoot;
+    final additionalSources = <String>[];
+    final effectiveDefines = [...dartDefines];
+    if (fullReplacement) {
+      if (packageConfigPath == null) {
+        throw ArtifactBuildException(
+          'Full replacement requires package configuration.',
+        );
+      }
+      projectRoot = p.dirname(p.dirname(p.absolute(packageConfigPath)));
+      final registryResult = await process.stream(
+        'flutter',
+        [
+          'assemble',
+          '--output=${p.join(projectRoot, 'build', 'shorebird_registrant')}',
+          '-dTargetPlatform=ios',
+          '-dBuildMode=release',
+          '-dTargetFile=${p.absolute(inputFilePath)}',
+          'gen_dart_plugin_registrant',
+        ],
+        workingDirectory: projectRoot,
+        runInShell: false,
+      );
+      if (registryResult != ExitCode.success.code) {
+        throw ArtifactBuildException(
+          'Failed to generate the pinned Dart plugin registrant.',
+        );
+      }
+      source = _fullReplacementSourceUri(
+        inputFilePath,
+        packageConfigPath,
+        projectRoot,
+      );
+      final registrant = File(
+        p.join(
+          projectRoot,
+          '.dart_tool',
+          'flutter_build',
+          'dart_plugin_registrant.dart',
+        ),
+      );
+      if (registrant.existsSync()) {
+        const uri =
+            'org-dartlang-root:///.dart_tool/flutter_build/dart_plugin_registrant.dart';
+        additionalSources.addAll([
+          uri,
+          'package:flutter/src/dart_plugin_registrant.dart',
+        ]);
+        effectiveDefines.add('flutter.dart_plugin_registrant=$uri');
+      }
+    }
     final arguments = [
       shorebirdArtifacts.getArtifactPath(
         artifact: ShorebirdArtifact.dart2BytecodeSnapshot,
@@ -786,15 +852,26 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
       )}',
       '--target=flutter',
       if (structuralUpdates) '--shorebird-structural-patching',
+      if (fullReplacement) ...[
+        '--shorebird-full-replacement',
+        '--target-os=ios',
+        '--shorebird-host-abi=$hostAbi',
+        '--filesystem-root=$projectRoot',
+        '--filesystem-scheme=org-dartlang-root',
+        for (final uri in additionalSources) '--source=$uri',
+      ],
       if (patchBasePath != null) '--patch-base=$patchBasePath',
-      if (packageConfigPath != null) '--packages=$packageConfigPath',
-      for (final define in dartDefines) '-D$define',
+      if (packageConfigPath != null && fullReplacement)
+        '--packages=org-dartlang-root:///.dart_tool/package_config.json'
+      else if (packageConfigPath != null)
+        '--packages=$packageConfigPath',
+      for (final define in effectiveDefines) '-D$define',
       '-Ddart.vm.profile=false',
       '-Ddart.vm.product=true',
       for (final experiment in experiments) '--enable-experiment=$experiment',
       '-o',
       outFilePath,
-      inputFilePath,
+      source,
     ];
 
     final exitCode = await shorebirdTracer.span<int>(
@@ -814,6 +891,43 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     }
 
     return File(outFilePath);
+  }
+
+  String _fullReplacementSourceUri(String input, String packages, String root) {
+    final absolute = p.normalize(p.absolute(input));
+    final configFile = File(packages).absolute;
+    final config = jsonDecode(configFile.readAsStringSync()) as Map;
+    String? bestUri;
+    var bestLength = -1;
+    for (final item
+        in (config['packages'] as List).cast<Map<String, Object?>>()) {
+      final packageRoot = configFile.uri.resolve(item['rootUri']! as String);
+      final packageUri = packageRoot.resolve(
+        item['packageUri'] as String? ?? '',
+      );
+      if (packageUri.scheme != 'file') continue;
+      final path = p.normalize(packageUri.toFilePath());
+      if (p.isWithin(path, absolute) && path.length > bestLength) {
+        bestLength = path.length;
+        final relative = p.relative(absolute, from: path).replaceAll(r'\', '/');
+        bestUri = Uri(
+          scheme: 'package',
+          path: '${item['name']}/$relative',
+        ).toString();
+      }
+    }
+    if (bestUri != null) return bestUri;
+    if (!p.isWithin(root, absolute)) {
+      throw ArtifactBuildException(
+        'Full replacement entrypoint must be in '
+        'the project or one of its configured packages.',
+      );
+    }
+    return Uri(
+      scheme: 'org-dartlang-root',
+      host: '',
+      path: '/${p.relative(absolute, from: root).replaceAll(r'\', '/')}',
+    ).toString();
   }
 
   /// Builds a windows app and returns the x64 Release directory

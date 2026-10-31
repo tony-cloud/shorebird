@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
@@ -110,6 +111,21 @@ To change the version of this release, change your app's version in your pubspec
     addSplitDebugInfoDefault(buildArgs);
     await addObfuscationMapArgs(buildArgs);
     final yaml = shorebirdEnv.getShorebirdYaml();
+    if ((yaml?.aotPatchFullReplacement ?? false) &&
+        !const {
+          ReleaseType.ios,
+          ReleaseType.iosFramework,
+        }.contains(releaseType)) {
+      throw ArtifactBuildException(
+        'Full replacement currently requires an iOS release.',
+      );
+    }
+    if ((yaml?.aotPatchFullReplacement ?? false) && useObfuscation) {
+      throw ArtifactBuildException(
+        'Full replacement requires an interpreter '
+        'release without --obfuscate.',
+      );
+    }
     final interpreter =
         const {
           ReleaseType.ios,
@@ -117,6 +133,7 @@ To change the version of this release, change your app's version in your pubspec
         }.contains(releaseType) &&
         yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter';
     File? baseline;
+    IosReplacementHost? replacementHost;
     List<String>? bytecodeDartDefines;
     Map<String, String>? previousEnvironment;
     if (interpreter) {
@@ -126,6 +143,10 @@ To change the version of this release, change your app's version in your pubspec
         target: target,
         flavor: flavor,
       );
+      final fullReplacement = yaml!.aotPatchFullReplacement ?? false;
+      if (fullReplacement) {
+        replacementHost = await iosReplacementHostResolver.resolve();
+      }
       bytecodeDartDefines = List.unmodifiable(
         bytecodeBuilder.dartDefinesForBytecode(buildArgs),
       );
@@ -137,7 +158,9 @@ To change the version of this release, change your app's version in your pubspec
         ),
         buildArgs: buildArgs,
         dartDefines: bytecodeDartDefines,
-        structuralUpdates: yaml!.aotPatchStructuralUpdates ?? false,
+        structuralUpdates: yaml.aotPatchStructuralUpdates ?? false,
+        fullReplacement: fullReplacement,
+        hostAbi: replacementHost?.hostAbi,
       );
       final measured = sha256.convert(baseline.readAsBytesSync()).toString();
       final configured = yaml.aotPatchBaseSnapshotHash;
@@ -154,6 +177,10 @@ To change the version of this release, change your app's version in your pubspec
         'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
         'SHOREBIRD_AOT_PATCH_SDK_HASH':
             yaml.aotPatchSdkHash ?? shorebirdEnv.shorebirdEngineRevision,
+        if (fullReplacement) ...{
+          'SHOREBIRD_AOT_REPLACEMENT_BASE': baseline.absolute.path,
+          'SHOREBIRD_AOT_HOST_ABI': replacementHost!.hostAbi,
+        },
       };
     }
     try {
@@ -177,6 +204,10 @@ To change the version of this release, change your app's version in your pubspec
           jsonEncode({
             'version': 1,
             'structural_updates': yaml!.aotPatchStructuralUpdates ?? false,
+            if (replacementHost != null) ...{
+              'full_replacement': true,
+              ...replacementHost.manifest,
+            },
             'app_id': yaml.getAppId(flavor: flavor),
             'compiled_app_build_id': yaml.aotPatchAppBuildId,
             'base_flavor_id': yaml.aotPatchBaseFlavorId,

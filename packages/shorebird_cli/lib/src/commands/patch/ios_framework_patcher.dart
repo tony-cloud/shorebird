@@ -67,7 +67,7 @@ class IosFrameworkPatcher extends Patcher
   }) => patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
     localArchive: patchArchive,
     releaseArchive: releaseArchive,
-    archiveDiffer: const AppleArchiveDiffer(),
+    archiveDiffer: archiveDifferOverride ?? const AppleArchiveDiffer(),
     allowAssetChanges: allowAssetDiffs,
     allowNativeChanges: allowNativeDiffs,
   );
@@ -87,6 +87,7 @@ class IosFrameworkPatcher extends Patcher
         args: buildArgs,
         base64PublicKey: await getEncodedPublicKey(),
       ),
+      buildArgs: buildArgs,
     );
 
     final runtimeMode = iosPatchRuntimeMode;

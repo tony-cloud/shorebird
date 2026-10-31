@@ -107,6 +107,28 @@ void main() {
         });
       });
 
+      test('returns the selected cached iOS engine binary', () {
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.iosEngineBinary,
+            ),
+          ),
+          p.join(
+            flutterDirectory.path,
+            'bin',
+            'cache',
+            'artifacts',
+            'engine',
+            'ios-release',
+            'Flutter.xcframework',
+            'ios-arm64',
+            'Flutter.framework',
+            'Flutter',
+          ),
+        );
+      });
+
       test('returns correct path for iOS gen_snapshot', () {
         expect(
           runWithOverrides(
@@ -285,8 +307,8 @@ void main() {
         );
       });
 
-      test('prefers workspace iOS Flutter platform dill when present', () {
-        final workspacePlatformDill = File(
+      test('ignores unrelated workspace iOS platform dill', () {
+        File(
           p.join(
             flutterDirectory.path,
             'engine',
@@ -296,7 +318,7 @@ void main() {
             'flutter_patched_sdk',
             'platform_strong.dill',
           ),
-        )..createSync(recursive: true);
+        ).createSync(recursive: true);
 
         expect(
           runWithOverrides(
@@ -304,7 +326,18 @@ void main() {
               artifact: ShorebirdArtifact.flutterProductPlatformDill,
             ),
           ),
-          equals(workspacePlatformDill.path),
+          equals(
+            p.join(
+              flutterDirectory.path,
+              'bin',
+              'cache',
+              'artifacts',
+              'engine',
+              'common',
+              'flutter_patched_sdk_product',
+              'platform_strong.dill',
+            ),
+          ),
         );
       });
     });
@@ -325,7 +358,9 @@ void main() {
     }
 
     setUp(() {
-      localEngineSrcPath = p.join(Directory.current.path, 'local_engine_src');
+      localEngineSrcPath = Directory.systemTemp
+          .createTempSync('shorebird_local_artifacts_test_')
+          .path;
       localEngine = 'local_engine';
       localEngineHost = 'local_engine_host';
       engineConfig = MockEngineConfig();
@@ -336,6 +371,10 @@ void main() {
       ).thenReturn(localEngineSrcPath);
       when(() => engineConfig.localEngine).thenReturn(localEngine);
       when(() => engineConfig.localEngineHost).thenReturn(localEngineHost);
+    });
+
+    tearDown(() {
+      Directory(localEngineSrcPath).deleteSync(recursive: true);
     });
 
     group('getArtifactPath', () {
@@ -361,6 +400,16 @@ void main() {
       });
 
       test('returns correct path for gen_snapshot on iOS', () {
+        final executable = File(
+          p.join(
+            localEngineSrcPath,
+            'out',
+            localEngine,
+            'universal',
+            'gen_snapshot_arm64',
+          ),
+        )..createSync(recursive: true);
+        Process.runSync('chmod', ['+x', executable.path]);
         expect(
           runWithOverrides(
             () => artifacts.getArtifactPath(
@@ -372,10 +421,76 @@ void main() {
               localEngineSrcPath,
               'out',
               localEngine,
-              'clang_x64',
+              'universal',
               'gen_snapshot_arm64',
             ),
           ),
+        );
+      });
+
+      test('prefers the first runnable snapshot compiler candidate', () {
+        final root = p.join(localEngineSrcPath, 'out', localEngine);
+        for (final directory in ['.', 'universal', 'clang_x64']) {
+          final executable = File(p.join(root, directory, 'gen_snapshot_arm64'))
+            ..createSync(recursive: true);
+          Process.runSync('chmod', ['+x', executable.path]);
+        }
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.genSnapshotIos,
+            ),
+          ),
+          p.join(root, 'gen_snapshot_arm64'),
+        );
+      });
+
+      test('ignores nonexecutable snapshot compiler candidates', () {
+        final root = p.join(localEngineSrcPath, 'out', localEngine);
+        File(p.join(root, 'gen_snapshot_arm64')).createSync(recursive: true);
+        final executable = File(
+          p.join(root, 'clang_arm64', 'gen_snapshot_arm64'),
+        )..createSync(recursive: true);
+        Process.runSync('chmod', ['+x', executable.path]);
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.genSnapshotIos,
+            ),
+          ),
+          executable.path,
+        );
+      });
+
+      test('rejects a missing local iOS snapshot compiler', () {
+        expect(
+          () => runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.genSnapshotIos,
+            ),
+          ),
+          throwsStateError,
+        );
+      });
+
+      test('selects physical iOS engine and excludes simulator slice', () {
+        final xcframework = p.join(
+          localEngineSrcPath,
+          'out',
+          localEngine,
+          'Flutter.xcframework',
+        );
+        Directory(
+          p.join(xcframework, 'ios-arm64-simulator'),
+        ).createSync(recursive: true);
+        Directory(p.join(xcframework, 'ios-arm64')).createSync(recursive: true);
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.iosEngineBinary,
+            ),
+          ),
+          p.join(xcframework, 'ios-arm64', 'Flutter.framework', 'Flutter'),
         );
       });
 

@@ -26,6 +26,9 @@ enum ShorebirdArtifact {
   /// The gen_snapshot executable for iOS.
   genSnapshotIos,
 
+  /// The exact device Flutter engine executable selected for iOS release.
+  iosEngineBinary,
+
   /// The gen_snapshot executable for macOS that creates arm64 snapshots.
   genSnapshotMacosArm64,
 
@@ -78,6 +81,8 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
         return _aotToolsFile.path;
       case ShorebirdArtifact.genSnapshotIos:
         return _genSnapshotIosFile.path;
+      case ShorebirdArtifact.iosEngineBinary:
+        return _iosEngineBinaryFile.path;
       case ShorebirdArtifact.genSnapshotMacosArm64:
         return _genSnapshotMacOsArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
@@ -139,6 +144,17 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
       ),
     );
   }
+
+  File get _iosEngineBinaryFile => _iosEngineBinary(
+    p.join(
+      shorebirdEnv.flutterDirectory.path,
+      'bin',
+      'cache',
+      'artifacts',
+      'engine',
+      'ios-release',
+    ),
+  );
 
   File get _genSnapshotIosFile {
     return File(
@@ -210,21 +226,6 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
   }
 
   File get _flutterProductPlatformDillFile {
-    final workspaceIosPlatformDill = File(
-      p.join(
-        shorebirdEnv.flutterDirectory.path,
-        'engine',
-        'src',
-        'out',
-        'ios_release',
-        'flutter_patched_sdk',
-        'platform_strong.dill',
-      ),
-    );
-    if (workspaceIosPlatformDill.existsSync()) {
-      return workspaceIosPlatformDill;
-    }
-
     return File(
       p.join(
         shorebirdEnv.flutterDirectory.path,
@@ -260,6 +261,8 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
         return _aotToolsFile.path;
       case ShorebirdArtifact.genSnapshotIos:
         return _genSnapshotIosFile.path;
+      case ShorebirdArtifact.iosEngineBinary:
+        return _iosEngineBinaryFile.path;
       case ShorebirdArtifact.genSnapshotMacosArm64:
         return _genSnapshotMacosArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
@@ -311,15 +314,46 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
     );
   }
 
-  File get _genSnapshotIosFile {
-    return File(
-      p.join(
-        engineConfig.localEngineSrcPath!,
-        'out',
-        engineConfig.localEngine,
-        'clang_x64',
-        'gen_snapshot_arm64',
-      ),
+  File get _iosEngineBinaryFile => _iosEngineBinary(
+    p.join(
+      engineConfig.localEngineSrcPath!,
+      'out',
+      engineConfig.localEngine,
+    ),
+  );
+
+  File get _genSnapshotIosFile => _localIosExecutable('gen_snapshot_arm64');
+
+  File _localIosExecutable(String name) {
+    // Keep the candidate order identical to Flutter's LocalEngineArtifacts.
+    const directories = [
+      '.',
+      'universal',
+      'clang_x64',
+      'clang_x86',
+      'clang_i386',
+      'clang_arm64',
+      'clang_riscv64',
+    ];
+    for (final directory in directories) {
+      final file = File(
+        p.normalize(
+          p.join(
+            engineConfig.localEngineSrcPath!,
+            'out',
+            engineConfig.localEngine,
+            directory,
+            name,
+          ),
+        ),
+      );
+      final stat = file.statSync();
+      if (stat.type == FileSystemEntityType.file && (stat.mode & 0x49) != 0) {
+        return file;
+      }
+    }
+    throw StateError(
+      'Unable to find executable $name for the local iOS engine',
     );
   }
 
@@ -399,4 +433,25 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
       ),
     );
   }
+}
+
+// Match Flutter's first physical-device xcframework slice selection.
+File _iosEngineBinary(String engineDirectory) {
+  final xcframework = Directory(p.join(engineDirectory, 'Flutter.xcframework'));
+  if (xcframework.existsSync()) {
+    for (final directory in xcframework.listSync().whereType<Directory>()) {
+      final name = p.basename(directory.path);
+      if (name.startsWith('ios-') && !name.endsWith('-simulator')) {
+        return File(p.join(directory.path, 'Flutter.framework', 'Flutter'));
+      }
+    }
+  }
+  return File(
+    p.join(
+      xcframework.path,
+      'ios-arm64',
+      'Flutter.framework',
+      'Flutter',
+    ),
+  );
 }

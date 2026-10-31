@@ -2393,6 +2393,112 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
       });
 
       group('buildDartBytecodeSnapshot', () {
+        for (final hasRegistrant in [false, true]) {
+          test(
+            'full profile generates portable registrant inputs: $hasRegistrant',
+            () async {
+              final packages =
+                  File(
+                      p.join(
+                        projectRoot.path,
+                        '.dart_tool',
+                        'package_config.json',
+                      ),
+                    )
+                    ..createSync(recursive: true)
+                    ..writeAsStringSync(
+                      jsonEncode({
+                        'configVersion': 2,
+                        'packages': [
+                          {
+                            'name': 'app',
+                            'rootUri': '../',
+                            'packageUri': 'lib/',
+                          },
+                        ],
+                      }),
+                    );
+              final main = File(p.join(projectRoot.path, 'lib', 'main.dart'))
+                ..createSync(recursive: true)
+                ..writeAsStringSync('void main() {}');
+              final registrant =
+                  File(
+                      p.join(
+                        projectRoot.path,
+                        '.dart_tool',
+                        'flutter_build',
+                        'dart_plugin_registrant.dart',
+                      ),
+                    )
+                    ..createSync(recursive: true)
+                    ..writeAsStringSync('// stale');
+              when(
+                () => shorebirdProcess.stream(
+                  'flutter',
+                  any(),
+                  workingDirectory: projectRoot.path,
+                  runInShell: false,
+                ),
+              ).thenAnswer((invocation) async {
+                final args = invocation.positionalArguments[1] as List<String>;
+                if (args.contains('gen_dart_plugin_registrant')) {
+                  if (hasRegistrant) {
+                    registrant.writeAsStringSync('void register() {}');
+                  } else {
+                    registrant.deleteSync();
+                  }
+                }
+                return 0;
+              });
+              final host = 'a' * 64;
+              await runWithOverrides(
+                () => builder.buildDartBytecodeSnapshot(
+                  inputFilePath: main.path,
+                  outFilePath: '/out/base.sbr',
+                  packageConfigPath: packages.path,
+                  fullReplacement: true,
+                  hostAbi: host,
+                ),
+              );
+              final args =
+                  verify(
+                        () => shorebirdProcess.stream(
+                          'dartaotruntime',
+                          captureAny(),
+                          runInShell: false,
+                        ),
+                      ).captured.single
+                      as List<String>;
+              expect(
+                args,
+                containsAll([
+                  '--shorebird-full-replacement',
+                  '--target-os=ios',
+                  '--shorebird-host-abi=$host',
+                  '--filesystem-root=${projectRoot.path}',
+                  '--filesystem-scheme=org-dartlang-root',
+                  '--packages=org-dartlang-root:///.dart_tool/package_config.json',
+                ]),
+              );
+              expect(args.last, 'package:app/main.dart');
+              const uri =
+                  'org-dartlang-root:///.dart_tool/flutter_build/dart_plugin_registrant.dart';
+              expect(args.contains('--source=$uri'), hasRegistrant);
+              expect(
+                args.contains('-Dflutter.dart_plugin_registrant=$uri'),
+                hasRegistrant,
+              );
+              expect(
+                args.contains(
+                  '--source=package:flutter/src/dart_plugin_registrant.dart',
+                ),
+                hasRegistrant,
+              );
+              expect(args, isNot(contains('--shorebird-structural-patching')));
+            },
+          );
+        }
+
         setUp(() {
           when(
             () => shorebirdProcess.stream(

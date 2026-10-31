@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
+import 'package:shorebird_cli/src/archive_analysis/archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
@@ -131,6 +132,9 @@ More info: ${troubleshootingUrl.toLink()}.
   /// running interactively the user picks the release instead; otherwise the
   /// patch command rejects a missing `--release-version` before building.
   bool get requiresReleaseVersionArg => false;
+
+  /// A validated profile-specific comparison of generated build artifacts.
+  ArchiveDiffer? get archiveDifferOverride => null;
 
   /// Compares the release and patch artifacts to determine if the patch can be
   /// cleanly applied to the release.
