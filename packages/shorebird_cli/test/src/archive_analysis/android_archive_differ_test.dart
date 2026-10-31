@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/archive_analysis/android_archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/bundle_dependencies.dart';
@@ -46,6 +48,262 @@ void main() {
 
     setUp(() {
       differ = const AndroidArchiveDiffer();
+    });
+
+    test('generated Flutter AARs contain immutable Java bytecode', () {
+      final archive = ZipDecoder().decodeBytes(
+        File(baseAarPath).readAsBytesSync(),
+      );
+      expect(archive.findFile('classes.jar'), isNotNull);
+      expect(differ.isNativeFilePath('classes.jar'), isTrue);
+    });
+
+    group('patchable Dart library paths', () {
+      for (final prefix in ['base/lib', 'lib', 'jni']) {
+        for (final abi in ['armeabi-v7a', 'arm64-v8a', 'x86_64']) {
+          final path = '$prefix/$abi/libapp.so';
+          test('only delivers canonical $path', () async {
+            expect(differ.isDartFilePath(path), isTrue);
+            expect(differ.isNativeFilePath(path), isFalse);
+            final oldArchive = _androidZip('old.zip', [
+              (path, [1]),
+            ]);
+            final newArchive = _androidZip('new.zip', [
+              (path, [2]),
+            ]);
+            final diff = await differ.changedFiles(
+              oldArchive.path,
+              newArchive.path,
+            );
+            expect(differ.dartFileSetDiff(diff).changedPaths, {path});
+            expect(
+              differ.containsPotentiallyBreakingNativeDiffs(diff),
+              isFalse,
+            );
+          });
+        }
+      }
+      for (final path in [
+        'libapp.so',
+        'assets/libapp.so',
+        'feature/lib/arm64-v8a/libapp.so',
+        'base/lib/x86/libapp.so',
+        'jni/riscv64/libapp.so',
+        'prefix/jni/arm64-v8a/libapp.so',
+      ]) {
+        test('does not exempt undelivered $path', () {
+          expect(differ.isDartFilePath(path), isFalse);
+          expect(differ.isNativeFilePath(path), isTrue);
+        });
+      }
+    });
+
+    group('immutable Android code', () {
+      test(
+        'hashes code bytes while preserving ordinary asset CRC comparison',
+        () async {
+          final archive = _androidZip('bundle.zip', [
+            ('jni/arm64-v8a/libapp.so', [1]),
+            ('classes.jar', [2]),
+            ('assets/image.png', [3]),
+          ]);
+          expect(await differ.fileHashes(archive), {
+            'jni/arm64-v8a/libapp.so': sha256.convert([1]).toString(),
+            'classes.jar': sha256.convert([2]).toString(),
+            'assets/image.png': getCrc32([3]).toString(),
+          });
+        },
+      );
+
+      test('same-CRC Dart library updates remain Dart-only changes', () async {
+        const path = 'jni/arm64-v8a/libapp.so';
+        final oldArchive = _androidZip('old.zip', [(path, _collisionA)]);
+        final newArchive = _androidZip('new.zip', [(path, _collisionB)]);
+        final diff = await differ.changedFiles(
+          oldArchive.path,
+          newArchive.path,
+        );
+        expect(differ.dartFileSetDiff(diff).changedPaths, {path});
+        expect(differ.nativeFileSetDiff(diff), isEmpty);
+      });
+
+      for (final path in [
+        'base/lib/arm64-v8a/libflutter.so',
+        'lib/arm64-v8a/libplugin.so',
+        'jni/armeabi-v7a/libplugin.so',
+        'assets/native/libplugin.so',
+        'classes.jar',
+        'libs/plugin.jar',
+        'com/example/Plugin.class',
+      ]) {
+        test('detects additions, removals, and changes to $path', () async {
+          final oldArchive = _androidZip('old.zip', [
+            (path, [1]),
+          ]);
+          final newArchive = _androidZip('new.zip', [
+            (path, [2]),
+          ]);
+          final empty = _androidZip('empty.zip', []);
+          final changed = await differ.changedFiles(
+            oldArchive.path,
+            newArchive.path,
+          );
+          expect(differ.nativeFileSetDiff(changed).changedPaths, {path});
+          expect(differ.dartFileSetDiff(changed), isEmpty);
+          expect(
+            differ
+                .nativeFileSetDiff(
+                  await differ.changedFiles(empty.path, newArchive.path),
+                )
+                .addedPaths,
+            {path},
+          );
+          expect(
+            differ
+                .nativeFileSetDiff(
+                  await differ.changedFiles(oldArchive.path, empty.path),
+                )
+                .removedPaths,
+            {path},
+          );
+        });
+      }
+
+      for (final path in [
+        'base/dex/classes.dex',
+        'base/lib/arm64-v8a/libflutter.so',
+        'jni/arm64-v8a/plugin.so',
+        'classes.jar',
+        'com/example/Plugin.class',
+      ]) {
+        test('same valid ZIP CRC cannot conceal changed $path', () async {
+          const oldBytes = _collisionA;
+          const newBytes = _collisionB;
+          expect(getCrc32(oldBytes), getCrc32(newBytes));
+          final oldArchive = _androidZip('old.zip', [(path, oldBytes)]);
+          final newArchive = _androidZip('new.zip', [(path, newBytes)]);
+          final hashes = await differ.fileHashes(newArchive);
+          expect(hashes[path], sha256.convert(newBytes).toString());
+          final diff = await differ.changedFiles(
+            oldArchive.path,
+            newArchive.path,
+          );
+          expect(differ.nativeFileSetDiff(diff).changedPaths, {path});
+        });
+      }
+    });
+
+    group('native ZIP validation', () {
+      for (final directory in ['jni/', 'abc/']) {
+        test(
+          'rejects linked native ancestor with central name $directory',
+          () async {
+            final archive = _androidZip('linked.zip', [
+              (directory, utf8.encode('/outside')),
+              ('jni/arm64-v8a/plugin.so', [1]),
+            ]);
+            final bytes = archive.readAsBytesSync();
+            final data = ByteData.sublistView(bytes);
+            // This fixture's EOCD has no comment: its central offset is the
+            // uint32 six bytes before EOF. Mark the first record as a symlink.
+            final central = data.getUint32(bytes.length - 6, Endian.little);
+            data
+              ..setUint16(central + 4, (3 << 8) | 20, Endian.little)
+              ..setUint32(central + 38, 0xa1ff0000, Endian.little);
+            // Extraction uses this local name, even if the central directory
+            // presents the innocuous alias abc/ instead of the native ancestor.
+            bytes.setRange(30, 34, utf8.encode('jni/'));
+            archive.writeAsBytesSync(bytes);
+            await expectLater(
+              differ.fileHashes(archive),
+              throwsFormatException,
+            );
+          },
+        );
+      }
+
+      for (final paths in [
+        ['jni/arm64-v8a/plugin.so', 'jni/arm64-v8a/plugin.so'],
+        ['classes.jar', 'classes.jar'],
+        ['base/dex/classes.dex', 'base/dex/classes.dex'],
+        ['jni/arm64-v8a/libapp.so', 'jni/arm64-v8a/libapp.so/'],
+        ['jni', 'jni/arm64-v8a/plugin.so'],
+        ['jni/../plugin.so'],
+        [r'jni\arm64-v8a\plugin.so'],
+      ]) {
+        test('rejects ambiguous code paths $paths', () async {
+          final archive = _androidZip('bad.zip', [
+            for (final path in paths) (path, [1]),
+          ]);
+          await expectLater(differ.fileHashes(archive), throwsFormatException);
+        });
+      }
+
+      final malformed = <String, void Function(ByteData, int)>{
+        'symbolic link': (bytes, central) {
+          bytes
+            ..setUint16(central + 4, (3 << 8) | 20, Endian.little)
+            ..setUint32(central + 38, 0xa1ff0000, Endian.little);
+        },
+        'missing local header': (bytes, central) =>
+            bytes.setUint32(0, 0, Endian.little),
+        'different local CRC': (bytes, central) =>
+            bytes.setUint32(14, 0, Endian.little),
+        'different local size': (bytes, central) =>
+            bytes.setUint32(22, 99, Endian.little),
+        'encrypted payload': (bytes, central) {
+          bytes
+            ..setUint16(6, 1, Endian.little)
+            ..setUint16(central + 8, 1, Endian.little);
+        },
+        'unsupported compression': (bytes, central) {
+          bytes
+            ..setUint16(8, 42, Endian.little)
+            ..setUint16(central + 10, 42, Endian.little);
+        },
+        'wrong decompressed length': (bytes, central) {
+          bytes
+            ..setUint32(22, 99, Endian.little)
+            ..setUint32(central + 24, 99, Endian.little);
+        },
+        'out-of-bounds payload': (bytes, central) {
+          bytes
+            ..setUint32(18, 99999, Endian.little)
+            ..setUint32(central + 20, 99999, Endian.little);
+        },
+        'invalid compressed payload': (bytes, central) {
+          bytes
+            ..setUint16(8, 8, Endian.little)
+            ..setUint16(central + 10, 8, Endian.little)
+            ..setUint8(30 + 'classes.jar'.length, 255);
+        },
+      };
+      for (final invalid in malformed.entries) {
+        test('rejects ${invalid.key}', () async {
+          final archive = _androidZip('bad.zip', [
+            ('classes.jar', [1, 2, 3]),
+          ]);
+          final bytes = archive.readAsBytesSync();
+          invalid.value(
+            ByteData.sublistView(bytes),
+            30 + 'classes.jar'.length + 3,
+          );
+          archive.writeAsBytesSync(bytes);
+          await expectLater(differ.fileHashes(archive), throwsA(anything));
+        });
+      }
+      test(
+        'rejects a native local name disguised as an asset centrally',
+        () async {
+          final archive = _androidZip('bad.zip', [
+            ('payload.xx', [1]),
+          ]);
+          final bytes = archive.readAsBytesSync()
+            ..setRange(30, 40, utf8.encode('payload.so'));
+          archive.writeAsBytesSync(bytes);
+          await expectLater(differ.fileHashes(archive), throwsFormatException);
+        },
+      );
     });
 
     group('aab', () {
@@ -434,4 +692,88 @@ void main() {
       });
     });
   });
+}
+
+// Different payloads with the same actual CRC32, not forged ZIP checksums.
+const _collisionA = [
+  0xb9,
+  0x4d,
+  0x73,
+  0x78,
+  0x93,
+  0x28,
+  0xff,
+  0xe2,
+  0x15,
+  0xa9,
+  0x2c,
+  0x5b,
+];
+const _collisionB = [
+  0x29,
+  0x35,
+  0x01,
+  0x6b,
+  0x60,
+  0xb2,
+  0x25,
+  0xa9,
+  0xd2,
+  0xf3,
+  0x0f,
+  0x34,
+];
+
+// Write real stored ZIP records while retaining duplicate central names.
+File _androidZip(String path, List<(String, List<int>)> entries) {
+  final output = OutputMemoryStream();
+  final central = OutputMemoryStream();
+  for (final (name, content) in entries) {
+    final filename = utf8.encode(name);
+    final checksum = getCrc32(content);
+    final offset = output.length;
+    output
+      ..writeUint32(0x04034b50)
+      ..writeUint16(20)
+      ..writeUint16(0)
+      ..writeUint16(0)
+      ..writeUint32(0)
+      ..writeUint32(checksum)
+      ..writeUint32(content.length)
+      ..writeUint32(content.length)
+      ..writeUint16(filename.length)
+      ..writeUint16(0)
+      ..writeBytes(filename)
+      ..writeBytes(content);
+    central
+      ..writeUint32(0x02014b50)
+      ..writeUint16(20)
+      ..writeUint16(20)
+      ..writeUint16(0)
+      ..writeUint16(0)
+      ..writeUint32(0)
+      ..writeUint32(checksum)
+      ..writeUint32(content.length)
+      ..writeUint32(content.length)
+      ..writeUint16(filename.length)
+      ..writeUint16(0)
+      ..writeUint16(0)
+      ..writeUint16(0)
+      ..writeUint16(0)
+      ..writeUint32(0)
+      ..writeUint32(offset)
+      ..writeBytes(filename);
+  }
+  final centralOffset = output.length;
+  output
+    ..writeBytes(central.getBytes())
+    ..writeUint32(0x06054b50)
+    ..writeUint16(0)
+    ..writeUint16(0)
+    ..writeUint16(entries.length)
+    ..writeUint16(entries.length)
+    ..writeUint32(central.length)
+    ..writeUint32(centralOffset)
+    ..writeUint16(0);
+  return File(path)..writeAsBytesSync(output.getBytes());
 }

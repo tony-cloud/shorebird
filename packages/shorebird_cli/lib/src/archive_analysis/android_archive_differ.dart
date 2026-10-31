@@ -1,11 +1,15 @@
+import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dex/dex.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/archive_analysis/archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/bundle_dependencies.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
+import 'package:shorebird_cli/src/archive_analysis/native_zip_validator.dart';
 
 /// A [FileSetDiff] that also carries semantic DEX diff results.
 class AndroidFileSetDiff extends FileSetDiff {
@@ -36,14 +40,16 @@ class AndroidFileSetDiff extends FileSetDiff {
 ///   - Dart code changes
 ///      - libapp.so will be different
 ///   - Java/Kotlin code changes
-///      - .dex files will be different
+///      - .dex, .jar, or .class files will be different
+///   - Engine and plugin native code changes
+///      - Other .so files will be different
 ///   - Assets
 ///      - **/assets/** will be different
 ///      - AssetManifest.json will have changed if assets have been added or
 ///        removed
 ///
 /// Changes we don't care about:
-///   - Anything in META-INF
+///   - Signature and manifest records in META-INF
 ///   - BUNDLE-METADATA/com.android.tools.build.libraries/dependencies.pb
 ///      - This seems to change with every build, regardless of whether any code
 ///        or assets were changed. When DEX files change, the Maven versions it
@@ -51,13 +57,96 @@ class AndroidFileSetDiff extends FileSetDiff {
 ///        [AndroidFileSetDiff.dependencyVersionChanges]).
 ///
 /// See https://developer.android.com/guide/app-bundle/app-bundle-format and
-/// /// https://developer.android.com/studio/projects/android-library.html#aar-contents
-/// for reference. Note that .aars produced by Flutter modules do not contain
-/// .jar files, so only asset and dart changes are possible.
+/// https://developer.android.com/studio/projects/android-library
+/// for reference. Flutter module AARs also contain classes.jar; patches do not
+/// deliver Java bytecode or native libraries other than the Dart snapshot.
 /// {@endtemplate}
 class AndroidArchiveDiffer extends ArchiveDiffer {
   /// {@macro android_archive_differ}
   const AndroidArchiveDiffer();
+
+  @override
+  Future<PathHashes> fileHashes(File archive) async {
+    return Isolate.run(() {
+      final input = InputFileStream(archive.path);
+      try {
+        const validator = NativeZipValidator('Android');
+        final directory = validator.readDirectory(input);
+        final identities = <String, int>{};
+        final filePaths = <String>{};
+        for (final header in directory.fileHeaders) {
+          final path = header.filename;
+          final identity = path.endsWith('/')
+              ? path.substring(0, path.length - 1)
+              : path;
+          identities.update(identity, (count) => count + 1, ifAbsent: () => 1);
+          if (!path.endsWith('/')) filePaths.add(path);
+        }
+        final hashes = <String, String>{};
+        for (final header in directory.fileHeaders) {
+          final path = header.filename;
+          // Android package extraction must not redirect through a link,
+          // including a directory or asset alias hiding a native ancestor.
+          if (((header.externalFileAttributes >> 16) & 0xf000) == 0xa000) {
+            throw FormatException('Symbolic links in Android ZIP', path);
+          }
+          final localName = header.file?.filename;
+          if (localName != null &&
+              localName != path &&
+              (_isCodeFilePath(localName) || _isCodeFilePath(path))) {
+            throw FormatException(
+              'Inconsistent Android code ZIP filename',
+              path,
+            );
+          }
+          if (!_isCodeFilePath(path)) {
+            // Preserve asset and metadata comparison behavior.
+            hashes[path] = header.crc32.toString();
+            continue;
+          }
+          if (p.posix.isAbsolute(path) ||
+              path.contains(r'\') ||
+              path.contains('\x00') ||
+              path
+                  .split('/')
+                  .any(
+                    (part) => part.isEmpty || part == '.' || part == '..',
+                  ) ||
+              identities[path] != 1) {
+            throw FormatException('Ambiguous Android code ZIP path', path);
+          }
+          var parent = p.posix.dirname(path);
+          while (parent != '.') {
+            if (filePaths.contains(parent)) {
+              throw FormatException(
+                'Android ZIP file used as a directory',
+                path,
+              );
+            }
+            parent = p.posix.dirname(parent);
+          }
+          validator.validateEntry(input, directory, header);
+          final content = header.file!.getStream();
+          try {
+            if (content.length != header.uncompressedSize) {
+              throw FormatException(
+                'Invalid Android code ZIP entry length',
+                path,
+              );
+            }
+            // CRC32 is not an identity: different engine/plugin/DEX bytes can
+            // have the same valid ZIP checksum. Hash the actual code payload.
+            hashes[path] = sha256.convert(content.toUint8List()).toString();
+          } finally {
+            content.closeSync();
+          }
+        }
+        return hashes;
+      } finally {
+        input.closeSync();
+      }
+    });
+  }
 
   @override
   Future<AndroidFileSetDiff> changedFiles(
@@ -186,10 +275,20 @@ class AndroidArchiveDiffer extends ArchiveDiffer {
 
   @override
   bool isDartFilePath(String filePath) {
-    const dartFileNames = ['libapp.so', 'libflutter.so'];
-    return dartFileNames.contains(p.basename(filePath));
+    // These are the only Dart libraries extracted and delivered by the Android
+    // patchers. Feature modules, assets, and unsupported ABIs remain native.
+    return RegExp(
+      r'^(?:base/lib|lib|jni)/(?:armeabi-v7a|arm64-v8a|x86_64)/libapp\.so$',
+    ).hasMatch(filePath);
   }
 
   @override
-  bool isNativeFilePath(String filePath) => p.extension(filePath) == '.dex';
+  bool isNativeFilePath(String filePath) =>
+      _isCodeFilePath(filePath) && !isDartFilePath(filePath);
+
+  bool _isCodeFilePath(String filePath) =>
+      !filePath.endsWith('/') &&
+      const {'.dex', '.so', '.jar', '.class'}.contains(
+        p.posix.extension(filePath).toLowerCase(),
+      );
 }
