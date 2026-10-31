@@ -74,7 +74,7 @@ void main() {
         },
       );
 
-      test('Linux retains the inherited declared CRC behavior', () async {
+      test('Linux nonnative files retain declared CRC behavior', () async {
         final oldArchive = _writeZip('old.zip', [
           ('runner.exe', [1]),
         ], crc: 123);
