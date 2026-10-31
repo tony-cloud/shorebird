@@ -2,11 +2,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
+import 'package:mocktail/mocktail.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
 import 'package:path/path.dart' as p;
+import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/full_replacement_archive_differ.dart';
+import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
+import '../mocks.dart';
 import '../platform/apple/macho_fixture.dart' show image;
 
 const _app = 'Products/Applications/Runner.app';
@@ -98,6 +104,152 @@ void main() {
     expect(changes.changedPaths, {path});
     expect(differ.nativeFileSetDiff(changes), isEmpty);
     expect(differ.assetsFileSetDiff(changes), isEmpty);
+  });
+
+  group('native asset mappings', () {
+    const mappingPath = '$_assets/NativeAssetsManifest.json';
+    const appPath = '$_app/Frameworks/App.framework/App';
+
+    List<int> mapping(String library) => utf8.encode(
+      jsonEncode({
+        'format-version': [1, 0, 0],
+        'native-assets': {
+          'ios_arm64': {
+            'package:example/native.dart': ['absolute', library],
+          },
+        },
+      }),
+    );
+
+    Future<DiffStatus> check(
+      File old,
+      File updated, {
+      bool allowNative = false,
+    }) {
+      final logger = MockShorebirdLogger();
+      final environment = MockShorebirdEnv();
+      when(() => logger.progress(any())).thenReturn(MockProgress());
+      when(() => environment.canAcceptUserInput).thenReturn(false);
+      return runScoped(
+        () => PatchDiffChecker().confirmUnpatchableDiffsIfNecessary(
+          localArchive: updated,
+          releaseArchive: old,
+          archiveDiffer: differ,
+          allowAssetChanges: true,
+          allowNativeChanges: allowNative,
+        ),
+        values: {
+          loggerRef.overrideWith(() => logger),
+          shorebirdEnvRef.overrideWith(() => environment),
+        },
+      );
+    }
+
+    for (final operation in ['changed', 'added', 'removed']) {
+      for (final allowNative in [false, true]) {
+        test('$operation mapping with native override $allowNative', () async {
+          final old = archive(
+            'old',
+            released,
+            assets: {
+              appPath: image(),
+              if (operation != 'added')
+                mappingPath: mapping('Plugin.framework/Plugin'),
+            },
+          );
+          final updated = archive(
+            'new',
+            comparison,
+            assets: {
+              appPath: image()..last = 7,
+              if (operation != 'removed')
+                mappingPath: mapping('Other.framework/Other'),
+            },
+          );
+          if (allowNative) {
+            final status = await check(old, updated, allowNative: true);
+            expect(status.hasNativeChanges, isTrue);
+            expect(status.hasAssetChanges, isFalse);
+          } else {
+            await expectLater(
+              check(old, updated),
+              throwsA(isA<UnpatchableChangeException>()),
+            );
+          }
+          final changes = await differ.changedFiles(old.path, updated.path);
+          final native = differ.nativeFileSetDiff(changes);
+          expect(
+            native.changedPaths,
+            operation == 'changed' ? {mappingPath} : isEmpty,
+          );
+          expect(
+            native.addedPaths,
+            operation == 'added' ? {mappingPath} : isEmpty,
+          );
+          expect(
+            native.removedPaths,
+            operation == 'removed' ? {mappingPath} : isEmpty,
+          );
+          expect(differ.assetsFileSetDiff(changes), isEmpty);
+        });
+      }
+    }
+
+    test('same mapping permits changed generated App and baseline', () async {
+      final assets = {mappingPath: mapping('Plugin.framework/Plugin')};
+      final old = archive(
+        'old',
+        released,
+        assets: {...assets, appPath: image()},
+      );
+      final updated = archive(
+        'new',
+        comparison,
+        assets: {...assets, appPath: image()..last = 7},
+      );
+      final status = await check(old, updated);
+      expect(status.hasNativeChanges, isFalse);
+      expect(status.hasAssetChanges, isFalse);
+      expect((await differ.changedFiles(old.path, updated.path)).changedPaths, {
+        appPath,
+      });
+    });
+
+    test('compares mapping bytes without JSON normalization', () async {
+      final bytes = mapping('Plugin.framework/Plugin');
+      final old = archive('old', released, assets: {mappingPath: bytes});
+      final updated = archive(
+        'new',
+        comparison,
+        assets: {
+          mappingPath: [...bytes, 0x0a],
+        },
+      );
+      await expectLater(
+        check(old, updated),
+        throwsA(isA<UnpatchableChangeException>()),
+      );
+    });
+
+    test('classifies only the exact asset-root mapping filename', () {
+      for (final path in [
+        mappingPath,
+        'flutter_assets/NativeAssetsManifest.json',
+        'Contents/Frameworks/App.framework/Resources/flutter_assets/NativeAssetsManifest.json',
+      ]) {
+        expect(differ.isNativeFilePath(path), isTrue, reason: path);
+        expect(differ.isAssetFilePath(path), isFalse, reason: path);
+      }
+      for (final path in [
+        '$_assets/assets/NativeAssetsManifest.json',
+        '$_assets/NativeAssetsManifest.json.bak',
+        '$_assets/nativeassetsmanifest.json',
+      ]) {
+        expect(differ.isNativeFilePath(path), isFalse, reason: path);
+        expect(differ.isAssetFilePath(path), isTrue, reason: path);
+      }
+      expect(differ.isNativeFilePath('NativeAssetsManifest.json'), isFalse);
+    });
   });
 
   test(

@@ -36,6 +36,12 @@ class AppleArchiveDiffer extends ArchiveDiffer {
 
   String _hash(List<int> bytes) => sha256.convert(bytes).toString();
 
+  // This manifest controls native library resolution at runtime. Its bytes
+  // belong to the installed native build even though it lives in assets.
+  static final _nativeAssetsManifestPath = RegExp(
+    r'(^|/)flutter_assets/NativeAssetsManifest\.json$',
+  );
+
   /// The regex pattern for identifying app files within an xcarchive.
   static final RegExp xcFrameworkAppRegex = RegExp(
     r'^(?:Products/Applications|Payload)/[^/]+\.app/[^/.]+$',
@@ -373,8 +379,9 @@ class AppleArchiveDiffer extends ArchiveDiffer {
     /// The flutter_assets directory contains the assets listed in the assets
     ///   section of the pubspec.yaml file.
     /// Assets.car is the compiled asset catalog(s) (.xcassets files).
-    return p.basename(filePath) == 'Assets.car' ||
-        p.split(filePath).contains('flutter_assets');
+    return !_nativeAssetsManifestPath.hasMatch(filePath) &&
+        (p.basename(filePath) == 'Assets.car' ||
+            p.split(filePath).contains('flutter_assets'));
   }
 
   @override
@@ -388,7 +395,8 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   @override
   bool isNativeFilePath(String filePath) =>
       !isDartFilePath(filePath) &&
-      (xcFrameworkAppRegex.hasMatch(filePath) ||
+      (_nativeAssetsManifestPath.hasMatch(filePath) ||
+          xcFrameworkAppRegex.hasMatch(filePath) ||
           macosAppRegex.hasMatch(filePath) ||
           filePath.endsWith('.dylib') ||
           RegExp(
