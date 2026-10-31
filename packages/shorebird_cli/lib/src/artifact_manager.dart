@@ -186,22 +186,34 @@ class ArtifactManager {
   /// by artifact id and hash, and are reused only while their sha256 still
   /// matches the hash the server recorded at release. Each download goes to
   /// its own temporary directory there, so concurrent runs never write the
-  /// same file, and a failed download is deleted. A download whose hash does
-  /// not match is used for this run but not cached, as before this cache.
+  /// same file, and a failed download is deleted. Invalid hash metadata and
+  /// downloads whose hashes do not match are rejected before patching.
   /// [Cache.pruneUnusedReleaseArtifacts] removes copies that go unused.
   Future<File> downloadReleaseArtifact(
     ReleaseArtifact artifact, {
     required String message,
   }) async {
+    // Release uploads produce hexadecimal SHA-256 digests. Validate metadata
+    // before using it in a path or accessing the cache or network, and accept
+    // either hex case while keeping a single canonical cache entry.
+    if (artifact.hash.length != 64 ||
+        !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(artifact.hash)) {
+      final error =
+          'Release artifact ${artifact.id} has an invalid SHA-256 hash; '
+          'expected exactly 64 hexadecimal characters.';
+      logger.err(error);
+      throw FormatException(error);
+    }
+    final expectedHash = artifact.hash.toLowerCase();
     final directory = Cache.shorebirdReleaseArtifactsDirectory;
     final cached = File(
-      p.join(directory.path, '${artifact.id}-${artifact.hash}'),
+      p.join(directory.path, '${artifact.id}-$expectedHash'),
     );
     // Recording the use before hashing keeps another run's prune from
     // deleting the copy while it is hashed.
     if (_markUsedIfExists(cached)) {
       final progress = logger.progress(message);
-      if (await _sha256Of(cached) == artifact.hash) {
+      if (await _sha256Of(cached) == expectedHash) {
         progress.complete('$message (cached)');
         return cached;
       }
@@ -221,19 +233,20 @@ class ArtifactManager {
         message: message,
         outputPath: p.join(downloadDirectory.path, p.basename(cached.path)),
       );
+      final actualHash = await _sha256Of(downloaded);
+      if (actualHash != expectedHash) {
+        final error =
+            'Release artifact ${artifact.id} failed SHA-256 verification: '
+            'expected $expectedHash, got $actualHash. '
+            'Run the command again to download it again.';
+        logger.err(error);
+        throw Exception(error);
+      }
     } catch (_) {
       downloadDirectory.deleteTemporarySync();
       rethrow;
     }
 
-    if (await _sha256Of(downloaded) != artifact.hash) {
-      logger.warn(
-        'The downloaded release artifact does not match the hash recorded '
-        'for it, so it was not cached. If the patch fails, run the command '
-        'again to download it again.',
-      );
-      return downloaded;
-    }
     try {
       final file = downloaded.renameSync(cached.path);
       downloadDirectory.deleteTemporarySync();

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
 import 'package:equatable/equatable.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
@@ -47,6 +48,36 @@ class _FakeRelease extends Fake with Equatable implements Release {
 
   @override
   List<Object?> get props => [updatedAt];
+}
+
+/// Supplies transport bytes while retaining production integrity validation.
+class _ControlledReleaseArtifactManager extends ArtifactManager {
+  _ControlledReleaseArtifactManager({required this.corruptPath});
+
+  final String corruptPath;
+  int downloads = 0;
+  int extractions = 0;
+
+  @override
+  Future<File> downloadWithProgressUpdates(
+    Uri uri, {
+    required String message,
+    Duration throttleDuration = const Duration(milliseconds: 250),
+    String? outputPath,
+  }) async {
+    downloads++;
+    return File(outputPath!)
+      ..writeAsBytesSync(uri.path == corruptPath ? [9, 9, 9] : [1, 2, 3]);
+  }
+
+  @override
+  Future<void> extractZip({
+    required File zipFile,
+    required Directory outputDirectory,
+  }) async {
+    extractions++;
+    throw StateError('Unverified bytes reached extraction');
+  }
 }
 
 void main() {
@@ -497,6 +528,84 @@ void main() {
     });
 
     group('createPatch', () {
+      for (final corruptPath in ['/primary', '/supplement']) {
+        test('rejects corrupt $corruptPath before patch work', () async {
+          final manager = _ControlledReleaseArtifactManager(
+            corruptPath: corruptPath,
+          );
+          artifactManager = manager;
+          final root = createSystemTemp();
+          when(() => shorebirdEnv.shorebirdRoot).thenReturn(root);
+          final expectedHash = sha256.convert([1, 2, 3]).toString();
+          ReleaseArtifact artifact(int id, String path) => ReleaseArtifact(
+            id: id,
+            releaseId: release.id,
+            arch: path == '/primary' ? arch : 'supplement',
+            platform: releasePlatform,
+            hash: expectedHash,
+            size: 3,
+            url: 'https://example.com$path',
+            canSideload: path == '/primary',
+          );
+          when(
+            () => codePushClientWrapper.getReleaseArtifact(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              arch: any(named: 'arch'),
+              platform: any(named: 'platform'),
+            ),
+          ).thenAnswer((_) async => artifact(10, '/primary'));
+          when(
+            () => patcher.supplementaryReleaseArtifactArch,
+          ).thenReturn('supplement');
+          when(
+            () => codePushClientWrapper.maybeGetReleaseArtifact(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              arch: any(named: 'arch'),
+              platform: any(named: 'platform'),
+            ),
+          ).thenAnswer((_) async => artifact(11, '/supplement'));
+
+          await expectLater(
+            () => runWithOverrides(() => command.createPatch(patcher)),
+            exitsWithCode(ExitCode.software),
+          );
+          expect(manager.downloads, corruptPath == '/primary' ? 1 : 2);
+          expect(manager.extractions, 0);
+          verifyNever(
+            () => patcher.buildPatchArtifact(
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+          verifyNever(
+            () => patcher.createPatchArtifacts(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              releaseArtifact: any(named: 'releaseArtifact'),
+              supplementDirectory: any(named: 'supplementDirectory'),
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+          verifyNever(
+            () => patcher.uploadPatchArtifacts(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              metadata: any(named: 'metadata'),
+              artifacts: any(named: 'artifacts'),
+              track: any(named: 'track'),
+            ),
+          );
+          final cacheDirectory = runWithOverrides(
+            () => Cache.shorebirdReleaseArtifactsDirectory,
+          );
+          expect(
+            cacheDirectory.listSync().whereType<Directory>(),
+            isEmpty,
+          );
+        });
+      }
+
       test('publishes the patch', () async {
         await runWithOverrides(() => command.createPatch(patcher));
 

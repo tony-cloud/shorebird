@@ -455,7 +455,7 @@ void main() {
       );
 
       setUp(() {
-        shorebirdRoot = Directory.systemTemp.createTempSync();
+        shorebirdRoot = createSystemTemp();
         when(() => shorebirdEnv.shorebirdRoot).thenReturn(shorebirdRoot);
         progress = MockProgress();
         when(() => logger.progress(any())).thenReturn(progress);
@@ -485,6 +485,64 @@ void main() {
         verify(() => progress.complete('Downloading (cached)')).called(1);
       });
 
+      test(
+        'normalizes uppercase hashes for downloads and cached reuse',
+        () async {
+          final first = await download(
+            artifactWithHash(contentHash.toUpperCase()),
+          );
+          final second = await download(artifactWithHash(contentHash));
+
+          expect(requests, equals(1));
+          expect(p.basename(first.path), equals('7-$contentHash'));
+          expect(second.path, equals(first.path));
+          expect(second.readAsBytesSync(), equals(content));
+        },
+      );
+
+      for (final entry in {
+        'empty': '',
+        'short': 'a' * 63,
+        'long': 'a' * 65,
+        'non-hex': 'g' * 64,
+        'slash': '${'a' * 30}/../${'a' * 30}',
+        'backslash': '${'a' * 30}\\..\\${'a' * 30}',
+        'newline': '${'a' * 63}\n',
+        'trailing newline': '$contentHash\n',
+        'leading whitespace': ' $contentHash',
+        'trailing whitespace': '$contentHash ',
+        'control characters': '${'a' * 63}\u001b',
+        'non-ASCII': '${'a' * 63}ａ',
+      }.entries) {
+        test(
+          'rejects ${entry.key} hash metadata before cache or network I/O',
+          () async {
+            await expectLater(
+              download(artifactWithHash(entry.value)),
+              throwsA(
+                isA<FormatException>().having(
+                  (e) => e.message,
+                  'message',
+                  'Release artifact 7 has an invalid SHA-256 hash; '
+                      'expected exactly 64 hexadecimal characters.',
+                ),
+              ),
+            );
+
+            verifyNever(() => shorebirdEnv.shorebirdRoot);
+            verifyNever(() => httpClient.send(any()));
+            verifyNever(() => logger.progress(any()));
+            verify(
+              () => logger.err(
+                'Release artifact 7 has an invalid SHA-256 hash; '
+                'expected exactly 64 hexadecimal characters.',
+              ),
+            ).called(1);
+            expect(shorebirdRoot.listSync(), isEmpty);
+          },
+        );
+      }
+
       test('downloads again when the cached copy is corrupt', () async {
         final artifact = artifactWithHash(contentHash);
         final first = await download(artifact);
@@ -496,25 +554,65 @@ void main() {
         expect(second.readAsBytesSync(), equals(content));
       });
 
-      test('warns about, uses, and does not cache a download whose hash '
-          'differs', () async {
-        final artifact = artifactWithHash('not-the-hash');
-        final first = await download(artifact);
-        final second = await download(artifact);
+      test(
+        'rejects mismatching bytes, deletes them, and retries next time',
+        () async {
+          final expectedHash = sha256.convert([9]).toString();
+          final artifact = artifactWithHash(expectedHash);
+          for (var attempt = 0; attempt < 2; attempt++) {
+            await expectLater(
+              download(artifact),
+              throwsA(
+                isA<Exception>().having(
+                  (e) => e.toString(),
+                  'message',
+                  'Exception: Release artifact 7 failed SHA-256 verification: '
+                      'expected $expectedHash, got $contentHash. '
+                      'Run the command again to download it again.',
+                ),
+              ),
+            );
+            expect(releaseArtifactsDirectory().listSync(), isEmpty);
+          }
 
-        expect(requests, equals(2));
-        expect(first.readAsBytesSync(), equals(content));
-        expect(second.path, isNot(equals(first.path)));
-        verify(
-          () => logger.warn(any(that: contains('does not match the hash'))),
-        ).called(2);
-        expect(
-          File(
-            p.join(releaseArtifactsDirectory().path, '7-not-the-hash'),
-          ).existsSync(),
-          isFalse,
-        );
-      });
+          expect(requests, equals(2));
+          verify(
+            () => logger.err(
+              'Release artifact 7 failed SHA-256 verification: '
+              'expected $expectedHash, got $contentHash. '
+              'Run the command again to download it again.',
+            ),
+          ).called(2);
+        },
+      );
+
+      test(
+        'recovers after mismatching bytes and caches the valid retry',
+        () async {
+          final artifact = artifactWithHash(contentHash);
+          final cached = await download(artifact);
+          cached.writeAsBytesSync([9]);
+          when(() => httpClient.send(any())).thenAnswer((_) async {
+            requests++;
+            return http.StreamedResponse(Stream.value([9]), HttpStatus.ok);
+          });
+
+          await expectLater(download(artifact), throwsA(isA<Exception>()));
+          expect(releaseArtifactsDirectory().listSync(), isEmpty);
+
+          when(() => httpClient.send(any())).thenAnswer((_) async {
+            requests++;
+            return http.StreamedResponse(Stream.value(content), HttpStatus.ok);
+          });
+          final recovered = await download(artifact);
+          final reused = await download(artifact);
+
+          expect(requests, equals(3));
+          expect(recovered.readAsBytesSync(), equals(content));
+          expect(reused.path, equals(recovered.path));
+          expect(releaseArtifactsDirectory().listSync(), hasLength(1));
+        },
+      );
 
       test('uses the download when it cannot be moved into place', () async {
         final artifact = artifactWithHash(contentHash);
@@ -528,6 +626,7 @@ void main() {
 
         expect(file.readAsBytesSync(), equals(content));
         expect(p.dirname(file.path), isNot(releaseArtifactsDirectory().path));
+        expect(file.parent.existsSync(), isTrue);
       });
 
       test('deletes a failed download', () async {
@@ -544,6 +643,65 @@ void main() {
         );
         expect(releaseArtifactsDirectory().listSync(), isEmpty);
       });
+
+      test(
+        'deletes a partially written download on failure and can retry',
+        () async {
+          when(() => httpClient.send(any())).thenAnswer(
+            (_) async => http.StreamedResponse(
+              Stream<List<int>>.multi((controller) {
+                controller
+                  ..add(content)
+                  ..addError(Exception('connection reset'));
+                unawaited(controller.close());
+              }),
+              HttpStatus.ok,
+            ),
+          );
+
+          await expectLater(
+            download(artifactWithHash(contentHash)),
+            throwsA(isA<Exception>()),
+          );
+          expect(releaseArtifactsDirectory().listSync(), isEmpty);
+
+          when(() => httpClient.send(any())).thenAnswer(
+            (_) async =>
+                http.StreamedResponse(Stream.value(content), HttpStatus.ok),
+          );
+          expect(
+            (await download(artifactWithHash(contentHash))).readAsBytesSync(),
+            equals(content),
+          );
+        },
+      );
+
+      test(
+        'deletes the owned directory when reading the download fails',
+        () async {
+          artifactManager = _DownloadCallbackArtifactManager((
+            outputPath,
+          ) async {
+            final downloaded = File(outputPath)..writeAsBytesSync(content);
+            // Make hashing fail after a completed download, rather than during
+            // HTTP streaming. The sibling proves cleanup owns the entire
+            // temporary directory.
+            File(
+              p.join(downloaded.parent.path, 'partial'),
+            ).writeAsBytesSync([9]);
+            downloaded.deleteSync();
+            return downloaded;
+          });
+
+          await expectLater(
+            download(artifactWithHash(contentHash)),
+            throwsA(isA<FileSystemException>()),
+          );
+
+          expect(releaseArtifactsDirectory().listSync(), isEmpty);
+          verifyNever(() => httpClient.send(any()));
+        },
+      );
     });
 
     group('extractZip', () {
@@ -1459,4 +1617,19 @@ class _TestArtifactManager extends ArtifactManager {
   @override
   Future<FileDownload> startFileDownload(Uri uri, {String? outputPath}) async =>
       download;
+}
+
+/// Overrides only transport so release artifact verification remains real.
+class _DownloadCallbackArtifactManager extends ArtifactManager {
+  _DownloadCallbackArtifactManager(this.download);
+
+  final Future<File> Function(String outputPath) download;
+
+  @override
+  Future<File> downloadWithProgressUpdates(
+    Uri uri, {
+    required String message,
+    Duration throttleDuration = const Duration(milliseconds: 250),
+    String? outputPath,
+  }) => download(outputPath!);
 }
