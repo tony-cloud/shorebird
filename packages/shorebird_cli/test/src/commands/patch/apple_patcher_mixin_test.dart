@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
@@ -70,8 +71,99 @@ class _TestApplePatcher extends Patcher
       throw UnimplementedError();
 }
 
+class _TestApplePodfilePatcher extends _TestApplePatcher
+    with ApplePodfileLockPatcherMixin {
+  _TestApplePodfilePatcher({
+    required super.argParser,
+    required super.argResults,
+    required this.localPodfileLockHash,
+  });
+
+  @override
+  final String? localPodfileLockHash;
+
+  @override
+  String get podfileLockRelativePath => 'ios/Podfile.lock';
+}
+
 void main() {
   useTempWorkingDirectory();
+  group(ApplePodfileLockPatcherMixin, () {
+    for (final lock in <String?>[null, 'same-lock']) {
+      for (final allow in [false, true]) {
+        test('real native guard with lock=$lock allow=$allow', () async {
+          final temp = Directory.systemTemp.createTempSync('apple_mixin.');
+          addTearDown(() => temp.deleteSync(recursive: true));
+          File archive(String name, int value) {
+            final entries = Archive()
+              ..add(
+                ArchiveFile(
+                  'Products/Applications/Runner.app/Frameworks/Plugin.framework/Plugin',
+                  1,
+                  [value],
+                ),
+              );
+            return File(p.join(temp.path, '$name.zip'))
+              ..writeAsBytesSync(ZipEncoder().encode(entries));
+          }
+
+          final old = archive('release', 1);
+          final updated = archive('patch', 2);
+          final args = MockArgResults();
+          final parser = MockArgParser();
+          final logger = MockShorebirdLogger();
+          final env = MockShorebirdEnv();
+          when(() => logger.progress(any())).thenReturn(MockProgress());
+          when(() => env.canAcceptUserInput).thenReturn(false);
+          when(() => args['allow-native-diffs']).thenReturn(allow);
+          when(() => args['allow-asset-diffs']).thenReturn(false);
+          final patcher = _TestApplePodfilePatcher(
+            argParser: parser,
+            argResults: args,
+            localPodfileLockHash: lock,
+          );
+          final artifact = ReleaseArtifact(
+            id: 0,
+            releaseId: 0,
+            arch: 'aarch64',
+            platform: ReleasePlatform.ios,
+            hash: '#',
+            size: 1,
+            url: 'https://example.com',
+            podfileLockHash: lock,
+            canSideload: true,
+          );
+          final result = runScoped(
+            () => patcher.assertUnpatchableDiffs(
+              releaseArtifact: artifact,
+              releaseArchive: old,
+              patchArchive: updated,
+            ),
+            values: {
+              loggerRef.overrideWith(() => logger),
+              shorebirdEnvRef.overrideWith(() => env),
+              patchDiffCheckerRef.overrideWith(PatchDiffChecker.new),
+            },
+          );
+          if (allow) {
+            expect((await result).hasNativeChanges, isTrue);
+          } else {
+            await expectLater(
+              result,
+              throwsA(isA<UnpatchableChangeException>()),
+            );
+          }
+          verify(
+            () => logger.warn(
+              'Your app contains native changes, '
+              'which cannot be applied with a patch.',
+            ),
+          ).called(1);
+        });
+      }
+    }
+  });
+
   group(AppleLinkerPatcherMixin, () {
     const postLinkerFlutterRevision = // cspell: disable-next-line
         'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';

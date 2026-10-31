@@ -243,10 +243,8 @@ mixin ApplePodfileLockPatcherMixin on Patcher, ApplePatcherMixin {
     required File releaseArchive,
     required File patchArchive,
   }) async {
-    // Check for diffs without warning about native changes, as Xcode builds
-    // can be nondeterministic. So we still have some hope of alerting users of
-    // unpatchable native changes, we compare the Podfile.lock hash between the
-    // patch and the release.
+    // Native executable bytes are authoritative, including when Podfile.lock
+    // is unchanged or absent. The checker owns warning and confirmation.
     final diffStatus = await patchDiffChecker
         .confirmUnpatchableDiffsIfNecessary(
           localArchive: patchArchive,
@@ -254,7 +252,6 @@ mixin ApplePodfileLockPatcherMixin on Patcher, ApplePatcherMixin {
           archiveDiffer: archiveDifferOverride ?? const AppleArchiveDiffer(),
           allowAssetChanges: allowAssetDiffs,
           allowNativeChanges: allowNativeDiffs,
-          confirmNativeChanges: false,
         );
 
     if (!diffStatus.hasNativeChanges) return diffStatus;
@@ -266,16 +263,6 @@ mixin ApplePodfileLockPatcherMixin on Patcher, ApplePatcherMixin {
 Your $podfileLockRelativePath is different from the one used to build the release.
 This may indicate that the patch contains native changes, which cannot be applied with a patch. Proceeding may result in unexpected behavior or crashes.''',
       );
-
-      if (!allowNativeDiffs) {
-        if (!shorebirdEnv.canAcceptUserInput) {
-          throw UnpatchableChangeException();
-        }
-
-        if (!logger.confirm('Continue anyway?', hint: allowNativeDiffsHint)) {
-          throw UserCancelledException();
-        }
-      }
     }
 
     return diffStatus;

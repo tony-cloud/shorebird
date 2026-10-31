@@ -4,6 +4,7 @@ import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
+import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
 import 'package:yaml/yaml.dart';
 
@@ -67,10 +68,13 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         changed.add(bundle.policyPath);
       }
     }
-    return FileSetDiff(
-      addedPaths: diff.addedPaths,
-      removedPaths: diff.removedPaths,
-      changedPaths: changed,
+    return AppleFileSetDiff.fromDiff(
+      FileSetDiff(
+        addedPaths: diff.addedPaths,
+        removedPaths: diff.removedPaths,
+        changedPaths: changed,
+      ),
+      nativePaths: (diff as AppleFileSetDiff).nativePaths,
     );
   }
 
@@ -83,6 +87,9 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
     }
     final input = InputFileStream(archivePath);
     try {
+      const validator = AppleZipValidator();
+      validator.validate(input, validator.readDirectory(input));
+      input.position = 0;
       final decoder = ZipDecoder();
       final archive = decoder.decodeStream(input);
       // Archive coalesces duplicate filenames, so count the original ZIP

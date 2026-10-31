@@ -3,12 +3,12 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
+import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
@@ -25,8 +25,8 @@ import 'package:shorebird_cli/src/platform/apple/macho.dart';
 /// the `.xcasset` catalogs in the Xcode project) and the `flutter_assets`
 /// directory.
 ///
-/// Native changes will appear in the Runner.app/Runner executable and non
-///   Flutter.framework or App.framework files.
+/// Native changes include Runner, the Flutter engine, plugin frameworks,
+/// dylibs and all other Mach-O images except the generated Dart App image.
 ///
 /// Dart changes will appear in the App.framework/App executable.
 /// {@endtemplate}
@@ -36,18 +36,15 @@ class AppleArchiveDiffer extends ArchiveDiffer {
 
   String _hash(List<int> bytes) => sha256.convert(bytes).toString();
 
-  static final _binaryFilePatterns = {
-    RegExp(r'App.framework/App$'),
-    RegExp(r'Flutter.framework/Flutter$'),
-  };
-
   /// The regex pattern for identifying app files within an xcarchive.
   static final RegExp xcFrameworkAppRegex = RegExp(
-    r'^Products/Applications/[\w\-. ]+.app/[\w\- ]+$',
+    r'^(?:Products/Applications|Payload)/[^/]+\.app/[^/.]+$',
   );
 
   /// The regex pattern for identifying executable files within a macOS .app.
-  static final RegExp macosAppRegex = RegExp(r'^Contents/MacOS/.+$');
+  static final RegExp macosAppRegex = RegExp(
+    r'^(?:[^/]+\.app/)?Contents/MacOS/.+$',
+  );
 
   /// Files that have been added, removed, or that have changed between the
   /// archives at the two provided paths. This method will also unsign mach-o
@@ -57,45 +54,75 @@ class AppleArchiveDiffer extends ArchiveDiffer {
     String oldArchivePath,
     String newArchivePath,
   ) async {
-    var oldPathHashes = await fileHashes(File(oldArchivePath));
-    var newPathHashes = await fileHashes(File(newArchivePath));
-
-    oldPathHashes = await _updateHashes(
-      archivePath: oldArchivePath,
-      pathHashes: oldPathHashes,
+    final old = await _archiveHashes(oldArchivePath);
+    final updated = await _archiveHashes(newArchivePath);
+    final diff = FileSetDiff.fromPathHashes(
+      oldPathHashes: old.$1,
+      newPathHashes: updated.$1,
     );
-    newPathHashes = await _updateHashes(
-      archivePath: newArchivePath,
-      pathHashes: newPathHashes,
-    );
-
-    return FileSetDiff.fromPathHashes(
-      oldPathHashes: oldPathHashes,
-      newPathHashes: newPathHashes,
+    return AppleFileSetDiff.fromDiff(
+      diff,
+      nativePaths: {...old.$2, ...updated.$2},
     );
   }
 
-  /// Replaces crc32s from zip file headers where needed. This currently
-  /// includes:
-  ///   - Signed files (those with a .app extension)
-  ///   - Compiled asset catalogs (those with a .car extension)
-  Future<PathHashes> _updateHashes({
-    required String archivePath,
-    required PathHashes pathHashes,
-  }) async {
-    // Resolved here because the isolate below does not inherit IOOverrides.
+  Future<(PathHashes, Set<String>)> _archiveHashes(String archivePath) async {
     final tempRoot = Directory.systemTemp.path;
     return Isolate.run(
       () => _withArchive(archivePath, (archive) async {
-        for (final file in _filesToUnsign(archive)) {
-          pathHashes[file.name] = await _unsignedFileHash(file, tempRoot);
+        final hashes = <String, String>{};
+        final native = <String>{};
+        for (final file in archive.files) {
+          if (file.isSymbolicLink) {
+            hashes[file.name] =
+                'symlink:${_hash(utf8.encode(file.symbolicLink!))}';
+            native.add(file.name);
+            file.clear();
+            continue;
+          }
+          if (!file.isFile) continue;
+          try {
+            final bytes = file.content as List<int>;
+            var machO = MachO.isMachOBytes(bytes);
+            var debugSymbols = false;
+            if (machO) {
+              try {
+                debugSymbols = MachO.isDebugSymbols(bytes);
+              } on FormatException {
+                // CAFEBABE is shared by universal Mach-O and JVM class files.
+                // Prefer any valid universal image, regardless of its name.
+                // An invalid universal candidate in resources cannot be loaded
+                // as native code. Known native and generated App paths stay
+                // strict; native paths from either archive also survive below.
+                final sharedClassMagic =
+                    bytes[0] == 0xca &&
+                    bytes[1] == 0xfe &&
+                    bytes[2] == 0xba &&
+                    bytes[3] == 0xbe;
+                if (!sharedClassMagic ||
+                    isNativeFilePath(file.name) ||
+                    isDartFilePath(file.name)) {
+                  rethrow;
+                }
+                machO = false;
+              }
+            }
+            if (((machO && !debugSymbols) || isNativeFilePath(file.name)) &&
+                !isDartFilePath(file.name)) {
+              native.add(file.name);
+            }
+            if (machO) {
+              hashes[file.name] = await _unsignedFileHash(file, tempRoot);
+            } else if (p.posix.basename(file.name) == 'Assets.car') {
+              hashes[file.name] = await _sanitizedCarFileHash(file, tempRoot);
+            } else {
+              hashes[file.name] = _hash(bytes);
+            }
+          } finally {
+            file.clear();
+          }
         }
-
-        for (final file in _carFiles(archive)) {
-          pathHashes[file.name] = await _sanitizedCarFileHash(file, tempRoot);
-        }
-
-        return pathHashes;
+        return (hashes, native);
       }),
     );
   }
@@ -111,29 +138,14 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   ) async {
     final input = InputFileStream(archivePath);
     try {
+      const validator = AppleZipValidator();
+      final directory = validator.readDirectory(input);
+      validator.validate(input, directory);
+      input.position = 0;
       return await body(ZipDecoder().decodeStream(input));
     } finally {
       await input.close();
     }
-  }
-
-  List<ArchiveFile> _filesToUnsign(Archive archive) {
-    return archive.files
-        .where((file) => file.isFile)
-        .where(
-          (file) =>
-              _binaryFilePatterns.any(
-                (pattern) => pattern.hasMatch(file.name),
-              ) ||
-              xcFrameworkAppRegex.hasMatch(file.name),
-        )
-        .toList();
-  }
-
-  List<ArchiveFile> _carFiles(Archive archive) {
-    return archive.files
-        .where((file) => file.isFile && p.basename(file.name) == 'Assets.car')
-        .toList();
   }
 
   /// Deletes [dir], ignoring failure. Used in place of
@@ -148,32 +160,35 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   Future<String> _unsignedFileHash(ArchiveFile file, String tempRoot) async {
     final tempDir = Directory(tempRoot).createTempSync();
     try {
-      return await _hashUnsignedCopy(file, p.join(tempDir.path, file.name));
+      return await _hashUnsignedCopy(file, p.join(tempDir.path, 'image'));
     } finally {
       _deleteInIsolate(tempDir);
     }
   }
 
   Future<String> _hashUnsignedCopy(ArchiveFile file, String outPath) async {
-    final outputStream = OutputFileStream(outPath);
-    file.writeContent(outputStream);
-    await outputStream.close();
+    await File(outPath).writeAsBytes(file.content as List<int>);
 
-    if (Platform.isMacOS) {
-      // coverage:ignore-start
-      Process.runSync('codesign', ['--remove-signature', outPath]);
-      // coverage:ignore-end
+    final before = File(outPath).readAsBytesSync();
+    if (MachO.hasCodeSignature(before)) {
+      if (!Platform.isMacOS) {
+        throw const FormatException(
+          'Signed Apple images require macOS comparison.',
+        );
+      }
+      final result = Process.runSync('codesign', [
+        '--remove-signature',
+        outPath,
+      ]);
+      if (result.exitCode != 0 ||
+          MachO.hasCodeSignature(File(outPath).readAsBytesSync())) {
+        throw FormatException(
+          'Unable to remove Mach-O signature: ${result.stderr}',
+        );
+      }
     }
 
-    final outFile = File(outPath);
-    final Uint8List bytes;
-    if (MachO.isMachOFile(outFile)) {
-      bytes = MachO.bytesWithZeroedUUID(outFile);
-    } else {
-      bytes = outFile.readAsBytesSync();
-    }
-
-    return _hash(bytes);
+    return _hash(MachO.bytesWithZeroedUUID(File(outPath)));
   }
 
   /// Writes a .car file and a json description of it into [outDir] and
@@ -181,10 +196,9 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   ///
   /// Equivalent of running `xcrun assetutil --info /path/to/Assets.car > outfile.json`.
   Future<File> _carJsonFile(ArchiveFile file, Directory outDir) async {
-    final outPath = p.join(outDir.path, file.name);
-    final outputStream = OutputFileStream(outPath);
-    file.writeContent(outputStream);
-    await outputStream.close();
+    outDir.createSync(recursive: true);
+    final outPath = p.join(outDir.path, 'Assets.car');
+    await File(outPath).writeAsBytes(file.content as List<int>);
 
     final assetInfoPath = '$outPath.json';
 
@@ -364,11 +378,42 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   }
 
   @override
-  bool isDartFilePath(String filePath) =>
-      filePath.endsWith('App.framework/App');
+  bool isDartFilePath(String filePath) => RegExp(
+    r'^(?:(?:Products/Applications|Payload)/[^/]+\.app/Frameworks/'
+    r'|(?:[^/]+\.app/)?Contents/Frameworks/'
+    r'|(?:[^/]+\.xcframework/)?(?:ios|macos|tvos|watchos|xros|visionos)-[^/]+/'
+    r'|)App\.framework/(?:Versions/[^/]+/)?App$',
+  ).hasMatch(filePath);
 
   @override
   bool isNativeFilePath(String filePath) =>
-      xcFrameworkAppRegex.hasMatch(filePath) ||
-      macosAppRegex.hasMatch(filePath);
+      !isDartFilePath(filePath) &&
+      (xcFrameworkAppRegex.hasMatch(filePath) ||
+          macosAppRegex.hasMatch(filePath) ||
+          filePath.endsWith('.dylib') ||
+          RegExp(
+            r'(^|/)[^/]+\.framework/(Versions/[^/]+/)?[^/.]+$',
+          ).hasMatch(filePath));
+
+  @override
+  FileSetDiff nativeFileSetDiff(FileSetDiff fileSetDiff) => fileSetDiff.where(
+    (path) =>
+        isNativeFilePath(path) ||
+        (fileSetDiff is AppleFileSetDiff &&
+            fileSetDiff.nativePaths.contains(path)),
+  );
+}
+
+/// Apple differences retain native paths discovered from actual Mach-O bytes.
+class AppleFileSetDiff extends FileSetDiff {
+  /// Retains the path sets in [diff] and their content-based classification.
+  AppleFileSetDiff.fromDiff(FileSetDiff diff, {required this.nativePaths})
+    : super(
+        addedPaths: diff.addedPaths,
+        removedPaths: diff.removedPaths,
+        changedPaths: diff.changedPaths,
+      );
+
+  /// Paths with native executable content in either archive.
+  final Set<String> nativePaths;
 }

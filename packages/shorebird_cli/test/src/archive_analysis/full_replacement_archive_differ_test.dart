@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/archive_analysis/full_replacement_archive_differ.dart';
 import 'package:test/test.dart';
 
+import '../platform/apple/macho_fixture.dart' show image;
+
 const _app = 'Products/Applications/Runner.app';
 const _assets = '$_app/Frameworks/App.framework/flutter_assets';
 const _policyPath = '$_assets/shorebird.yaml';
@@ -65,6 +67,38 @@ void main() {
       expect(differ.containsPotentiallyBreakingNativeDiffs(changes), isFalse);
     },
   );
+
+  for (final path in [
+    '$_app/Frameworks/Plugin.framework/Plugin',
+    '$_app/Frameworks/Flutter.framework/Flutter',
+    '$_app/Runner',
+    '$_app/Helpers/suffixless',
+  ]) {
+    test('full profile retains isolated native change $path', () async {
+      final old = archive('old', released, assets: {path: image()});
+      final updated = archive(
+        'new',
+        comparison,
+        assets: {path: image()..last = 7},
+      );
+      final changes = await differ.changedFiles(old.path, updated.path);
+      expect(changes.changedPaths, {path});
+      expect(differ.nativeFileSetDiff(changes).changedPaths, {path});
+    });
+  }
+  test('full profile permits changing generated App snapshot bytes', () async {
+    const path = '$_app/Frameworks/App.framework/App';
+    final old = archive('old', released, assets: {path: image()});
+    final updated = archive(
+      'new',
+      comparison,
+      assets: {path: image()..last = 7},
+    );
+    final changes = await differ.changedFiles(old.path, updated.path);
+    expect(changes.changedPaths, {path});
+    expect(differ.nativeFileSetDiff(changes), isEmpty);
+    expect(differ.assetsFileSetDiff(changes), isEmpty);
+  });
 
   test(
     'retains real app asset, native runner, plugin and pod changes',
