@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
+import 'package:shorebird_cli/src/archive_analysis/shorebird_native_assets_descriptor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/platform/apple/macho.dart';
@@ -79,6 +80,19 @@ class AppleArchiveDiffer extends ArchiveDiffer {
         final hashes = <String, String>{};
         final native = <String>{};
         for (final file in archive.files) {
+          if (ShorebirdNativeAssetsDescriptor.isAssetPath(file.name)) {
+            try {
+              hashes[file.name] = _hash(
+                utf8.encode(
+                  ShorebirdNativeAssetsDescriptor.canonicalBody(file),
+                ),
+              );
+              native.add(file.name);
+            } finally {
+              file.clear();
+            }
+            continue;
+          }
           if (file.isSymbolicLink) {
             hashes[file.name] =
                 'symlink:${_hash(utf8.encode(file.symbolicLink!))}';
@@ -380,6 +394,7 @@ class AppleArchiveDiffer extends ArchiveDiffer {
     ///   section of the pubspec.yaml file.
     /// Assets.car is the compiled asset catalog(s) (.xcassets files).
     return !_nativeAssetsManifestPath.hasMatch(filePath) &&
+        !ShorebirdNativeAssetsDescriptor.isAssetPath(filePath) &&
         (p.basename(filePath) == 'Assets.car' ||
             p.split(filePath).contains('flutter_assets'));
   }
@@ -396,6 +411,7 @@ class AppleArchiveDiffer extends ArchiveDiffer {
   bool isNativeFilePath(String filePath) =>
       !isDartFilePath(filePath) &&
       (_nativeAssetsManifestPath.hasMatch(filePath) ||
+          ShorebirdNativeAssetsDescriptor.isAssetPath(filePath) ||
           xcFrameworkAppRegex.hasMatch(filePath) ||
           macosAppRegex.hasMatch(filePath) ||
           filePath.endsWith('.dylib') ||
@@ -415,13 +431,44 @@ class AppleArchiveDiffer extends ArchiveDiffer {
 /// Apple differences retain native paths discovered from actual Mach-O bytes.
 class AppleFileSetDiff extends FileSetDiff {
   /// Retains the path sets in [diff] and their content-based classification.
-  AppleFileSetDiff.fromDiff(FileSetDiff diff, {required this.nativePaths})
-    : super(
-        addedPaths: diff.addedPaths,
-        removedPaths: diff.removedPaths,
-        changedPaths: diff.changedPaths,
+  AppleFileSetDiff.fromDiff(
+    FileSetDiff diff, {
+    required this.nativePaths,
+    this.nativeUncertaintyPaths = const {},
+  }) : super(
+         addedPaths: diff.addedPaths,
+         removedPaths: diff.removedPaths,
+         changedPaths: diff.changedPaths,
+       );
+
+  /// Paths with native code or runtime mapping provenance in either archive.
+  final Set<String> nativePaths;
+
+  /// Descriptor paths whose absence leaves native mapping equality unverified.
+  final Set<String> nativeUncertaintyPaths;
+
+  @override
+  FileSetDiff where(bool Function(String path) test) =>
+      AppleFileSetDiff.fromDiff(
+        super.where(test),
+        nativePaths: nativePaths.where(test).toSet(),
+        nativeUncertaintyPaths: nativeUncertaintyPaths.where(test).toSet(),
       );
 
-  /// Paths with native executable content in either archive.
-  final Set<String> nativePaths;
+  @override
+  String get prettyString {
+    if (nativeUncertaintyPaths.isEmpty) return super.prettyString;
+    final verified = FileSetDiff(
+      addedPaths: addedPaths.difference(nativeUncertaintyPaths),
+      removedPaths: removedPaths.difference(nativeUncertaintyPaths),
+      changedPaths: changedPaths.difference(nativeUncertaintyPaths),
+    ).prettyString;
+    final uncertain = nativeUncertaintyPaths.toList()..sort();
+    return [
+      if (verified.isNotEmpty) verified,
+      '    Native mapping provenance is unknown; equality is unverified:',
+      for (final path in uncertain) '        $path',
+      '    A native mapping descriptor is missing from one or both archives.',
+    ].join('\n');
+  }
 }

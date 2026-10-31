@@ -6,6 +6,7 @@ import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
+import 'package:shorebird_cli/src/archive_analysis/shorebird_native_assets_descriptor.dart';
 import 'package:yaml/yaml.dart';
 
 /// Compares native archives built with the complete replacement profile.
@@ -68,13 +69,26 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         changed.add(bundle.policyPath);
       }
     }
+    final unknown = <String>{
+      for (final bundle in [...released, ...comparison])
+        if (!bundle.hasNativeAssetsDescriptor)
+          bundle.nativeAssetsDescriptorPath,
+    };
+    // Missing provenance is unknown, even if both old archives lack it. Route
+    // this through native policy without claiming a verified byte difference.
+    changed.addAll(unknown);
+    final nativeDiff = diff as AppleFileSetDiff;
     return AppleFileSetDiff.fromDiff(
       FileSetDiff(
-        addedPaths: diff.addedPaths,
-        removedPaths: diff.removedPaths,
+        addedPaths: diff.addedPaths.difference(unknown),
+        removedPaths: diff.removedPaths.difference(unknown),
         changedPaths: changed,
       ),
-      nativePaths: (diff as AppleFileSetDiff).nativePaths,
+      nativePaths: {...nativeDiff.nativePaths, ...unknown},
+      nativeUncertaintyPaths: {
+        ...nativeDiff.nativeUncertaintyPaths,
+        ...unknown,
+      },
     );
   }
 
@@ -123,6 +137,15 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
             'Replacement policy and baseline must share '
             'a Flutter asset bundle.',
           );
+        }
+        final nativeAssetsDescriptorPath = policyPath.replaceFirst(
+          RegExp(r'shorebird\.yaml$'),
+          ShorebirdNativeAssetsDescriptor.assetName,
+        );
+        final nativeAssetsDescriptor = archive.find(nativeAssetsDescriptorPath);
+        if (nativeAssetsDescriptor != null) {
+          ShorebirdNativeAssetsDescriptor.canonicalBody(nativeAssetsDescriptor);
+          nativeAssetsDescriptor.clear();
         }
         final policyFile = archive.find(policyPath)!;
         final baseFile = archive.find(basePath)!;
@@ -175,6 +198,8 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
           _BaselineAssets(
             policyPath: policyPath,
             basePath: basePath,
+            nativeAssetsDescriptorPath: nativeAssetsDescriptorPath,
+            hasNativeAssetsDescriptor: nativeAssetsDescriptor != null,
             hostAbi: host,
             rootUri: baseline.rootUri,
             normalizedPolicy: canonicalJson(normalized),
@@ -192,6 +217,8 @@ class _BaselineAssets {
   const _BaselineAssets({
     required this.policyPath,
     required this.basePath,
+    required this.nativeAssetsDescriptorPath,
+    required this.hasNativeAssetsDescriptor,
     required this.hostAbi,
     required this.rootUri,
     required this.normalizedPolicy,
@@ -199,6 +226,8 @@ class _BaselineAssets {
 
   final String policyPath;
   final String basePath;
+  final String nativeAssetsDescriptorPath;
+  final bool hasNativeAssetsDescriptor;
   final String hostAbi;
   final String rootUri;
   final String normalizedPolicy;
