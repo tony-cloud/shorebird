@@ -12,6 +12,7 @@ class CreateReleaseRequest {
     required this.flutterRevision,
     this.flutterVersion,
     this.displayName,
+    this.selectionProtocol = 1,
   });
 
   /// Converts a `Map<String, dynamic>` to a [CreateReleaseRequest].
@@ -24,6 +25,7 @@ class CreateReleaseRequest {
         flutterRevision: json['flutter_revision'] as String,
         flutterVersion: json['flutter_version'] as String?,
         displayName: json['display_name'] as String?,
+        selectionProtocol: json['selection_protocol'] as int? ?? 1,
       ),
     );
   }
@@ -51,6 +53,9 @@ class CreateReleaseRequest {
   /// The display name for the release.
   final String? displayName;
 
+  /// Immutable installed release protocol, defaulting to legacy v1.
+  final int selectionProtocol;
+
   /// Converts a [CreateReleaseRequest] to a `Map<String, dynamic>`.
   Map<String, dynamic> toJson() {
     return {
@@ -58,6 +63,7 @@ class CreateReleaseRequest {
       'flutter_revision': flutterRevision,
       'flutter_version': ?flutterVersion,
       'display_name': ?displayName,
+      'selection_protocol': selectionProtocol,
     };
   }
 
@@ -67,6 +73,7 @@ class CreateReleaseRequest {
     flutterRevision,
     flutterVersion,
     displayName,
+    selectionProtocol,
   ]);
 
   @override
@@ -76,6 +83,7 @@ class CreateReleaseRequest {
         version == other.version &&
         flutterRevision == other.flutterRevision &&
         flutterVersion == other.flutterVersion &&
+        selectionProtocol == other.selectionProtocol &&
         displayName == other.displayName;
   }
 }

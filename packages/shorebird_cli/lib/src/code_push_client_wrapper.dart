@@ -41,6 +41,10 @@ class PatchArtifactBundle extends Equatable {
     required this.size,
     this.hashSignature,
     this.podfileLockHash,
+    this.offlineExpiresAt,
+    this.variantId,
+    this.licenseType,
+    this.artifactKeyId,
   });
 
   /// The corresponding architecture.
@@ -61,6 +65,18 @@ class PatchArtifactBundle extends Equatable {
   /// The hash of the Podfile.lock file, if present and relevant.
   final String? podfileLockHash;
 
+  /// Authenticated immutable envelope content deadline.
+  final String? offlineExpiresAt;
+
+  /// Authenticated interpreter variant metadata used for v2 mapping.
+  final String? variantId;
+
+  /// Authenticated interpreter license policy.
+  final String? licenseType;
+
+  /// Authenticated interpreter envelope key ID.
+  final String? artifactKeyId;
+
   @override
   List<Object?> get props => [
     arch,
@@ -69,6 +85,10 @@ class PatchArtifactBundle extends Equatable {
     size,
     hashSignature,
     podfileLockHash,
+    offlineExpiresAt,
+    variantId,
+    licenseType,
+    artifactKeyId,
   ];
 }
 
@@ -708,6 +728,7 @@ Please create a release using "shorebird release" and try again.
     required String version,
     required String flutterRevision,
     required ReleasePlatform platform,
+    int? selectionProtocol,
   }) async {
     final createReleaseProgress = logger.progress('Creating release');
     final flutterVersion = await shorebirdFlutter.getVersionForRevision(
@@ -719,6 +740,7 @@ Please create a release using "shorebird release" and try again.
         version: version,
         flutterRevision: flutterRevision,
         flutterVersion: flutterVersion,
+        selectionProtocol: selectionProtocol,
       );
       await codePushClient.updateReleaseStatus(
         appId: appId,
@@ -741,6 +763,7 @@ Please create a release using "shorebird release" and try again.
     required ReleasePlatform platform,
     required ReleaseStatus status,
     Json? metadata,
+    List<String>? selectionArches,
   }) {
     return _withProgress(
       'Updating release status',
@@ -750,6 +773,7 @@ Please create a release using "shorebird release" and try again.
         platform: platform,
         status: status,
         metadata: metadata,
+        selectionArches: selectionArches,
       ),
     );
   }
@@ -1110,6 +1134,37 @@ to the architectures your project actually builds.''',
         signing: signing,
       );
     } on CodePushConflictException catch (_) {
+      if (shorebirdEnv.getShorebirdYaml()?.selectionProtocol == 2) {
+        final artifacts = await codePushClient.getReleaseArtifacts(
+          appId: appId,
+          releaseId: releaseId,
+          platform: platform,
+          arch: arch,
+        );
+        final expectedHash = sha256
+            .convert(await file.readAsBytes())
+            .toString();
+        if (artifacts.length != 1 || artifacts.single.hash != expectedHash) {
+          throw StateError('Existing $name artifact differs from this upload');
+        }
+        final temp = Directory.systemTemp.createTempSync(
+          'shorebird-existing-artifact-',
+        );
+        try {
+          final existing = await artifactManager.downloadFile(
+            Uri.parse(artifacts.single.url),
+            outputPath: p.join(temp.path, 'artifact'),
+          );
+          if (sha256.convert(await existing.readAsBytes()).toString() !=
+              expectedHash) {
+            throw StateError(
+              'Stored $name bytes differ from their registered hash',
+            );
+          }
+        } finally {
+          temp.deleteSync(recursive: true);
+        }
+      }
       // Newlines are due to how logger.info interacts with logger.progress.
       logger.info('''
 
@@ -1375,6 +1430,7 @@ $name artifact already exists, continuing...''');
           hash: artifact.hash,
           hashSignature: artifact.hashSignature,
           podfileLockHash: artifact.podfileLockHash,
+          offlineExpiresAt: artifact.offlineExpiresAt,
         );
       } catch (error) {
         _handleErrorAndExit(error, progress: createArtifactProgress);

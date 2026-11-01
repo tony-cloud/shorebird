@@ -88,7 +88,7 @@ void main() {
 }
 
 void pipelineTests(String targetOS) {
-  const appId = 'full-replacement-app';
+  const appId = '11111111-1111-4111-8111-111111111111';
   const releaseVersion = '1.2.3+4';
   const releaseId = 42;
   const keyHex =
@@ -125,9 +125,11 @@ void pipelineTests(String targetOS) {
     bool full = true,
     bool structural = false,
     bool patch = false,
+    int? protocol,
     String? payload,
   }) => ShorebirdYaml(
     appId: appId,
+    selectionProtocol: protocol,
     aotPatchRuntimeMode: open_patch.runtimeModeDartBytecodeInterpreter,
     aotPatchFullReplacement: full,
     aotPatchStructuralUpdates: structural,
@@ -574,6 +576,67 @@ void pipelineTests(String targetOS) {
       },
     );
   }
+
+  test(
+    'protocol 2 restores original scope and permits selected keys',
+    () async {
+      yaml = policy(protocol: 2);
+      await scoped(
+        () => releaser.runReleaseBuild((_, _) async {
+          final scope =
+              jsonDecode(buildEnvironment['SHOREBIRD_RELEASE_SCOPE']!) as Map;
+          expect(scope.keys, hasLength(7));
+          expect(scope['release_version'], releaseVersion);
+          expect(
+            scope['base_artifact_hash'],
+            open_patch.sha256Hex(baseline.encode()),
+          );
+          expect(scope['host_abi_hash'], host.hostAbi);
+          expect(
+            File(
+              buildEnvironment['SHOREBIRD_INTERPRETER_BASE']!,
+            ).readAsBytesSync(),
+            baseline.encode(),
+          );
+        }),
+      );
+      final manifest = readManifest()
+        ..addAll({'release_id': releaseId, 'app_build_id': releaseVersion});
+      File(
+        p.join(getSupplement().path, IosBytecodeBuilder.manifestFileName),
+      ).writeAsStringSync(jsonEncode(manifest));
+      releaseArchive = writeCompiledRelease(manifest);
+      patcher
+        ..releaseSupplementDirectory = getSupplement()
+        ..selectionProtocol = 2;
+      yaml = ShorebirdYaml.fromJson({
+        ...policy(patch: true, protocol: 2).toJson(),
+        'aot_patch_key_id': 'pro-specific-key',
+      });
+      when(() => args.options).thenReturn(['variant']);
+      when(() => args['variant']).thenReturn('pro');
+      compilations.clear();
+      await buildPatch();
+      final native = nativeEnvironments.single;
+      expect(
+        File(native['SHOREBIRD_AOT_REPLACEMENT_BASE']!).readAsBytesSync(),
+        baseline.encode(),
+      );
+      expect(
+        native['SHOREBIRD_AOT_BASE_SNAPSHOT_HASH'],
+        open_patch.sha256Hex(baseline.encode()),
+      );
+      final scope = jsonDecode(native['SHOREBIRD_RELEASE_SCOPE']!) as Map;
+      expect(
+        scope['base_artifact_hash'],
+        open_patch.sha256Hex(baseline.encode()),
+      );
+      final artifacts = await packagePatch();
+      final artifact = artifacts.values.single;
+      expect(artifact.artifactKeyId, 'pro-specific-key');
+      expect(artifact.variantId, 'pro');
+    },
+  );
 
   test(
     'full patch compiles once before native comparison '

@@ -32,6 +32,7 @@ class ShorebirdYaml {
   const ShorebirdYaml({
     required this.appId,
     this.flavors,
+    this.selectionProtocol,
     this.baseUrl,
     this.autoUpdate,
     this.nativePatchMaxBytes,
@@ -56,6 +57,12 @@ class ShorebirdYaml {
 
   /// Creates a [ShorebirdYaml] from a JSON map.
   factory ShorebirdYaml.fromJson(Map<dynamic, dynamic> json) {
+    if (json.containsKey('selection_protocol') &&
+        (json['selection_protocol'] is! int ||
+            (json['selection_protocol'] != 1 &&
+                json['selection_protocol'] != 2))) {
+      throw const FormatException('selection_protocol must be integer 1 or 2.');
+    }
     if (json.containsKey('native_patch_max_bytes')) {
       final value = json['native_patch_max_bytes'];
       // Validate the checked-in release policy before generated num.toInt can
@@ -121,6 +128,10 @@ class ShorebirdYaml {
   /// Example:
   /// `"8d3155a8-a048-4820-acca-824d26c29b71"`
   final String appId;
+
+  /// Immutable installed release protocol; omission retains v1.
+  @JsonKey(includeIfNull: false)
+  final int? selectionProtocol;
 
   /// A map of flavor names to app ids.
   ///

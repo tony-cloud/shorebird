@@ -285,6 +285,7 @@ class CodePushClient {
     required String hash,
     String? hashSignature,
     String? podfileLockHash,
+    String? offlineExpiresAt,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -298,6 +299,7 @@ class CodePushClient {
       'size': '${file.length}',
       'hash_signature': ?hashSignature,
       'podfile_lock_hash': ?podfileLockHash,
+      'offline_expires_at': ?offlineExpiresAt,
     });
     final response = await _httpClient.send(request);
     final body = await response.stream.bytesToString();
@@ -589,6 +591,7 @@ class CodePushClient {
     required String flutterRevision,
     String? flutterVersion,
     String? displayName,
+    int? selectionProtocol,
   }) async {
     final response = await _httpClient.post(
       Uri.parse('$_v1/apps/$appId/releases'),
@@ -597,6 +600,7 @@ class CodePushClient {
         'flutter_revision': flutterRevision,
         'flutter_version': ?flutterVersion,
         'display_name': ?displayName,
+        'selection_protocol': ?selectionProtocol,
       }),
     );
 
@@ -615,6 +619,7 @@ class CodePushClient {
     required ReleasePlatform platform,
     required ReleaseStatus status,
     Json? metadata,
+    List<String>? selectionArches,
   }) async {
     final response = await _httpClient.patch(
       Uri.parse('$_v1/apps/$appId/releases/$releaseId'),
@@ -623,6 +628,7 @@ class CodePushClient {
           status: status,
           platform: platform,
           metadata: metadata,
+          selectionArches: selectionArches,
         ).toJson(),
       ),
     );
@@ -630,6 +636,83 @@ class CodePushClient {
     if (!response.isSuccess) {
       throw _parseErrorResponse(response.statusCode, response.body);
     }
+  }
+
+  /// Reads authenticated immutable scope registrations for a release.
+  Future<List<Json>> getReleaseSelectionScopes({
+    required String appId,
+    required int releaseId,
+  }) async {
+    final response = await _httpClient.get(
+      Uri.parse('$_v1/apps/$appId/releases/$releaseId/selection-scopes'),
+    );
+    if (!response.isSuccess) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+    final body = json.decode(response.body) as Json;
+    return (body['scopes'] as List<dynamic>).cast<Json>();
+  }
+
+  /// Registers exact runtime identity; conflicts are surfaced unchanged.
+  Future<Json> registerReleaseSelectionScope({
+    required String appId,
+    required int releaseId,
+    required ReleaseSelectionScope scope,
+    required int releaseArtifactId,
+    required int? supplementArtifactId,
+  }) async {
+    final response = await _httpClient.put(
+      Uri.parse(
+        '$_v1/apps/$appId/releases/$releaseId/selection-scopes/${scope.platform}/${scope.arch}',
+      ),
+      body: json.encode(
+        scope.registrationJson(
+          releaseArtifactId: releaseArtifactId,
+          supplementArtifactId: supplementArtifactId,
+        ),
+      ),
+    );
+    if (!response.isSuccess) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+    return json.decode(response.body) as Json;
+  }
+
+  /// Sets a variant mapping through the authenticated management API.
+  /// Variant is independent from Flutter's build-time flavor/app-ID mapping.
+  Future<Json> putReleaseVariant({
+    required String appId,
+    required int releaseId,
+    required String variantId,
+    required Json mapping,
+  }) async {
+    final response = await _httpClient.put(
+      Uri.parse(
+        '$_v1/apps/$appId/releases/$releaseId/variants/${Uri.encodeComponent(variantId)}',
+      ),
+      body: json.encode(mapping),
+    );
+    if (!response.isSuccess) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+    return json.decode(response.body) as Json;
+  }
+
+  /// Assigns an installation using server CAS and idempotency semantics.
+  /// The caller must authenticate entitlement before requesting a paid grant.
+  Future<Json> assignReleaseSelection({
+    required String appId,
+    required int releaseId,
+    required Json assignment,
+  }) async {
+    final response = await _httpClient.post(
+      Uri.parse('$_v1/apps/$appId/releases/$releaseId/selections'),
+      body: json.encode(assignment),
+    );
+    if (!response.isSuccess) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+    return json.decode(response.body) as Json;
   }
 
   /// Deletes the release with the provided [releaseId], along with every

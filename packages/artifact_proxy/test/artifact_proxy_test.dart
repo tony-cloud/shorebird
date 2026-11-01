@@ -15,9 +15,11 @@ void main() {
     storageBucket: 'shorebird',
     artifactOverrides: {
       r'flutter_infra_release/flutter/$engine/dart-sdk-linux-x64.zip',
+      r'flutter_infra_release/flutter/$engine/dart-sdk-linux-arm64.zip',
       r'flutter_infra_release/flutter/$engine/dart-sdk-darwin-arm64.zip',
       r'flutter_infra_release/flutter/$engine/dart-sdk-darwin-x64.zip',
       r'flutter_infra_release/flutter/$engine/dart-sdk-windows-x64.zip',
+      r'flutter_infra_release/flutter/$engine/dart-sdk-windows-arm64.zip',
       r'flutter_infra_release/flutter/$engine/android-arm-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/android-arm-release/symbols.zip',
       r'flutter_infra_release/flutter/$engine/android-arm-release/linux-x64.zip',
@@ -34,7 +36,9 @@ void main() {
       r'flutter_infra_release/flutter/$engine/android-x64-release/darwin-x64.zip',
       r'flutter_infra_release/flutter/$engine/android-x64-release/windows-x64.zip',
       r'flutter_infra_release/flutter/$engine/linux-x64-release/artifacts.zip',
+      r'flutter_infra_release/flutter/$engine/linux-arm64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/linux-x64-release/linux-x64-flutter-gtk.zip',
+      r'flutter_infra_release/flutter/$engine/linux-arm64-release/linux-arm64-flutter-gtk.zip',
       r'flutter_infra_release/flutter/$engine/ios-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/flutter_patched_sdk_product.zip',
       r'flutter_infra_release/flutter/$engine/darwin-arm64-release/FlutterMacOS.framework.zip',
@@ -43,6 +47,7 @@ void main() {
       r'flutter_infra_release/flutter/$engine/darwin-x64-release/gen_snapshot.zip',
       r'flutter_infra_release/flutter/$engine/darwin-x64-release/artifacts.zip',
       r'flutter_infra_release/flutter/$engine/windows-x64-release/windows-x64-flutter.zip',
+      r'flutter_infra_release/flutter/$engine/windows-arm64-release/windows-arm64-flutter.zip',
       r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.jar',
       r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.jar.sha1',
       r'download.flutter.io/io/flutter/flutter_embedding_release/1.0.0-$engine/flutter_embedding_release-1.0.0-$engine.pom',
@@ -68,9 +73,11 @@ void main() {
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml',
       r'download.flutter.io/io/flutter/x86_64_release/1.0.0-$engine/x86_64_release-1.0.0-$engine.maven-metadata.xml.sha1',
       r'flutter_infra_release/flutter/$engine/linux-x64/font-subset.zip',
+      r'flutter_infra_release/flutter/$engine/linux-arm64/font-subset.zip',
       r'flutter_infra_release/flutter/$engine/darwin-arm64/font-subset.zip',
       r'flutter_infra_release/flutter/$engine/darwin-x64/font-subset.zip',
       r'flutter_infra_release/flutter/$engine/windows-x64/font-subset.zip',
+      r'flutter_infra_release/flutter/$engine/windows-arm64/font-subset.zip',
     },
   );
 
@@ -106,7 +113,7 @@ void main() {
     });
 
     test('routes every published override to the custom mirror', () async {
-      expect(manifest.artifactOverrides, hasLength(57));
+      expect(manifest.artifactOverrides, hasLength(64));
       for (final override in manifest.artifactOverrides) {
         final path = override.replaceAll(r'$engine', shorebirdEngineRevision);
         expect(
@@ -247,10 +254,15 @@ void main() {
       for (final suffix in [
         'dart-sdk-darwin-x64.zip',
         'dart-sdk-linux-x64.zip',
+        'dart-sdk-linux-arm64.zip',
+        'dart-sdk-windows-arm64.zip',
+        'linux-arm64-release/artifacts.zip',
+        'windows-arm64-release/windows-arm64-flutter.zip',
         'android-arm64-release/artifacts.zip',
         'ios-release/artifacts.zip',
         'darwin-arm64-release/FlutterMacOS.framework.zip',
         'windows-x64/windows-x64-flutter.zip',
+        'windows-arm64/windows-arm64-flutter.zip',
       ]) {
         final response = await handler(
           buildRequest(
@@ -276,9 +288,11 @@ void main() {
         );
         for (final host in [
           'linux-x64',
+          'linux-arm64',
           'darwin-arm64',
           'darwin-x64',
           'windows-x64',
+          'windows-arm64',
         ]) {
           final path =
               'flutter_infra_release/flutter/$shorebirdEngineRevision/$host/font-subset.zip';

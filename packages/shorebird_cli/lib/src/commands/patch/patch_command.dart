@@ -1,14 +1,17 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/code_signer.dart';
 import 'package:shorebird_cli/src/commands/patch/patch.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
 import 'package:shorebird_cli/src/config/config.dart';
@@ -82,6 +85,10 @@ class PatchCommand extends ShorebirdCommand {
       ..addOption(
         'flavor',
         help: 'The product flavor to use when building the app.',
+      )
+      ..addOption(
+        'variant',
+        help: 'Protocol-2 content variant (independent of Flutter --flavor).',
       )
       ..addOption(
         CommonArguments.releaseVersionArg.name,
@@ -366,6 +373,45 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
       values: {shorebirdEnvRef.overrideWith(() => releaseFlutterShorebirdEnv)},
     );
 
+    patcher.selectionProtocol = release.selectionProtocol;
+    if ((shorebirdEnv.getShorebirdYaml()?.selectionProtocol ?? 1) !=
+        release.selectionProtocol) {
+      usageException(
+        'Source selection_protocol differs from the installed release.',
+      );
+    }
+    final variant = results['variant'] as String?;
+    if (release.selectionProtocol == 2) {
+      final runtimeOverride =
+          platform.environment['SHOREBIRD_IOS_PATCH_RUNTIME_MODE'];
+      if (!const {
+            ReleaseType.ios,
+            ReleaseType.macos,
+          }.contains(patcher.releaseType) ||
+          shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode !=
+              'dart-bytecode-interpreter' ||
+          const {
+            '1',
+            'true',
+            'yes',
+          }.contains(platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH']) ||
+          (runtimeOverride != null &&
+              runtimeOverride.trim().isNotEmpty &&
+              runtimeOverride.trim() != 'dart-bytecode-interpreter')) {
+        usageException(
+          'Protocol 2 patch publication requires the released '
+          'Apple interpreter profile.',
+        );
+      }
+      if (variant == null ||
+          !RegExp(r'^[a-z][a-z0-9_-]{0,63}$').hasMatch(variant)) {
+        usageException(
+          'Protocol 2 patches require --variant with a canonical variant ID.',
+        );
+      }
+    } else if (variant != null) {
+      usageException('--variant requires an immutable protocol-2 release.');
+    }
     await patcher.prepareForRelease(appId: appId, release: release);
     final downloaded = await _downloadReleaseArtifacts(
       patcher: patcher,
@@ -551,6 +597,52 @@ Building with Flutter $flutterVersionString to determine the release version...
     final supplementArchive = supplementalArtifact != null
         ? await downloadReleaseArtifact(releaseArtifact: supplementalArtifact)
         : null;
+
+    if (release.selectionProtocol == 2) {
+      if (supplementArchive == null || supplementalArtifact == null) {
+        throw const FormatException(
+          'Protocol 2 requires the original baseline supplement',
+        );
+      }
+      final signing = releaseArtifact.signing;
+      if (signing?.mode != 'managed' ||
+          signing?.keyId == null ||
+          signing?.publicKeyPem == null ||
+          supplementalArtifact.signing != signing) {
+        throw const FormatException(
+          'Protocol 2 requires consistent managed artifact signing',
+        );
+      }
+      final scope = ReleaseSelectionArchive.verifyPackage(
+        releaseArchive,
+        appId: appId,
+        version: release.version,
+        platform: releasePlatform.name,
+        expectedPublicKey: codeSigner.base64PublicKeyFromPem(
+          signing!.publicKeyPem!,
+        ),
+      );
+      ReleaseSelectionArchive.verifySupplement(supplementArchive, scope);
+      final registered = await codePushClientWrapper.codePushClient
+          .getReleaseSelectionScopes(appId: appId, releaseId: release.id);
+      final registration = registered.singleWhere(
+        (r) =>
+            (r['scope'] as Map<String, dynamic>)['platform'] ==
+                scope.platform &&
+            (r['scope'] as Map<String, dynamic>)['arch'] == scope.arch,
+      );
+      final remoteScope = ReleaseSelectionScope.fromJson(
+        registration['scope'] as Map<String, dynamic>,
+      );
+      if (registration['published'] != true ||
+          registration['release_artifact_id'] != releaseArtifact.id ||
+          registration['supplement_artifact_id'] != supplementalArtifact.id ||
+          jsonEncode(remoteScope.toJson()) != jsonEncode(scope.toJson())) {
+        throw const FormatException(
+          'Registered release scope differs from downloaded package',
+        );
+      }
+    }
 
     // Download and extract the supplement archive (if present).
     Directory? supplementDirectory;
@@ -822,6 +914,35 @@ Building patch with Flutter $flutterVersionString
       artifacts: patchArtifactBundles,
     );
 
+    if (release.selectionProtocol == 2) {
+      for (final artifact in patchArtifactBundles.values) {
+        if (artifact.variantId != results['variant'] ||
+            artifact.licenseType == null ||
+            artifact.artifactKeyId == null) {
+          throw const FormatException(
+            'Missing authenticated interpreter variant metadata',
+          );
+        }
+        await codePushClientWrapper.codePushClient.putReleaseVariant(
+          appId: appId,
+          releaseId: release.id,
+          variantId: artifact.variantId!,
+          mapping: {
+            'platform': patcher.releaseType.releasePlatform.name,
+            'arch': artifact.arch,
+            'channel': track.channel,
+            'license_type': artifact.licenseType,
+            'target': {
+              'kind': 'patch',
+              'patch_number': '${patch.number}',
+              'artifact_hash': artifact.hash,
+              'encryption': 'artifact-aes-256-gcm',
+              'artifact_key_id': artifact.artifactKeyId,
+            },
+          },
+        );
+      }
+    }
     return PublishedPatch(
       platform: patcher.releaseType.releasePlatform,
       release: release,

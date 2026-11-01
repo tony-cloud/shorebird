@@ -1,5 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
+// Generated serialization uses intentionally dynamic conversion helpers.
 // ignore_for_file: implicit_dynamic_parameter, require_trailing_commas, cast_nullable_to_non_nullable, lines_longer_than_80_chars, strict_raw_type, unnecessary_lambdas
 
 part of 'shorebird_yaml.dart';
@@ -16,6 +17,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
       json,
       allowedKeys: const [
         'app_id',
+        'selection_protocol',
         'flavors',
         'base_url',
         'auto_update',
@@ -44,6 +46,10 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
       flavors: $checkedConvert(
         'flavors',
         (v) => (v as Map?)?.map((k, e) => MapEntry(k as String, e as String)),
+      ),
+      selectionProtocol: $checkedConvert(
+        'selection_protocol',
+        (v) => (v as num?)?.toInt(),
       ),
       baseUrl: $checkedConvert('base_url', (v) => v as String?),
       autoUpdate: $checkedConvert('auto_update', (v) => v as bool?),
@@ -118,6 +124,7 @@ ShorebirdYaml _$ShorebirdYamlFromJson(Map json) => $checkedCreate(
   },
   fieldKeyMap: const {
     'appId': 'app_id',
+    'selectionProtocol': 'selection_protocol',
     'baseUrl': 'base_url',
     'autoUpdate': 'auto_update',
     'nativePatchMaxBytes': 'native_patch_max_bytes',
@@ -145,6 +152,7 @@ Map<String, dynamic> _$ShorebirdYamlToJson(
   ShorebirdYaml instance,
 ) => <String, dynamic>{
   'app_id': instance.appId,
+  'selection_protocol': ?instance.selectionProtocol,
   'flavors': instance.flavors,
   'base_url': instance.baseUrl,
   'auto_update': instance.autoUpdate,

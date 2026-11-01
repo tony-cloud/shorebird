@@ -17,6 +17,7 @@ class CreatePatchArtifactRequest {
     required this.size,
     this.hashSignature,
     this.podfileLockHash,
+    this.offlineExpiresAt,
   });
 
   /// Converts a `Map<String, dynamic>` to a [CreatePatchArtifactRequest].
@@ -31,6 +32,7 @@ class CreatePatchArtifactRequest {
         hashSignature: json['hash_signature'] as String?,
         podfileLockHash: json['podfile_lock_hash'] as String?,
         size: json['size'] as int,
+        offlineExpiresAt: json['offline_expires_at'] as String?,
       ),
     );
   }
@@ -66,6 +68,9 @@ class CreatePatchArtifactRequest {
   /// The size of the artifact in bytes.
   final int size;
 
+  /// Authenticated envelope content expiry, preserved without rounding.
+  final String? offlineExpiresAt;
+
   /// Converts a [CreatePatchArtifactRequest] to a `Map<String, dynamic>`.
   Map<String, dynamic> toJson() {
     return {
@@ -75,6 +80,7 @@ class CreatePatchArtifactRequest {
       'hash_signature': ?hashSignature,
       'podfile_lock_hash': ?podfileLockHash,
       'size': size,
+      'offline_expires_at': ?offlineExpiresAt,
     };
   }
 
@@ -86,6 +92,7 @@ class CreatePatchArtifactRequest {
     hashSignature,
     podfileLockHash,
     size,
+    offlineExpiresAt,
   ]);
 
   @override
@@ -97,6 +104,7 @@ class CreatePatchArtifactRequest {
         hash == other.hash &&
         hashSignature == other.hashSignature &&
         podfileLockHash == other.podfileLockHash &&
+        offlineExpiresAt == other.offlineExpiresAt &&
         size == other.size;
   }
 }

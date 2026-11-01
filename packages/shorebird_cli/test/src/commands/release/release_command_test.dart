@@ -1271,6 +1271,32 @@ Did you mean --release-version=1.0.0+1?''',
       });
     });
 
+    test(
+      'protocol 2 compiled scope cannot use a different built release version',
+      () {
+        when(() => releaser.releaseType).thenReturn(ReleaseType.macos);
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+          const ShorebirdYaml(
+            appId: appId,
+            selectionProtocol: 2,
+            aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+            aotPatchAppBuildId: '1.0.0+1',
+          ),
+        );
+        expect(
+          () => runScoped(
+            () => command.assertCompiledReleaseVersion(releaser, '1.0.0+2'),
+            values: {shorebirdEnvRef.overrideWith(() => shorebirdEnv)},
+          ),
+          throwsA(isA<UsageException>()),
+        );
+        runScoped(
+          () => command.assertCompiledReleaseVersion(releaser, '1.0.0+1'),
+          values: {shorebirdEnvRef.overrideWith(() => shorebirdEnv)},
+        );
+      },
+    );
+
     group('assertIosInterpreterReleaseConfiguration', () {
       const baseline = {
         'app_id': appId,

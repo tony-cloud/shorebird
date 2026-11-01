@@ -189,7 +189,10 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
     );
     final flavorId = _requiredPatchValue(
       'aot_patch_flavor_id',
-      platform.environment['SHOREBIRD_AOT_PATCH_FLAVOR_ID'] ??
+      (selectionProtocol == 2 && argResults.options.contains('variant')
+              ? argResults['variant'] as String?
+              : null) ??
+          platform.environment['SHOREBIRD_AOT_PATCH_FLAVOR_ID'] ??
           shorebirdYaml.aotPatchFlavorId,
     );
     final licenseType = _requiredPatchValue(
@@ -234,7 +237,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       'sdk_hash': sdkHash,
       'base_flavor_id': baseFlavorId,
       'base_license_type': baseLicenseType,
-      'key_id': keyId,
+      if (selectionProtocol == 1) 'key_id': keyId,
     }.entries) {
       if (manifest[entry.key] != entry.value) {
         logger.err(
@@ -291,6 +294,10 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
         patchArtifactPath: outputFile.path,
         progress: progress,
         podfileLockHash: interpreterPodfileLockHash,
+        offlineExpiresAt: encrypted.metadata.offlineExpiresAt,
+        variantId: encrypted.metadata.flavorId,
+        licenseType: encrypted.metadata.licenseType,
+        artifactKeyId: encrypted.keyId,
       );
       progress.complete();
       return {Arch.arm64: bundle};
@@ -324,7 +331,8 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
     _preparedFullReplacement = false;
     _comparisonReleaseBaseHash = null;
     _comparisonCurrentBaseHash = null;
-    if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
+    if (IosBytecodeBuilder.fullReplacementForManifest(manifest) &&
+        selectionProtocol == 1) {
       await buildInterpreterBytecodePatch(buildArgs);
       final configured = _configuredInterpreterBytecodePath(
         shorebirdEnv.getShorebirdYaml(),
@@ -358,6 +366,29 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
     final previous = artifactBuilder.iosInterpreterBuildEnvironment;
     artifactBuilder.iosInterpreterBuildEnvironment = {
       ...previous,
+      if (selectionProtocol == 2) ...{
+        'SHOREBIRD_RELEASE_SCOPE': jsonEncode({
+          'app_id': manifest['app_id'],
+          'release_version': manifest['app_build_id'],
+          'platform': interpreterTargetOS,
+          'arch': 'aarch64',
+          'base_artifact_hash': open_patch.sha256Hex(
+            baseline.readAsBytesSync(),
+          ),
+          'host_abi_hash': manifest['host_abi'],
+          'runtime_profile':
+              IosBytecodeBuilder.fullReplacementForManifest(manifest)
+              ? 'interpreter-full'
+              : IosBytecodeBuilder.structuralUpdatesForManifest(manifest)
+              ? 'interpreter-structural'
+              : 'interpreter-body',
+        }),
+        'SHOREBIRD_INTERPRETER_BASE': baseline.absolute.path,
+        if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) ...{
+          'SHOREBIRD_AOT_REPLACEMENT_BASE': baseline.absolute.path,
+          'SHOREBIRD_AOT_HOST_ABI': manifest['host_abi']! as String,
+        },
+      },
       'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': open_patch.sha256Hex(
         (comparisonBase ?? baseline).readAsBytesSync(),
       ),

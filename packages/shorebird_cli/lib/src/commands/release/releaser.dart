@@ -208,10 +208,37 @@ To change the version of this release, change your app's version in your pubspec
           'automatically.',
         );
       }
+      ReleaseSelectionScope? selectionScope;
+      if (yaml.selectionProtocol == 2) {
+        final version = yaml.aotPatchAppBuildId;
+        if (version == null || version.isEmpty) {
+          throw ArtifactBuildException(
+            'Protocol 2 requires aot_patch_app_build_id equal to the exact '
+            'release version (including build number).',
+          );
+        }
+        selectionScope = ReleaseSelectionScope(
+          appId: yaml.getAppId(flavor: flavor),
+          releaseVersion: version,
+          platform: targetOS,
+          arch: 'aarch64',
+          baseArtifactHash: measured,
+          hostAbiHash: replacementHost?.hostAbi,
+          runtimeProfile: fullReplacement
+              ? 'interpreter-full'
+              : (yaml.aotPatchStructuralUpdates ?? false)
+              ? 'interpreter-structural'
+              : 'interpreter-body',
+        );
+      }
       previousEnvironment = artifactBuilder.iosInterpreterBuildEnvironment;
       artifactBuilder.iosInterpreterBuildEnvironment = {
         ...previousEnvironment,
         'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': measured,
+        if (selectionScope != null) ...{
+          'SHOREBIRD_RELEASE_SCOPE': jsonEncode(selectionScope.toJson()),
+          'SHOREBIRD_INTERPRETER_BASE': baseline.absolute.path,
+        },
         'SHOREBIRD_AOT_PATCH_SDK_HASH':
             yaml.aotPatchSdkHash ?? shorebirdEnv.shorebirdEngineRevision,
         if (fullReplacement) ...{
@@ -240,7 +267,8 @@ To change the version of this release, change your app's version in your pubspec
         ).writeAsStringSync(
           jsonEncode({
             'version': 1,
-            'structural_updates': yaml!.aotPatchStructuralUpdates ?? false,
+            if (yaml!.selectionProtocol == 2) 'selection_protocol': 2,
+            'structural_updates': yaml.aotPatchStructuralUpdates ?? false,
             if (replacementHost != null) ...{
               'full_replacement': true,
               ...replacementHost.manifest,

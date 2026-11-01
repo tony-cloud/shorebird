@@ -1,3 +1,6 @@
+// The legacy wire field remains readable/writable for installed v1 clients.
+// ignore_for_file: deprecated_member_use_from_same_package
+
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push_protocol/model_helpers.dart';
 import 'package:shorebird_code_push_protocol/src/models/release_platform.dart';
@@ -21,7 +24,8 @@ class Release {
     required this.updatedAt,
     this.flutterVersion,
     this.displayName,
-    @deprecated this.platformStatuses,
+    this.selectionProtocol = 1,
+    @Deprecated('Use platforms instead.') this.platformStatuses,
     this.notes,
   });
 
@@ -37,6 +41,7 @@ class Release {
         flutterRevision: json['flutter_revision'] as String,
         flutterVersion: json['flutter_version'] as String?,
         displayName: json['display_name'] as String?,
+        selectionProtocol: json['selection_protocol'] as int? ?? 1,
         platformStatuses: (json['platform_statuses'] as Map<String, dynamic>?)
             ?.map(
               (key, value) => MapEntry(
@@ -85,10 +90,13 @@ class Release {
   /// The display name for the release.
   final String? displayName;
 
+  /// Immutable installed release protocol, defaulting to legacy v1.
+  final int selectionProtocol;
+
   /// The status of the release for each platform. Deprecated: read
   /// `platforms`, which carries the same statuses with each platform's
   /// signing. Still sent, for CLIs that predate `platforms`.
-  @deprecated
+  @Deprecated('Use platforms instead.')
   final Map<ReleasePlatform, ReleaseStatus>? platformStatuses;
 
   /// The release on each platform it has been released to: that
@@ -113,6 +121,7 @@ class Release {
       'flutter_revision': flutterRevision,
       'flutter_version': ?flutterVersion,
       'display_name': ?displayName,
+      'selection_protocol': selectionProtocol,
       'platform_statuses': ?platformStatuses?.map(
         (key, value) => MapEntry(key.toJson(), value.toJson()),
       ),
@@ -133,6 +142,7 @@ class Release {
     flutterRevision,
     flutterVersion,
     displayName,
+    selectionProtocol,
     mapHash(platformStatuses),
     mapHash(platforms),
     createdAt,
@@ -149,6 +159,7 @@ class Release {
         version == other.version &&
         flutterRevision == other.flutterRevision &&
         flutterVersion == other.flutterVersion &&
+        selectionProtocol == other.selectionProtocol &&
         displayName == other.displayName &&
         mapsEqual(platformStatuses, other.platformStatuses) &&
         mapsEqual(platforms, other.platforms) &&

@@ -14,6 +14,7 @@ class UpdateReleaseRequest {
     this.platform,
     this.metadata,
     this.notes,
+    this.selectionArches,
   });
 
   /// Converts a `Map<String, dynamic>` to a [UpdateReleaseRequest].
@@ -26,6 +27,8 @@ class UpdateReleaseRequest {
         platform: ReleasePlatform.maybeFromJson(json['platform'] as String?),
         metadata: json['metadata'] as Map<String, dynamic>?,
         notes: json['notes'] as String?,
+        selectionArches: (json['selection_arches'] as List<dynamic>?)
+            ?.cast<String>(),
       ),
     );
   }
@@ -56,6 +59,9 @@ class UpdateReleaseRequest {
   /// not be updated.
   final String? notes;
 
+  /// Exact registered runtime architecture set for v2 activation.
+  final List<String>? selectionArches;
+
   /// Converts a [UpdateReleaseRequest] to a `Map<String, dynamic>`.
   Map<String, dynamic> toJson() {
     return {
@@ -63,6 +69,7 @@ class UpdateReleaseRequest {
       'platform': ?platform?.toJson(),
       'metadata': ?metadata,
       'notes': ?notes,
+      'selection_arches': ?selectionArches,
     };
   }
 
@@ -72,6 +79,7 @@ class UpdateReleaseRequest {
     platform,
     mapHash(metadata),
     notes,
+    Object.hashAll(selectionArches ?? const <String>[]),
   ]);
 
   @override
@@ -81,6 +89,7 @@ class UpdateReleaseRequest {
         status == other.status &&
         platform == other.platform &&
         mapsEqual(metadata, other.metadata) &&
+        listsEqual(selectionArches, other.selectionArches) &&
         notes == other.notes;
   }
 }

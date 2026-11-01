@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
+import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/code_signer.dart';
 import 'package:shorebird_cli/src/commands/release/release.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
 import 'package:shorebird_cli/src/config/config.dart';
@@ -449,22 +454,7 @@ $error''');
       releaseArtifactRoot: releaseArtifact,
     );
 
-    final configuredBuildId = shorebirdEnv
-        .getShorebirdYaml()
-        ?.aotPatchAppBuildId;
-    if (const {
-          ReleaseType.ios,
-          ReleaseType.iosFramework,
-        }.contains(releaser.releaseType) &&
-        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter &&
-        configuredBuildId != null &&
-        configuredBuildId != releaseVersion) {
-      usageException(
-        'aot_patch_app_build_id differs from the built release version. '
-        'Remove the override to bind interpreter patches to the actual '
-        'release.',
-      );
-    }
+    assertCompiledReleaseVersion(releaser, releaseVersion);
 
     // Ensure we can create a release from what we've built.
     await ensureVersionIsReleasable(
@@ -591,6 +581,9 @@ $error''');
       releaseId: release.id,
       releaseVersion: release.version,
     );
+    if (release.selectionProtocol == 2) {
+      await _registerSelectionScope(release, releaser);
+    }
     await finalizeRelease(release: release, releaser: releaser);
 
     logger
@@ -607,6 +600,80 @@ $error''');
       target: target,
     );
     return release;
+  }
+
+  Future<void> _registerSelectionScope(
+    Release release,
+    Releaser releaser,
+  ) async {
+    final client = codePushClientWrapper.codePushClient;
+    final platform = releaser.releaseType.releasePlatform;
+    final artifacts = await client.getReleaseArtifacts(
+      appId: appId,
+      releaseId: release.id,
+      platform: platform,
+    );
+    final primary = artifacts.singleWhere(
+      (a) =>
+          a.arch == (platform == ReleasePlatform.macos ? 'app' : 'xcarchive'),
+    );
+    final supplement = artifacts.singleWhere(
+      (a) => a.arch == releaser.supplementArtifactArch,
+    );
+    final signing = primary.signing;
+    if (signing?.mode != 'managed' ||
+        signing?.keyId == null ||
+        signing?.keyId != releaser.signing?.keyId ||
+        signing?.publicKeyPem == null ||
+        supplement.signing != signing) {
+      throw const FormatException(
+        'Uploaded release artifacts differ from the managed build signing key',
+      );
+    }
+    final expectedPublicKey = codeSigner.base64PublicKeyFromPem(
+      signing!.publicKeyPem!,
+    );
+    final temp = Directory.systemTemp.createTempSync('shorebird-publication-');
+    try {
+      Future<File> retrieve(ReleaseArtifact artifact) async {
+        final file = await artifactManager.downloadFile(
+          Uri.parse(artifact.url),
+          outputPath: '${temp.path}/${artifact.id}',
+        );
+        if (file.lengthSync() != artifact.size ||
+            sha256.convert(file.readAsBytesSync()).toString() !=
+                artifact.hash) {
+          throw const FormatException(
+            'Uploaded release archive hash/size mismatch',
+          );
+        }
+        return file;
+      }
+
+      final packageFile = await retrieve(primary);
+      final supplementFile = await retrieve(supplement);
+      final scope = ReleaseSelectionArchive.verifyPackage(
+        packageFile,
+        appId: appId,
+        version: release.version,
+        platform: platform.name,
+        expectedPublicKey: expectedPublicKey,
+      );
+      final manifest = ReleaseSelectionArchive.verifySupplement(
+        supplementFile,
+        scope,
+      );
+      IosBytecodeBuilder.validateCompiledPolicy(packageFile, manifest);
+      await client.registerReleaseSelectionScope(
+        appId: appId,
+        releaseId: release.id,
+        scope: scope,
+        releaseArtifactId: primary.id,
+        supplementArtifactId: supplement.id,
+      );
+    } finally {
+      temp.deleteSync(recursive: true);
+    }
   }
 
   /// Returns [release] as it is now, for the JSON envelope.
@@ -638,6 +705,23 @@ $error''');
   /// Validates arguments that are common to all release types.
   Future<void> assertArgsAreValid(Releaser releaser) async {
     assertPublicKeyArgsValid();
+
+    final protocol = shorebirdEnv.getShorebirdYaml()?.selectionProtocol ?? 1;
+    if (protocol == 2 &&
+        (!const {
+              ReleaseType.ios,
+              ReleaseType.macos,
+            }.contains(releaser.releaseType) ||
+            shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode !=
+                'dart-bytecode-interpreter' ||
+            !results.patchSigningEnabled ||
+            results.wasParsed(CommonArguments.publicKeyArg.name) ||
+            results.wasParsed(CommonArguments.publicKeyCmd.name))) {
+      usageException(
+        'Protocol 2 publication requires an iOS or macOS interpreter '
+        'release with managed signing.',
+      );
+    }
 
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
     final hasPublicKey =
@@ -726,6 +810,27 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     return (nativeEnabled ? open_patch.runtimeModeNativeAot : null) ??
         shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode ??
         open_patch.runtimeModeDartBytecodeInterpreter;
+  }
+
+  /// Ensures the scope sealed before compilation matches the built package.
+  @visibleForTesting
+  void assertCompiledReleaseVersion(Releaser releaser, String releaseVersion) {
+    final configuredBuildId = shorebirdEnv
+        .getShorebirdYaml()
+        ?.aotPatchAppBuildId;
+    if (const {
+          ReleaseType.ios,
+          ReleaseType.iosFramework,
+          ReleaseType.macos,
+        }.contains(releaser.releaseType) &&
+        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter &&
+        configuredBuildId != null &&
+        configuredBuildId != releaseVersion) {
+      usageException(
+        'aot_patch_app_build_id differs from the built release version. '
+        'Set it to the exact built version, including its build number.',
+      );
+    }
   }
 
   /// Checks response-signing compatibility and the interpreter trust policy.
@@ -973,16 +1078,27 @@ ${summary.join('\n')}
     required String version,
     required ReleasePlatform releasePlatform,
   }) async {
-    return await codePushClientWrapper.maybeGetRelease(
-          appId: appId,
-          releaseVersion: version,
-        ) ??
-        await codePushClientWrapper.createRelease(
-          appId: appId,
-          version: version,
-          flutterRevision: shorebirdEnv.flutterRevision,
-          platform: releasePlatform,
+    final protocol = shorebirdEnv.getShorebirdYaml()?.selectionProtocol ?? 1;
+    final existing = await codePushClientWrapper.maybeGetRelease(
+      appId: appId,
+      releaseVersion: version,
+    );
+    if (existing != null) {
+      if (existing.selectionProtocol != protocol) {
+        usageException(
+          'selection_protocol differs from the immutable release. '
+          'Use a new release version.',
         );
+      }
+      return existing;
+    }
+    return codePushClientWrapper.createRelease(
+      appId: appId,
+      version: version,
+      flutterRevision: shorebirdEnv.flutterRevision,
+      platform: releasePlatform,
+      selectionProtocol: protocol == 2 ? 2 : null,
+    );
   }
 
   /// Prepares the release by updating the release status to draft.
@@ -990,6 +1106,16 @@ ${summary.join('\n')}
     required Release release,
     required Releaser releaser,
   }) async {
+    if (release.selectionProtocol == 2 &&
+        release.platforms[releaser.releaseType.releasePlatform]?.status !=
+            null &&
+        release.platforms[releaser.releaseType.releasePlatform]?.status !=
+            ReleaseStatus.draft) {
+      usageException(
+        'A published protocol-2 platform cannot be rebuilt or drafted. '
+        'Use a new version.',
+      );
+    }
     await codePushClientWrapper.updateReleaseStatus(
       appId: appId,
       releaseId: release.id,
@@ -1034,6 +1160,7 @@ ${summary.join('\n')}
       releaseId: release.id,
       platform: releaser.releaseType.releasePlatform,
       status: ReleaseStatus.active,
+      selectionArches: release.selectionProtocol == 2 ? ['aarch64'] : null,
       metadata: updatedMetadata.toJson(),
     );
   }

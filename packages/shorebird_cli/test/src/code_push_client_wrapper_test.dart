@@ -13,6 +13,7 @@ import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/api_error_exit.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
+import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/deployment_track.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
@@ -3715,6 +3716,28 @@ You can manage this release in the ${link(uri: uri, message: 'Shorebird Console'
         ).called(1);
         verify(() => progress.complete()).called(1);
         verifyNever(() => progress.fail(any()));
+      });
+
+      test('protocol 2 refuses an unverified upload conflict', () async {
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+          const ShorebirdYaml(appId: appId, selectionProtocol: 2),
+        );
+        stubCreateReleaseArtifact(
+          const CodePushConflictException(message: 'exists'),
+        );
+        when(
+          () => codePushClient.getReleaseArtifacts(
+            appId: app.appId,
+            releaseId: releaseId,
+            platform: ReleasePlatform.ios,
+            arch: 'ios_supplement',
+          ),
+        ).thenAnswer((_) async => [releaseArtifact]);
+        await expectLater(createSupplement, throwsStateError);
+        verifyNever(() => progress.complete());
+        verifyNever(
+          () => logger.info(any(that: contains('already exists, continuing'))),
+        );
       });
 
       test('completes successfully when the artifact is created', () async {

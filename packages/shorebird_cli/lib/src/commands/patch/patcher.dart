@@ -65,6 +65,9 @@ More info: ${troubleshootingUrl.toLink()}.
   /// too. Set by the patch command.
   bool obfuscate = false;
 
+  /// Protocol fixed by the downloaded release, never inferred from source.
+  int selectionProtocol = 1;
+
   /// The path to the release's obfuscation map, if the patch should reuse
   /// the release's obfuscated names. Set by the patch command. Only set when
   /// [obfuscate] is true and the release's Flutter supports loading the map.
@@ -320,6 +323,10 @@ More info: ${troubleshootingUrl.toLink()}.
     required String patchArtifactPath,
     required Progress progress,
     String? podfileLockHash,
+    String? offlineExpiresAt,
+    String? variantId,
+    String? licenseType,
+    String? artifactKeyId,
   }) async {
     final hash = sha256
         .convert(await File(patchArtifactPath).readAsBytes())
@@ -344,6 +351,10 @@ More info: ${troubleshootingUrl.toLink()}.
       size: await File(diffPath).length(),
       hashSignature: hashSignature,
       podfileLockHash: podfileLockHash,
+      offlineExpiresAt: offlineExpiresAt,
+      variantId: variantId,
+      licenseType: licenseType,
+      artifactKeyId: artifactKeyId,
     );
   }
 
