@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:meta/meta.dart';
 
 /// Exact immutable runtime identity bundled in a protocol-2 release.
@@ -38,6 +40,69 @@ class ReleaseSelectionScope {
             : hostAbiHash != null)) {
       throw const FormatException('Invalid immutable release selection scope');
     }
+  }
+
+  /// Decodes the flat public object without silently merging duplicate keys.
+  factory ReleaseSelectionScope.decode(String source) {
+    var offset = 0;
+    void whitespace() {
+      while (offset < source.length &&
+          const {0x20, 0x09, 0x0a, 0x0d}.contains(source.codeUnitAt(offset))) {
+        offset++;
+      }
+    }
+
+    void consume(String token) {
+      whitespace();
+      if (!source.startsWith(token, offset)) {
+        throw const FormatException('Invalid release scope JSON');
+      }
+      offset += token.length;
+    }
+
+    String string() {
+      whitespace();
+      final start = offset;
+      consume('"');
+      while (offset < source.length) {
+        final character = source.codeUnitAt(offset++);
+        if (character == 0x5c) {
+          offset++;
+        } else if (character == 0x22) {
+          return jsonDecode(source.substring(start, offset)) as String;
+        }
+      }
+      throw const FormatException('Unterminated release scope JSON string');
+    }
+
+    consume('{');
+    final fields = <String, dynamic>{};
+    whitespace();
+    if (!source.startsWith('}', offset)) {
+      while (true) {
+        final key = string();
+        if (fields.containsKey(key)) {
+          throw const FormatException('Duplicate release scope field');
+        }
+        consume(':');
+        whitespace();
+        if (source.startsWith('null', offset)) {
+          consume('null');
+          fields[key] = null;
+        } else {
+          fields[key] = string();
+        }
+        whitespace();
+        if (source.startsWith('}', offset)) break;
+        consume(',');
+      }
+    }
+    consume('}');
+    whitespace();
+    if (offset != source.length) {
+      throw const FormatException('Trailing release scope JSON');
+    }
+    return ReleaseSelectionScope.fromJson(fields);
   }
 
   /// Rejects missing, extra and incorrectly typed runtime identity fields.

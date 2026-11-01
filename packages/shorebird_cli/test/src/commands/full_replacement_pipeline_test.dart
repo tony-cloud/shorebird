@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
+import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
@@ -223,6 +224,7 @@ void pipelineTests(String targetOS) {
     final compiledPolicy = utf8.encode(
       jsonEncode({
         'app_id': appId,
+        if (manifest['selection_protocol'] == 2) 'selection_protocol': 2,
         'aot_patch_runtime_mode': open_patch.runtimeModeDartBytecodeInterpreter,
         'aot_patch_full_replacement': manifest['full_replacement'] ?? false,
         'aot_patch_structural_updates': manifest['structural_updates'],
@@ -269,6 +271,26 @@ void pipelineTests(String targetOS) {
           '$assets/shorebird_replacement_base.sbr',
           bytes.length,
           bytes,
+        ),
+      );
+    }
+    if (manifest['selection_protocol'] == 2) {
+      final scope = utf8.encode(
+        jsonEncode({
+          'app_id': appId,
+          'release_version': releaseVersion,
+          'platform': targetOS,
+          'arch': 'aarch64',
+          'base_artifact_hash': manifest['base_snapshot_hash'],
+          'host_abi_hash': manifest['host_abi'],
+          'runtime_profile': 'interpreter-full',
+        }),
+      );
+      archive.addFile(
+        ArchiveFile(
+          '$assets/shorebird_release_scope_${targetOS}_aarch64.json',
+          scope.length,
+          scope,
         ),
       );
     }
@@ -578,7 +600,8 @@ void pipelineTests(String targetOS) {
   }
 
   test(
-    'protocol 2 restores original scope and permits selected keys',
+    'protocol 2 compares the current domain with a bound temporary scope '
+    'and publishes the original-bound update',
     () async {
       yaml = policy(protocol: 2);
       await scoped(
@@ -616,25 +639,111 @@ void pipelineTests(String targetOS) {
       when(() => args.options).thenReturn(['variant']);
       when(() => args['variant']).thenReturn('pro');
       compilations.clear();
+      events.clear();
+      final originalArchive = releaseArchive.readAsBytesSync();
+      final originalManifest = readManifest();
+      final originalScope = ReleaseSelectionArchive.verifyPackage(
+        releaseArchive,
+        appId: appId,
+        version: releaseVersion,
+        platform: targetOS,
+        expectedPublicKey: 'compiled-public-key',
+      );
+      nativeBuild = () async {
+        // The native compiler requires the current domain, not the release's
+        // removed libraries. Check this at the native boundary before
+        // packaging.
+        final comparison = open_patch.FullReplacementBundle.decode(
+          File(
+            buildEnvironment['SHOREBIRD_AOT_REPLACEMENT_BASE']!,
+          ).readAsBytesSync(),
+        );
+        expect(events, ['compile patch', 'native']);
+        expect(comparison.manifest.isBaseline, isTrue);
+        expect(comparison.manifest.baselineUris, currentUris);
+        expect(comparison.component, update.component);
+      };
       await buildPatch();
       final native = nativeEnvironments.single;
+      final comparisonBytes = File(
+        native['SHOREBIRD_AOT_REPLACEMENT_BASE']!,
+      ).readAsBytesSync();
       expect(
-        File(native['SHOREBIRD_AOT_REPLACEMENT_BASE']!).readAsBytesSync(),
-        baseline.encode(),
+        File(native['SHOREBIRD_INTERPRETER_BASE']!).readAsBytesSync(),
+        comparisonBytes,
       );
       expect(
         native['SHOREBIRD_AOT_BASE_SNAPSHOT_HASH'],
-        open_patch.sha256Hex(baseline.encode()),
+        open_patch.sha256Hex(comparisonBytes),
       );
       final scope = jsonDecode(native['SHOREBIRD_RELEASE_SCOPE']!) as Map;
       expect(
         scope['base_artifact_hash'],
-        open_patch.sha256Hex(baseline.encode()),
+        open_patch.sha256Hex(comparisonBytes),
+      );
+      expect(scope, {
+        ...originalScope.toJson(),
+        'base_artifact_hash': open_patch.sha256Hex(comparisonBytes),
+      });
+      final comparisonArchive = writeCompiledRelease(
+        {
+          ...manifest,
+          'base_snapshot_hash': native['SHOREBIRD_AOT_BASE_SNAPSHOT_HASH'],
+        },
+        replacementBase: comparisonBytes,
+        name: 'comparison.zip',
+      );
+      expect(
+        ReleaseSelectionArchive.verifyPackage(
+          comparisonArchive,
+          appId: appId,
+          version: releaseVersion,
+          platform: targetOS,
+          expectedPublicKey: 'compiled-public-key',
+        ).toJson(),
+        scope,
+      );
+      expect(
+        await scoped(
+          () => patcher.archiveDifferOverride!.changedFiles(
+            releaseArchive.path,
+            comparisonArchive.path,
+          ),
+        ),
+        isEmpty,
       );
       final artifacts = await packagePatch();
       final artifact = artifacts.values.single;
       expect(artifact.artifactKeyId, 'pro-specific-key');
       expect(artifact.variantId, 'pro');
+      final encrypted = open_patch.EncryptedPatchArtifact.fromJson(
+        (jsonDecode(
+                  File(
+                    p.join(
+                      project.path,
+                      'build',
+                      '${targetOS}_interpreter_patch.vmcode',
+                    ),
+                  ).readAsStringSync(),
+                )
+                as Map)
+            .cast<String, Object?>(),
+      );
+      final published = encrypted
+          .decrypt(open_patch.readKey(keyHex))
+          .reconstruct(const []);
+      expect(published, update.encode());
+      open_patch.FullReplacementBundle.decode(
+        published,
+      ).validateUpdateAgainst(baseline);
+      expect(
+        encrypted.metadata.baseSnapshotHash,
+        originalScope.baseArtifactHash,
+      );
+      expect(readManifest(), originalManifest);
+      expect(releaseArchive.readAsBytesSync(), originalArchive);
+      expect(compilations, hasLength(1));
+      expect(buildEnvironment, {'PRESERVED': 'original'});
     },
   );
 

@@ -47,13 +47,10 @@ class ReleaseSelectionArchive {
 
       final yaml =
           loadYaml(utf8.decode(policy.content as List<int>)) as YamlMap;
-      final scope = ReleaseSelectionScope.fromJson(
-        jsonDecode(
-              utf8.decode(
-                member('shorebird_release_scope_${platform}_aarch64.json'),
-              ),
-            )
-            as Map<String, dynamic>,
+      final scope = ReleaseSelectionScope.decode(
+        utf8.decode(
+          member('shorebird_release_scope_${platform}_aarch64.json'),
+        ),
       );
       final profile = yaml['aot_patch_full_replacement'] == true
           ? 'interpreter-full'

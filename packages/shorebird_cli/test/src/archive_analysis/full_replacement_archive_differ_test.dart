@@ -103,6 +103,231 @@ void main() {
     },
   );
 
+  group('protocol 2 comparison scope', () {
+    const scopePath = '$_assets/shorebird_release_scope_ios_aarch64.json';
+    const appId = '11111111-1111-4111-8111-111111111111';
+    const version = '1.2.3+4';
+
+    Map<String, Object?> scope(List<int> baseline) => {
+      'app_id': appId,
+      'release_version': version,
+      'platform': 'ios',
+      'arch': 'aarch64',
+      'base_artifact_hash': sha256Hex(baseline),
+      'host_abi_hash': FullReplacementBundle.decode(
+        baseline,
+      ).manifest.hostAbiHex,
+      'runtime_profile': 'interpreter-full',
+    };
+
+    File v2Archive(
+      String name,
+      List<int> baseline, {
+      Map<String, Object?> scopeOverrides = const {},
+      Map<String, Object?> policyOverrides = const {},
+      Map<String, List<int>> assets = const {},
+      Set<String> omitted = const {},
+      List<MapEntry<String, List<int>>> extra = const [],
+    }) => archive(
+      name,
+      baseline,
+      policyOverrides: {
+        'selection_protocol': 2,
+        'app_id': appId,
+        'aot_patch_app_build_id': version,
+        ...policyOverrides,
+      },
+      assets: {
+        scopePath: utf8.encode(
+          jsonEncode(scope(baseline)..addAll(scopeOverrides)),
+        ),
+        ...assets,
+      },
+      omitted: omitted,
+      extra: extra,
+    );
+
+    test('normalizes only the verified generated scope hash', () async {
+      final old = v2Archive('old', released);
+      final updated = v2Archive('new', comparison);
+      expect(await differ.changedFiles(old.path, updated.path), isEmpty);
+
+      const nested = '$_assets/assets/shorebird_release_scope_ios_aarch64.json';
+      const outside = '$_app/shorebird_release_scope_ios_aarch64.json';
+      final withAssets = v2Archive(
+        'old-assets',
+        released,
+        assets: {
+          nested: [1],
+          outside: [1],
+        },
+      );
+      final changed = v2Archive(
+        'new-assets',
+        comparison,
+        assets: {
+          nested: [2],
+          outside: [2],
+          '$_assets/assets/config.json': [2],
+        },
+      );
+      expect(
+        (await differ.changedFiles(withAssets.path, changed.path)).changedPaths,
+        {nested, outside, '$_assets/assets/config.json'},
+      );
+    });
+
+    for (final mutation in <String, Object?>{
+      'app_id': '22222222-2222-4222-8222-222222222222',
+      'release_version': '2.0.0+1',
+      'platform': 'macos',
+      'arch': 'x86_64',
+      'host_abi_hash': 'ff' * 32,
+      'runtime_profile': 'interpreter-body',
+      'base_artifact_hash': 'ff' * 32,
+      'extra': true,
+    }.entries) {
+      test('rejects changed scope ${mutation.key}', () async {
+        final old = v2Archive('old', released);
+        final updated = v2Archive(
+          'new',
+          comparison,
+          scopeOverrides: {mutation.key: mutation.value},
+          // These scopes remain individually bound to their policies. They
+          // must still be rejected for differing from the original release.
+          policyOverrides: {
+            if (mutation.key == 'app_id') 'app_id': mutation.value,
+            if (mutation.key == 'release_version')
+              'aot_patch_app_build_id': mutation.value,
+          },
+        );
+        await expectLater(
+          differ.changedFiles(old.path, updated.path),
+          throwsFormatException,
+        );
+      });
+    }
+
+    test('rejects original scope hash with projected baseline', () async {
+      final old = v2Archive('old', released);
+      final updated = v2Archive(
+        'new',
+        comparison,
+        scopeOverrides: {'base_artifact_hash': sha256Hex(released)},
+      );
+      await expectLater(
+        differ.changedFiles(old.path, updated.path),
+        throwsFormatException,
+      );
+    });
+
+    test(
+      'verifies actual projected bytes as well as scope and policy',
+      () async {
+        final old = v2Archive('old', released);
+        final updated = v2Archive(
+          'new',
+          comparison,
+          assets: {_basePath: released},
+        );
+        await expectLater(
+          differ.changedFiles(old.path, updated.path),
+          throwsFormatException,
+        );
+      },
+    );
+
+    for (final missingRelease in [false, true]) {
+      test('rejects missing scope in release=$missingRelease', () async {
+        final old = v2Archive(
+          'old',
+          released,
+          omitted: {if (missingRelease) scopePath},
+        );
+        final updated = v2Archive(
+          'new',
+          comparison,
+          omitted: {if (!missingRelease) scopePath},
+        );
+        await expectLater(
+          differ.changedFiles(old.path, updated.path),
+          throwsFormatException,
+        );
+      });
+    }
+
+    for (final bytes in [
+      utf8.encode('{}'),
+      utf8.encode('[]'),
+      utf8.encode('{'),
+    ]) {
+      test('rejects malformed scope ${utf8.decode(bytes)}', () async {
+        final old = v2Archive('old', released);
+        final updated = v2Archive(
+          'new',
+          comparison,
+          assets: {scopePath: bytes},
+        );
+        await expectLater(
+          differ.changedFiles(old.path, updated.path),
+          throwsFormatException,
+        );
+      });
+    }
+
+    test('rejects duplicate scope assets', () async {
+      final old = v2Archive('old', released);
+      final updated = v2Archive(
+        'new',
+        comparison,
+        extra: [
+          MapEntry(scopePath, utf8.encode(jsonEncode(scope(comparison)))),
+        ],
+      );
+      await expectLater(
+        differ.changedFiles(old.path, updated.path),
+        throwsFormatException,
+      );
+    });
+
+    for (final key in ['base_artifact_hash', r'base_artifact_\u0068ash']) {
+      for (final malformedRelease in [false, true]) {
+        test(
+          'rejects duplicate decoded $key in release=$malformedRelease',
+          () async {
+            List<int> duplicate(List<int> baseline) => utf8.encode(
+              '{"$key":"${'ff' * 32}",'
+              '${jsonEncode(scope(baseline)).substring(1)}',
+            );
+            final old = v2Archive(
+              'old',
+              released,
+              assets: {if (malformedRelease) scopePath: duplicate(released)},
+            );
+            final updated = v2Archive(
+              'new',
+              comparison,
+              assets: {if (!malformedRelease) scopePath: duplicate(comparison)},
+            );
+            await expectLater(
+              differ.changedFiles(old.path, updated.path),
+              throwsFormatException,
+            );
+          },
+        );
+      }
+    }
+
+    test('rejects dropping protocol 2 from the comparison', () async {
+      final old = v2Archive('old', released);
+      final updated = archive('new', comparison);
+      await expectLater(
+        differ.changedFiles(old.path, updated.path),
+        throwsFormatException,
+      );
+    });
+  });
+
   for (final path in [
     '$_app/Frameworks/Plugin.framework/Plugin',
     '$_app/Frameworks/Flutter.framework/Flutter',

@@ -23,7 +23,11 @@ void main() {
     'host_abi_hash': null,
     'runtime_profile': 'interpreter-body',
   };
-  File package({Map<String, dynamic>? binding, List<int>? bytes}) {
+  File package({
+    Map<String, dynamic>? binding,
+    List<int>? bytes,
+    String? scopeJson,
+  }) {
     final members = <String, List<int>>{
       '$assets/shorebird.yaml': utf8.encode('''
 app_id: $appId
@@ -36,7 +40,7 @@ aot_patch_base_snapshot_hash: $hash
 aot_patch_app_build_id: 1.0.0+1
 '''),
       '$assets/shorebird_release_scope_ios_aarch64.json': utf8.encode(
-        jsonEncode(binding ?? scope()),
+        scopeJson ?? jsonEncode(binding ?? scope()),
       ),
       '$assets/shorebird_interpreter_base.bytecode': bytes ?? baseline,
     };
@@ -59,6 +63,22 @@ aot_patch_app_build_id: 1.0.0+1
     expect(result.toJson().keys, hasLength(7));
     expect(result.toJson(), containsPair('host_abi_hash', null));
   });
+  for (final key in ['base_artifact_hash', r'base_artifact_\u0068ash']) {
+    test('rejects duplicate decoded scope key $key before binding checks', () {
+      final duplicate =
+          '{"$key":"${'ff' * 32}",${jsonEncode(scope()).substring(1)}';
+      expect(
+        () => ReleaseSelectionArchive.verifyPackage(
+          package(scopeJson: duplicate),
+          appId: appId,
+          version: '1.0.0+1',
+          platform: 'ios',
+          expectedPublicKey: 'pinned-key',
+        ),
+        throwsFormatException,
+      );
+    });
+  }
   test('rejects a compiled key different from the managed release key', () {
     expect(
       () => ReleaseSelectionArchive.verifyPackage(

@@ -7,13 +7,15 @@ import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
 import 'package:shorebird_cli/src/archive_analysis/shorebird_native_assets_descriptor.dart';
+import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 import 'package:yaml/yaml.dart';
 
 /// Compares native archives built with the complete replacement profile.
 ///
 /// A native comparison embeds a baseline projection of the current component.
-/// Only that generated baseline and its policy digest are normalized. All
-/// other policy, asset and native comparisons retain Apple's usual behavior.
+/// Only that generated baseline and its policy/scope digests are normalized.
+/// All other policy, scope, asset and native comparisons retain Apple's usual
+/// behavior.
 class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
   /// Creates a differ bound to the exact generated baseline wrapper hashes.
   const FullReplacementArchiveDiffer({
@@ -55,6 +57,13 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         'Native comparison replacement host ABI or root differs from release.',
       );
     }
+    if ([...released, ...comparison].any(
+      (bundle) => bundle.normalizedScope != identity.normalizedScope,
+    )) {
+      throw const FormatException(
+        'Native comparison selection scope differs from release.',
+      );
+    }
 
     // Keep the inherited signature removal, Mach-O UUID handling and compiled
     // asset catalog comparison. Their hashes must not be replaced by raw CRCs.
@@ -67,6 +76,9 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
       final current = currentByPolicy[bundle.policyPath];
       if (current == null) continue;
       changed.remove(bundle.basePath);
+      if (bundle.scopePath != null && bundle.scopePath == current.scopePath) {
+        changed.remove(bundle.scopePath);
+      }
       if (bundle.normalizedPolicy == current.normalizedPolicy) {
         changed.remove(bundle.policyPath);
       } else {
@@ -201,6 +213,57 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         }
         final normalized = Map<String, Object?>.from(policy)
           ..remove('aot_patch_base_snapshot_hash');
+        String? scopePath;
+        String? normalizedScope;
+        if (policy['selection_protocol'] == 2) {
+          final platform = switch (nativeAssetsTarget) {
+            'ios_arm64' => 'ios',
+            'macos_arm64' => 'macos',
+            _ => throw const FormatException(
+              'Unsupported native comparison selection target.',
+            ),
+          };
+          scopePath = policyPath.replaceFirst(
+            RegExp(r'shorebird\.yaml$'),
+            'shorebird_release_scope_${platform}_aarch64.json',
+          );
+          final scopeFile = archive.find(scopePath);
+          if (scopeFile == null ||
+              !scopeFile.isFile ||
+              scopeFile.isSymbolicLink) {
+            throw const FormatException(
+              'Native comparison requires a regular selection scope asset.',
+            );
+          }
+          final ReleaseSelectionScope scope;
+          try {
+            scope = ReleaseSelectionScope.decode(
+              utf8.decode(scopeFile.content as List<int>),
+            );
+          } on Object {
+            throw const FormatException(
+              'Invalid native comparison selection scope.',
+            );
+          }
+          // The expected wrapper hash was independently checked against the
+          // actual asset above. Only this generated hash may differ; the other
+          // six fields must match every released and comparison scope exactly.
+          if (scope.baseArtifactHash != expectedHash ||
+              scope.hostAbiHash != host ||
+              scope.appId != policy['app_id'] ||
+              scope.releaseVersion != policy['aot_patch_app_build_id'] ||
+              scope.platform != platform ||
+              scope.arch != 'aarch64' ||
+              scope.runtimeProfile != 'interpreter-full') {
+            throw const FormatException(
+              'Native comparison selection scope binding mismatch.',
+            );
+          }
+          normalizedScope = canonicalJson(
+            scope.toJson()..remove('base_artifact_hash'),
+          );
+          scopeFile.clear();
+        }
         result.add(
           _BaselineAssets(
             policyPath: policyPath,
@@ -210,6 +273,8 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
             hostAbi: host,
             rootUri: baseline.rootUri,
             normalizedPolicy: canonicalJson(normalized),
+            scopePath: scopePath,
+            normalizedScope: normalizedScope,
           ),
         );
       }
@@ -229,6 +294,8 @@ class _BaselineAssets {
     required this.hostAbi,
     required this.rootUri,
     required this.normalizedPolicy,
+    required this.scopePath,
+    required this.normalizedScope,
   });
 
   final String policyPath;
@@ -238,4 +305,6 @@ class _BaselineAssets {
   final String hostAbi;
   final String rootUri;
   final String normalizedPolicy;
+  final String? scopePath;
+  final String? normalizedScope;
 }

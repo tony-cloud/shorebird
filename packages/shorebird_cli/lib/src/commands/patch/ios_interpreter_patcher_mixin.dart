@@ -331,8 +331,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
     _preparedFullReplacement = false;
     _comparisonReleaseBaseHash = null;
     _comparisonCurrentBaseHash = null;
-    if (IosBytecodeBuilder.fullReplacementForManifest(manifest) &&
-        selectionProtocol == 1) {
+    if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
       await buildInterpreterBytecodePatch(buildArgs);
       final configured = _configuredInterpreterBytecodePath(
         shorebirdEnv.getShorebirdYaml(),
@@ -363,6 +362,10 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       );
       _preparedFullReplacement = true;
     }
+    // The native comparison compiles the current library domain. Its generated
+    // baseline and scope must agree, while publication still uses the original
+    // release supplement and the original-bound update prepared above.
+    final nativeBaseline = comparisonBase ?? baseline;
     final previous = artifactBuilder.iosInterpreterBuildEnvironment;
     artifactBuilder.iosInterpreterBuildEnvironment = {
       ...previous,
@@ -373,7 +376,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
           'platform': interpreterTargetOS,
           'arch': 'aarch64',
           'base_artifact_hash': open_patch.sha256Hex(
-            baseline.readAsBytesSync(),
+            nativeBaseline.readAsBytesSync(),
           ),
           'host_abi_hash': manifest['host_abi'],
           'runtime_profile':
@@ -383,14 +386,14 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
               ? 'interpreter-structural'
               : 'interpreter-body',
         }),
-        'SHOREBIRD_INTERPRETER_BASE': baseline.absolute.path,
+        'SHOREBIRD_INTERPRETER_BASE': nativeBaseline.absolute.path,
         if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) ...{
-          'SHOREBIRD_AOT_REPLACEMENT_BASE': baseline.absolute.path,
+          'SHOREBIRD_AOT_REPLACEMENT_BASE': nativeBaseline.absolute.path,
           'SHOREBIRD_AOT_HOST_ABI': manifest['host_abi']! as String,
         },
       },
       'SHOREBIRD_AOT_BASE_SNAPSHOT_HASH': open_patch.sha256Hex(
-        (comparisonBase ?? baseline).readAsBytesSync(),
+        nativeBaseline.readAsBytesSync(),
       ),
       if (comparisonBase != null) ...{
         'SHOREBIRD_AOT_REPLACEMENT_BASE': comparisonBase.absolute.path,
