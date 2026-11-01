@@ -21,6 +21,27 @@ class MacosEntitlementsValidator extends Validator {
   static const allowUnsignedExecutableMemoryKey =
       'com.apple.security.cs.allow-unsigned-executable-memory';
 
+  // These are Boolean grants. Absence or explicit false disables the grant;
+  // every other value is rejected rather than guessing at codesign semantics.
+  static const _forbiddenInterpreterEntitlements = [
+    'com.apple.security.cs.allow-jit',
+    allowUnsignedExecutableMemoryKey,
+    'com.apple.security.cs.disable-executable-page-protection',
+    'com.apple.security.cs.disable-library-validation',
+    'com.apple.security.cs.allow-dyld-environment-variables',
+    'com.apple.security.cs.debugger',
+    'com.apple.security.get-task-allow',
+    'get-task-allow',
+  ];
+
+  bool get _requiresInterpreterEntitlements {
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    // Incomplete interpreter requests must not be repaired into executable
+    // patching policy either. Release validation rejects unsupported profiles.
+    return yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter' ||
+        (yaml?.aotPatchFullReplacement ?? false);
+  }
+
   Directory? get _macosDirectory {
     final projectRoot = shorebirdEnv.getFlutterProjectRoot();
     if (projectRoot == null) {
@@ -76,16 +97,39 @@ The command you are running must be run within a Flutter app project that suppor
     }
 
     final plistFile = _releaseEntitlementsPlist!;
+    final properties = Plist(file: plistFile).properties;
+    final interpreter = _requiresInterpreterEntitlements;
     return [
       for (final MapEntry(key: key, value: name)
           in _requiredEntitlements.entries)
-        if (!hasEntitlement(plistFile: plistFile, key: key))
+        if ((!interpreter || key == networkClientEntitlementKey) &&
+            properties[key] != true)
           ValidationIssue(
             severity: ValidationIssueSeverity.error,
             message:
                 '${plistFile.path} is missing the $name ($key) entitlement.',
-            fix: () => addEntitlementToPlist(plistFile, key: key),
+            fix: () {
+              // Doctor may apply a previously reported native-mode fix after
+              // shorebird.yaml changed. Never enable an interpreter exception.
+              if (_forbiddenInterpreterEntitlements.contains(key) &&
+                  _requiresInterpreterEntitlements) {
+                throw Exception(
+                  'Cannot enable $key for a macOS interpreter release.',
+                );
+              }
+              addEntitlementToPlist(plistFile, key: key);
+            },
           ),
+      if (interpreter)
+        for (final key in _forbiddenInterpreterEntitlements)
+          if (properties.containsKey(key) && properties[key] != false)
+            ValidationIssue(
+              severity: ValidationIssueSeverity.error,
+              message:
+                  '${plistFile.path} enables or has an invalid value for $key. '
+                  'Full interpreter releases forbid this entitlement; remove '
+                  'it or set it to Boolean false.',
+            ),
     ];
   }
 
