@@ -144,7 +144,7 @@ of the iOS app that is using this module. (aar and ios-framework only)''',
       )
       ..addMultiOption(
         'target-platform',
-        help: 'The target platform(s) for which the app is compiled.',
+        help: 'The Android target platform(s) for which the app is compiled.',
         defaultsTo: Arch.values.map((arch) => arch.targetPlatformCliArg),
         allowed: Arch.values.map((arch) => arch.targetPlatformCliArg),
       )

@@ -17,6 +17,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/os/operating_system_interface.dart';
 import 'package:shorebird_cli/src/platform.dart' as scoped_platform;
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
@@ -304,6 +305,8 @@ ${link(uri: Uri.parse(openShorebirdIssueUrl))}
     String? base64PublicKey,
     int? ddMaxBytes,
   }) async {
+    DesktopArchitecture.validateBuildArgs('linux', args);
+    DesktopArchitecture.validateFlutterSdk('linux');
     await _runShorebirdBuildCommand(
       () => _runFlutterBuild(
         command: 'linux',
@@ -938,13 +941,15 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     ).toString();
   }
 
-  /// Builds a windows app and returns the x64 Release directory
+  /// Builds a Windows app and returns the native Release directory
   Future<Directory> buildWindowsApp({
     String? target,
     List<String> args = const [],
     String? base64PublicKey,
     int? ddMaxBytes,
   }) async {
+    DesktopArchitecture.validateBuildArgs('windows', args);
+    DesktopArchitecture.validateFlutterSdk('windows');
     await _runShorebirdBuildCommand(
       () => _runFlutterBuild(
         command: 'windows',

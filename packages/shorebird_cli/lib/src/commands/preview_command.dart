@@ -22,6 +22,7 @@ import 'package:shorebird_cli/src/executables/devicectl/apple_device.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_chooser.dart';
 import 'package:shorebird_cli/src/shorebird_command.dart';
@@ -517,7 +518,10 @@ This is only applicable when previewing Android releases.''',
       appId: appId,
       release: release,
       platform: platform,
-      arch: primaryLinuxReleaseArtifactArch,
+      arch: DesktopArchitecture.artifact(
+        primaryLinuxReleaseArtifactArch,
+        DesktopArchitecture.native('linux'),
+      ),
     );
 
     if (!await _useTrackOnApp(
@@ -528,6 +532,10 @@ This is only applicable when previewing Android releases.''',
       return ExitCode.software.code;
     }
 
+    DesktopArchitecture.validateBinary(
+      File(p.join(appDirectory.path, 'lib', 'libapp.so')),
+      DesktopArchitecture.native('linux'),
+    );
     final executableFile = appDirectory.listSync().whereType<File>().first;
 
     await process.run('chmod', ['+x', executableFile.path]);
@@ -549,7 +557,10 @@ This is only applicable when previewing Android releases.''',
       appId: appId,
       release: release,
       platform: platform,
-      arch: primaryWindowsReleaseArtifactArch,
+      arch: DesktopArchitecture.artifact(
+        primaryWindowsReleaseArtifactArch,
+        DesktopArchitecture.native('windows'),
+      ),
       fileExtension: 'exe',
     );
 
@@ -561,6 +572,10 @@ This is only applicable when previewing Android releases.''',
       return ExitCode.software.code;
     }
 
+    DesktopArchitecture.validateBinary(
+      File(p.join(appDirectory.path, 'data', 'app.so')),
+      DesktopArchitecture.native('windows'),
+    );
     final exeFile = windows.findExecutable(
       releaseDirectory: appDirectory,
     );

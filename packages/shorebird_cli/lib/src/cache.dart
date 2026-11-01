@@ -17,6 +17,8 @@ import 'package:shorebird_cli/src/flutter_version_constraints.dart';
 import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
+import 'package:shorebird_cli/src/platform/platform.dart' show Arch;
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -668,7 +670,40 @@ class PatchArtifact extends CachedArtifact {
   PatchArtifact({required super.cache, required super.platform});
 
   @override
-  String get fileName => platform.isWindows ? 'patch.exe' : 'patch';
+  String get fileName => this.platform.isWindows ? 'patch.exe' : 'patch';
+
+  // Keep native ARM64 host tools separate from older x64 installations.
+  bool get _nativeDesktopArm64 =>
+      (this.platform.isLinux || this.platform.isWindows) &&
+      DesktopArchitecture.native(this.platform.operatingSystem) == Arch.arm64;
+
+  @override
+  File get file => _nativeDesktopArm64
+      ? File(
+          p.join(
+            this.cache.getArtifactDirectory(fileName).path,
+            '${this.platform.operatingSystem}-arm64',
+            fileName,
+          ),
+        )
+      : super.file;
+
+  @override
+  Future<bool> isValid() async {
+    if (!await super.isValid()) return false;
+    if (_nativeDesktopArm64) {
+      try {
+        DesktopArchitecture.validateBinary(
+          file,
+          Arch.arm64,
+          portableExecutable: this.platform.isWindows,
+        );
+      } on FormatException {
+        return false;
+      }
+    }
+    return true;
+  }
 
   @override
   bool get isExecutable => true;
@@ -686,6 +721,13 @@ class PatchArtifact extends CachedArtifact {
         zipFile: File(artifactPath),
         outputDirectory: Directory(outputPath),
       );
+      if (_nativeDesktopArm64) {
+        DesktopArchitecture.validateBinary(
+          File(p.join(outputPath, fileName)),
+          Arch.arm64,
+          portableExecutable: this.platform.isWindows,
+        );
+      }
     } finally {
       // Only the downloaded zip lives here; it's extracted to [outputPath].
       tempDir.deleteTemporarySync();
@@ -695,17 +737,21 @@ class PatchArtifact extends CachedArtifact {
   @override
   Future<String> get storageUrl async {
     var artifactName = 'patch-';
-    if (platform.isMacOS) {
+    if (this.platform.isMacOS) {
       final useArm64 =
           abi.current == Abi.macosArm64 && await _supportsArm64Patch();
       artifactName += useArm64 ? 'darwin-arm64.zip' : 'darwin-x64.zip';
-    } else if (platform.isLinux) {
-      artifactName += 'linux-x64.zip';
-    } else if (platform.isWindows) {
-      artifactName += 'windows-x64.zip';
+    } else if (this.platform.isLinux) {
+      artifactName += DesktopArchitecture.native('linux') == Arch.arm64
+          ? 'linux-arm64.zip'
+          : 'linux-x64.zip';
+    } else if (this.platform.isWindows) {
+      artifactName += DesktopArchitecture.native('windows') == Arch.arm64
+          ? 'windows-arm64.zip'
+          : 'windows-x64.zip';
     }
 
-    return '${cache.shorebirdToolsBaseUrl}/$artifactName';
+    return '${this.cache.shorebirdToolsBaseUrl}/$artifactName';
   }
 
   Future<bool> _supportsArm64Patch() async {

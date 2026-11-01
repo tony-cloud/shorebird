@@ -1,5 +1,4 @@
 import 'package:mason_logger/mason_logger.dart';
-import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/platform.dart';
@@ -37,10 +36,10 @@ class PatchExecutable {
     required String patchArtifactPath,
     required String diffPath,
   }) async {
-    final diffExecutable = p.join(
-      cache.getArtifactDirectory('patch').path,
-      'patch',
-    );
+    final diffExecutable = PatchArtifact(
+      cache: cache,
+      platform: platform,
+    ).file.path;
     final diffArguments = [releaseArtifactPath, patchArtifactPath, diffPath];
 
     final result = await process.run(

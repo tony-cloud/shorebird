@@ -10,6 +10,7 @@ import 'package:shorebird_cli/src/commands/release/releaser.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -34,14 +35,25 @@ class WindowsReleaser extends Releaser {
   String get supplementPlatformSubdir => 'windows';
 
   @override
-  String get supplementArtifactArch => 'windows_supplement';
+  String get supplementArtifactArch => DesktopArchitecture.artifact(
+    'windows_supplement',
+    DesktopArchitecture.native('windows'),
+  );
 
   @override
   String get artifactDisplayName => 'Windows app';
 
   @override
-  Future<void> assertArgsAreValid() async =>
-      assertReleaseVersionFlagNotProvided();
+  Future<void> assertArgsAreValid() async {
+    assertReleaseVersionFlagNotProvided();
+    if (argResults.wasParsed('target-platform')) {
+      throw ArtifactBuildException(
+        '--target-platform is an Android release option. Desktop releases '
+        'use the native Dart SDK architecture; cross compilation is '
+        'unsupported.',
+      );
+    }
+  }
 
   @override
   Future<void> assertPreconditions() => assertBuildPreconditions(

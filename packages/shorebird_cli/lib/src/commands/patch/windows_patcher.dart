@@ -9,6 +9,7 @@ import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/desktop_patcher.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -27,10 +28,14 @@ class WindowsPatcher extends DesktopPatcher {
   });
 
   @override
-  String get primaryReleaseArtifactArch => primaryWindowsReleaseArtifactArch;
+  String get primaryReleaseArtifactArch => DesktopArchitecture.artifact(
+    primaryWindowsReleaseArtifactArch,
+    architecture,
+  );
 
   @override
-  String? get supplementaryReleaseArtifactArch => 'windows_supplement';
+  String? get supplementaryReleaseArtifactArch =>
+      DesktopArchitecture.artifact('windows_supplement', architecture);
 
   @override
   ReleaseType get releaseType => ReleaseType.windows;

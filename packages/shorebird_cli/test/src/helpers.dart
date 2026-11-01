@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:test/test.dart';
 
 /// An operating system shorebird_cli has no platform-specific handling for.
@@ -269,4 +272,20 @@ class CapturingStdout implements Stdout {
     captured.add(object.toString());
     baseStdOut.writeln(object);
   }
+}
+
+/// Creates a minimal ELF64 machine header for desktop routing tests.
+List<int> desktopElfHeader({bool arm64 = false}) {
+  final bytes = Uint8List(64)..setAll(0, [0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+  ByteData.sublistView(bytes).setUint16(18, arm64 ? 183 : 62, Endian.little);
+  return bytes;
+}
+
+/// A deterministic Dart process ABI for desktop routing tests.
+class TestDesktopAbi extends LocalAbi {
+  /// Defaults to the existing x64 desktop fixture architecture.
+  const TestDesktopAbi([this.current = Abi.linuxX64]);
+
+  @override
+  final Abi current;
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
@@ -8,6 +9,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/api_error_exit.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
@@ -93,7 +95,9 @@ void main() {
 
       await runScoped(
         instance.getApps,
-        values: {loggerRef.overrideWith(() => logger)},
+        values: {
+          loggerRef.overrideWith(() => logger),
+        },
       );
 
       final request =
@@ -165,10 +169,14 @@ void main() {
     late TestNativePlatform platform;
     late Directory projectRoot;
 
-    R runWithOverrides<R>(R Function() body) {
+    R runWithOverrides<R>(
+      R Function() body, {
+      LocalAbi processAbi = const TestDesktopAbi(),
+    }) {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => processAbi),
           dittoRef.overrideWith(() => ditto),
           loggerRef.overrideWith(() => logger),
           platformRef.overrideWith(() => platform),
@@ -2817,6 +2825,9 @@ You can manage this release in the ${link(uri: uri, message: 'Shorebird Console'
           File(
             p.join(releaseDirectory.path, 'app.exe'),
           ).writeAsStringSync('exe');
+          File(p.join(releaseDirectory.path, 'data', 'app.so'))
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(desktopElfHeader());
         });
 
         group('when createReleaseArtifact succeeds', () {
@@ -2833,6 +2844,58 @@ You can manage this release in the ${link(uri: uri, message: 'Shorebird Console'
                 podfileLockHash: any(named: 'podfileLockHash'),
               ),
             ).thenAnswer((_) async {});
+          });
+
+          test('uploads the ARM64 archive under a distinct key', () async {
+            File(
+              p.join(releaseDirectory.path, 'data', 'app.so'),
+            ).writeAsBytesSync(desktopElfHeader(arm64: true));
+            await runWithOverrides(
+              () => codePushClientWrapper.createWindowsReleaseArtifacts(
+                appId: appId,
+                releaseId: releaseId,
+                releaseDirectory: releaseDirectory,
+              ),
+              processAbi: const TestDesktopAbi(Abi.windowsArm64),
+            );
+            verify(
+              () => codePushClient.createReleaseArtifact(
+                artifactPath: any(named: 'artifactPath'),
+                appId: appId,
+                releaseId: releaseId,
+                arch: 'win_archive_aarch64',
+                platform: ReleasePlatform.windows,
+                hash: any(named: 'hash'),
+                canSideload: true,
+                podfileLockHash: null,
+              ),
+            ).called(1);
+          });
+
+          test('rejects an x64 archive on ARM64 before upload', () async {
+            await expectLater(
+              () => runWithOverrides(
+                () => codePushClientWrapper.createWindowsReleaseArtifacts(
+                  appId: appId,
+                  releaseId: releaseId,
+                  releaseDirectory: releaseDirectory,
+                ),
+                processAbi: const TestDesktopAbi(Abi.windowsArm64),
+              ),
+              throwsFormatException,
+            );
+            verifyNever(
+              () => codePushClient.createReleaseArtifact(
+                artifactPath: any(named: 'artifactPath'),
+                appId: any(named: 'appId'),
+                releaseId: any(named: 'releaseId'),
+                arch: any(named: 'arch'),
+                platform: any(named: 'platform'),
+                hash: any(named: 'hash'),
+                canSideload: any(named: 'canSideload'),
+                podfileLockHash: any(named: 'podfileLockHash'),
+              ),
+            );
           });
 
           test('completes successfully', () async {
@@ -3289,6 +3352,9 @@ You can manage this release in the ${link(uri: uri, message: 'Shorebird Console'
         releaseBundle = Directory(
           p.join(projectRoot.path, 'path', 'to', 'bundle'),
         )..createSync(recursive: true);
+        File(p.join(releaseBundle.path, 'lib', 'libapp.so'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(desktopElfHeader());
       });
 
       group('when createReleaseArtifact succeeds', () {
@@ -3306,6 +3372,58 @@ You can manage this release in the ${link(uri: uri, message: 'Shorebird Console'
               signing: any(named: 'signing'),
             ),
           ).thenAnswer((_) async {});
+        });
+
+        test('uploads the ARM64 archive under a distinct key', () async {
+          File(
+            p.join(releaseBundle.path, 'lib', 'libapp.so'),
+          ).writeAsBytesSync(desktopElfHeader(arm64: true));
+          await runWithOverrides(
+            () => codePushClientWrapper.createLinuxReleaseArtifacts(
+              appId: appId,
+              releaseId: releaseId,
+              bundle: releaseBundle,
+            ),
+            processAbi: const TestDesktopAbi(Abi.linuxArm64),
+          );
+          verify(
+            () => codePushClient.createReleaseArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              appId: appId,
+              releaseId: releaseId,
+              arch: 'bundle_aarch64',
+              platform: ReleasePlatform.linux,
+              hash: any(named: 'hash'),
+              canSideload: true,
+              podfileLockHash: null,
+            ),
+          ).called(1);
+        });
+
+        test('rejects an x64 archive on ARM64 before upload', () async {
+          await expectLater(
+            () => runWithOverrides(
+              () => codePushClientWrapper.createLinuxReleaseArtifacts(
+                appId: appId,
+                releaseId: releaseId,
+                bundle: releaseBundle,
+              ),
+              processAbi: const TestDesktopAbi(Abi.linuxArm64),
+            ),
+            throwsFormatException,
+          );
+          verifyNever(
+            () => codePushClient.createReleaseArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              arch: any(named: 'arch'),
+              platform: any(named: 'platform'),
+              hash: any(named: 'hash'),
+              canSideload: any(named: 'canSideload'),
+              podfileLockHash: any(named: 'podfileLockHash'),
+            ),
+          );
         });
 
         test('completes successfully', () async {

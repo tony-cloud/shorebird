@@ -19,6 +19,7 @@ import 'package:shorebird_cli/src/deployment_track.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -941,6 +942,10 @@ Looked in:
     ArtifactSigningRequest? signing,
   }) async {
     final createArtifactProgress = logger.progress('Uploading artifacts');
+    DesktopArchitecture.validateBinary(
+      File(p.join(releaseDirectory.path, 'data', 'app.so')),
+      DesktopArchitecture.native('windows'),
+    );
     final zippedRelease = await releaseDirectory.zipToTempFile();
     try {
       await _uploadReleaseArtifact(
@@ -949,7 +954,10 @@ Looked in:
         releaseId: releaseId,
         file: zippedRelease,
         name: 'Windows release (exe)',
-        arch: primaryWindowsReleaseArtifactArch,
+        arch: DesktopArchitecture.artifact(
+          primaryWindowsReleaseArtifactArch,
+          DesktopArchitecture.native('windows'),
+        ),
         platform: ReleasePlatform.windows,
         canSideload: true,
         progress: createArtifactProgress,
@@ -1140,6 +1148,10 @@ $name artifact already exists, continuing...''');
     ArtifactSigningRequest? signing,
   }) async {
     final createArtifactProgress = logger.progress('Uploading artifacts');
+    DesktopArchitecture.validateBinary(
+      File(p.join(bundle.path, 'lib', 'libapp.so')),
+      DesktopArchitecture.native('linux'),
+    );
     final zippedBundle = await Directory(bundle.path).zipToTempFile();
     try {
       await _uploadReleaseArtifact(
@@ -1148,7 +1160,10 @@ $name artifact already exists, continuing...''');
         releaseId: releaseId,
         file: zippedBundle,
         name: 'bundle',
-        arch: primaryLinuxReleaseArtifactArch,
+        arch: DesktopArchitecture.artifact(
+          primaryLinuxReleaseArtifactArch,
+          DesktopArchitecture.native('linux'),
+        ),
         platform: ReleasePlatform.linux,
         canSideload: true,
         progress: createArtifactProgress,

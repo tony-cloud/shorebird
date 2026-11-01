@@ -2,7 +2,10 @@ import 'package:archive/archive_io.dart';
 import 'package:shorebird_cli/src/archive_analysis/release_supplement_validator.dart';
 import 'package:test/test.dart';
 
+import '../helpers.dart';
+
 void main() {
+  useTempWorkingDirectory();
   const validator = ReleaseSupplementValidator();
   const content = [0, 1, 128, 255];
 

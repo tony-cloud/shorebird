@@ -719,6 +719,15 @@ void main() {
               setOperatingSystem(NativePlatform.linux);
             });
 
+            test('uses linux-arm64 for the ARM64 host tool', () async {
+              when(() => mockAbi.current).thenReturn(Abi.linuxArm64);
+              final url = await runWithOverrides(
+                () =>
+                    PatchArtifact(cache: cache, platform: platform).storageUrl,
+              );
+              expect(url, contains('patch-linux-arm64.zip'));
+            });
+
             test('uses linux-x64', () async {
               final url = await runWithOverrides(
                 () =>
@@ -731,6 +740,15 @@ void main() {
           group('when on Windows', () {
             setUp(() {
               setOperatingSystem(NativePlatform.windows);
+            });
+
+            test('uses windows-arm64 for the ARM64 host tool', () async {
+              when(() => mockAbi.current).thenReturn(Abi.windowsArm64);
+              final url = await runWithOverrides(
+                () =>
+                    PatchArtifact(cache: cache, platform: platform).storageUrl,
+              );
+              expect(url, contains('patch-windows-arm64.zip'));
             });
 
             test('uses windows-x64', () async {

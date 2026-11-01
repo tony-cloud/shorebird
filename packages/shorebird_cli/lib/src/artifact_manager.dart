@@ -19,6 +19,7 @@ import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 import 'package:stream_transform/stream_transform.dart';
@@ -678,7 +679,14 @@ its base/lib for libapp.so will confirm whether the build is dropping it.''');
   Directory get linuxBundleDirectory {
     final projectRoot = shorebirdEnv.getShorebirdProjectRoot()!;
     return Directory(
-      p.join(projectRoot.path, 'build', 'linux', 'x64', 'release', 'bundle'),
+      p.join(
+        projectRoot.path,
+        'build',
+        'linux',
+        DesktopArchitecture.directory(DesktopArchitecture.native('linux')),
+        'release',
+        'bundle',
+      ),
     );
   }
 
@@ -686,7 +694,14 @@ its base/lib for libapp.so will confirm whether the build is dropping it.''');
   Directory getWindowsReleaseDirectory() {
     final projectRoot = shorebirdEnv.getShorebirdProjectRoot()!;
     return Directory(
-      p.join(projectRoot.path, 'build', 'windows', 'x64', 'runner', 'Release'),
+      p.join(
+        projectRoot.path,
+        'build',
+        'windows',
+        DesktopArchitecture.directory(DesktopArchitecture.native('windows')),
+        'runner',
+        'Release',
+      ),
     );
   }
 

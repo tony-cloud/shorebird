@@ -6,6 +6,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
 import 'package:shorebird_cli/src/artifact_builder/shorebird_tracer.dart';
@@ -45,6 +46,7 @@ void main() {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => const TestDesktopAbi()),
           appleRef.overrideWith(() => apple),
           artifactManagerRef.overrideWith(() => artifactManager),
           buildTraceSessionRef.overrideWith(

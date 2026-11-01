@@ -37,9 +37,12 @@ words:
   - codesign
   - codesigned
   - codesigning
+  - Ddart # Dart VM -Ddart compiler definitions
   - deflavored
   - develocity
   - devicectl
+  - Dflutter # Flutter -Dflutter compiler definitions
+  - DFOO # Compiler definition used in build argument tests
   - DLRT # Prefix on the Dart VM's runtime entry points, as in DLRT_ExitSafepoint
   - dorny # From .github dir, doesn't show up in "**" check?
   - dyld
@@ -76,6 +79,7 @@ words:
   - libimobiledeviceglue
   - libplist
   - libusbmuxd
+  - LINKEDIT # Mach-O segment
   - lldb
   - LOCALAPPDATA
   - logcat
@@ -93,6 +97,7 @@ words:
   - mocktail
   - mset # From ./packages/redis_client
   - multioption
+  - nativeassetsmanifest # Native assets manifest fixture
   - newtype # space_gen's term for a wrapper type, in generated protocol docs
   - noaudio # From .github dir, doesn't show up in "**" check?
   - NOAUTH
@@ -147,6 +152,7 @@ words:
   - storepass # From .github/workflows/e2e.yaml
   - storyboardc
   - subpackages
+  - suffixless
   - symbolication
   - syskeys # From adb.dart
   - subosito # From .github dir, doesn't show up in "**" check?
@@ -158,6 +164,7 @@ words:
   - ttfb
   - udevadm # From .github/workflows/e2e.yaml
   - udid # Unique Device Identifier
+  - ufeff # Unicode byte order mark escape in archive tests
   - unanalyzed
   - unawaited
   - unmockable

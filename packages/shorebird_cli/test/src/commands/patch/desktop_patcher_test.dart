@@ -1,3 +1,4 @@
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -7,6 +8,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/archive_analysis/linux_bundle_differ.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
@@ -104,10 +106,14 @@ void main() {
     late Validator validator;
     late _TestDesktopPatcher patcher;
 
-    R runWithOverrides<R>(R Function() body) {
+    R runWithOverrides<R>(
+      R Function() body, {
+      LocalAbi processAbi = const TestDesktopAbi(),
+    }) {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => processAbi),
           artifactManagerRef.overrideWith(() => artifactManager),
           codeSignerRef.overrideWith(() => codeSigner),
           loggerRef.overrideWith(() => logger),
@@ -358,9 +364,11 @@ void main() {
       late File patchArtifact;
       late File diffFile;
       Directory? extractedReleaseTo;
+      var arm64Release = false;
 
       setUp(() {
         extractedReleaseTo = null;
+        arm64Release = false;
         final tempDir = Directory.systemTemp.createTempSync();
         releaseArtifact = File(p.join(tempDir.path, 'release.zip'))
           ..createSync(recursive: true);
@@ -368,7 +376,7 @@ void main() {
           ..createSync(recursive: true);
         patchArtifact = File(p.join(appDirectory.path, 'lib', 'app.so'))
           ..createSync(recursive: true)
-          ..writeAsStringSync('patch');
+          ..writeAsBytesSync(desktopElfHeader());
 
         when(
           () => artifactManager.extractZip(
@@ -379,6 +387,9 @@ void main() {
           extractedReleaseTo =
               (invocation.namedArguments[#outputDirectory] as Directory)
                 ..createSync(recursive: true);
+          File(p.join(extractedReleaseTo!.path, 'lib', 'app.so'))
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(desktopElfHeader(arm64: arm64Release));
         });
       });
 
@@ -432,6 +443,41 @@ void main() {
               patchArtifactPath: any(named: 'patchArtifactPath'),
             ),
           ).thenAnswer((_) async => diffFile.path);
+        });
+
+        test('creates an ARM64 patch without an x64 entry', () async {
+          arm64Release = true;
+          patchArtifact.writeAsBytesSync(desktopElfHeader(arm64: true));
+          final result = await runWithOverrides(
+            () => patcher.createPatchArtifacts(
+              appId: 'app-id',
+              releaseId: 42,
+              releaseArtifact: releaseArtifact,
+            ),
+            processAbi: const TestDesktopAbi(Abi.linuxArm64),
+          );
+          expect(result.keys, [Arch.arm64]);
+        });
+
+        test('rejects a release from another machine before diffing', () async {
+          arm64Release = true;
+          await expectLater(
+            () => runWithOverrides(
+              () => patcher.createPatchArtifacts(
+                appId: 'app-id',
+                releaseId: 42,
+                releaseArtifact: releaseArtifact,
+              ),
+            ),
+            throwsFormatException,
+          );
+          verifyNever(
+            () => artifactManager.createDiff(
+              releaseArtifactPath: any(named: 'releaseArtifactPath'),
+              patchArtifactPath: any(named: 'patchArtifactPath'),
+            ),
+          );
+          expect(extractedReleaseTo!.existsSync(), isFalse);
         });
 
         test('diffs the Dart library of the release and the patch', () async {

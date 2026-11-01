@@ -7,10 +7,12 @@ import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:test/test.dart';
 
+import '../helpers.dart';
 import '../platform/apple/macho_fixture.dart'
     show image, signedImage, universal;
 
 void main() {
+  useTempWorkingDirectory();
   late Directory temp;
   const differ = AppleArchiveDiffer();
   setUp(() => temp = Directory.systemTemp.createTempSync('apple_security.'));

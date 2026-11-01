@@ -8,6 +8,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
@@ -39,6 +40,7 @@ void main() {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => const TestDesktopAbi()),
           cacheRef.overrideWith(() => cache),
           httpClientRef.overrideWith(() => httpClient),
           loggerRef.overrideWith(() => logger),

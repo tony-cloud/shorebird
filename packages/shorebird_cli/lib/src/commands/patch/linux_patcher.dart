@@ -7,6 +7,7 @@ import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/commands/patch/desktop_patcher.dart';
 import 'package:shorebird_cli/src/doctor.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/validators/validators.dart';
@@ -24,10 +25,14 @@ class LinuxPatcher extends DesktopPatcher {
   });
 
   @override
-  String get primaryReleaseArtifactArch => primaryLinuxReleaseArtifactArch;
+  String get primaryReleaseArtifactArch => DesktopArchitecture.artifact(
+    primaryLinuxReleaseArtifactArch,
+    architecture,
+  );
 
   @override
-  String? get supplementaryReleaseArtifactArch => 'linux_supplement';
+  String? get supplementaryReleaseArtifactArch =>
+      DesktopArchitecture.artifact('linux_supplement', architecture);
 
   @override
   ReleaseType get releaseType => ReleaseType.linux;

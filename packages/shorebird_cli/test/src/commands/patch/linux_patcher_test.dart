@@ -4,6 +4,7 @@ import 'package:args/args.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:platform/platform.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/archive_analysis/linux_bundle_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
@@ -35,6 +36,7 @@ void main() {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => const TestDesktopAbi()),
           artifactBuilderRef.overrideWith(() => artifactBuilder),
           artifactManagerRef.overrideWith(() => artifactManager),
           doctorRef.overrideWith(() => doctor),
@@ -78,10 +80,13 @@ void main() {
     test('identifies as the linux release type', () {
       expect(patcher.releaseType, ReleaseType.linux);
       expect(
-        patcher.primaryReleaseArtifactArch,
+        runWithOverrides(() => patcher.primaryReleaseArtifactArch),
         primaryLinuxReleaseArtifactArch,
       );
-      expect(patcher.supplementaryReleaseArtifactArch, 'linux_supplement');
+      expect(
+        runWithOverrides(() => patcher.supplementaryReleaseArtifactArch),
+        'linux_supplement',
+      );
     });
 
     test('validates with the linux validators on linux', () {

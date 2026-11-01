@@ -11,13 +11,14 @@ import 'package:shorebird_cli/src/extensions/arg_results.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/validators/validators.dart';
 import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 
 /// {@template desktop_patcher}
 /// Creates patches for desktop platforms whose release artifact is a zip of
-/// the built app directory containing a single x86_64 Dart library (Linux and
+/// the built app directory containing a single native Dart library (Linux and
 /// Windows).
 ///
 /// Subclasses supply only what differs per platform: how to build the app,
@@ -34,6 +35,9 @@ abstract class DesktopPatcher extends Patcher {
     required super.flavor,
     required super.target,
   });
+
+  /// Architecture produced by the native desktop Flutter build.
+  Arch get architecture => DesktopArchitecture.native(hostOperatingSystem);
 
   /// The doctor validators to run before patching.
   List<Validator> get commandValidators;
@@ -112,10 +116,16 @@ abstract class DesktopPatcher extends Patcher {
         outputDirectory: releaseDirectory,
       );
 
+      DesktopArchitecture.validateBinary(File(patchArtifactPath), architecture);
+      DesktopArchitecture.validateBinary(
+        File(p.joinAll([releaseDirectory.path, ...dartLibraryPathSegments])),
+        architecture,
+      );
+
       // The diff is written to its own temporary directory, so the extracted
       // release can go once it has been diffed against.
       final bundle = await createDiffBundle(
-        arch: Arch.x86_64,
+        arch: architecture,
         releaseArtifactPath: p.joinAll([
           releaseDirectory.path,
           ...dartLibraryPathSegments,
@@ -125,7 +135,7 @@ abstract class DesktopPatcher extends Patcher {
       );
       createDiffProgress.complete();
 
-      return {Arch.x86_64: bundle};
+      return {architecture: bundle};
     } finally {
       releaseDirectory.deleteTemporarySync();
     }

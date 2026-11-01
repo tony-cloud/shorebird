@@ -1,6 +1,7 @@
 // cspell:words libinfo networkd FFFD
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io' hide Platform;
 
 import 'package:archive/archive_io.dart';
@@ -11,6 +12,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/auth/auth.dart';
 import 'package:shorebird_cli/src/cache.dart';
@@ -180,11 +182,15 @@ void main() {
       );
     }
 
-    R runWithOverrides<R>(R Function() body) {
+    R runWithOverrides<R>(
+      R Function() body, {
+      LocalAbi processAbi = const TestDesktopAbi(),
+    }) {
       return HttpOverrides.runZoned(
         () => runScoped(
           body,
           values: {
+            abiRef.overrideWith(() => processAbi),
             artifactManagerRef.overrideWith(() => artifactManager),
             authRef.overrideWith(() => auth),
             cacheRef.overrideWith(() => cache),
@@ -487,11 +493,15 @@ void main() {
       late Bundletool bundletool;
       late Process process;
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               adbRef.overrideWith(() => adb),
               isJsonModeRef.overrideWith(() => false),
               artifactManagerRef.overrideWith(() => artifactManager),
@@ -1710,11 +1720,15 @@ channel: ${track.channel}
       late Devicectl devicectl;
       late IOSDeploy iosDeploy;
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               adbRef.overrideWith(() => adb),
               artifactManagerRef.overrideWith(() => artifactManager),
               authRef.overrideWith(() => auth),
@@ -2383,6 +2397,9 @@ channel: ${DeploymentTrack.staging.channel}
       late Process process;
 
       void setupPreviewArtifact({required Directory baseDirectory}) {
+        File(p.join(baseDirectory.path, 'lib', 'libapp.so'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(desktopElfHeader());
         File(
             p.join(
               baseDirectory.path,
@@ -2398,11 +2415,15 @@ channel: ${DeploymentTrack.staging.channel}
         ).createSync(recursive: true);
       }
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               artifactManagerRef.overrideWith(() => artifactManager),
               authRef.overrideWith(() => auth),
               cacheRef.overrideWith(() => cache),
@@ -2471,6 +2492,32 @@ channel: ${DeploymentTrack.staging.channel}
             platform: any(named: 'platform'),
           ),
         ).thenAnswer((_) async => linuxReleaseArtifact);
+      });
+
+      test('selects the native ARM64 archive for preview', () async {
+        when(
+          () => codePushClientWrapper.getReleaseArtifact(
+            appId: any(named: 'appId'),
+            releaseId: any(named: 'releaseId'),
+            arch: any(named: 'arch'),
+            platform: any(named: 'platform'),
+          ),
+        ).thenThrow(ProcessExit(ExitCode.software.code));
+        await expectLater(
+          () => runWithOverrides(
+            command.run,
+            processAbi: const TestDesktopAbi(Abi.linuxArm64),
+          ),
+          throwsA(isA<ProcessExit>()),
+        );
+        verify(
+          () => codePushClientWrapper.getReleaseArtifact(
+            appId: appId,
+            releaseId: releaseId,
+            arch: 'bundle_aarch64',
+            platform: ReleasePlatform.linux,
+          ),
+        ).called(1);
       });
 
       group('when getting release artifact fails', () {
@@ -2683,11 +2730,15 @@ channel: ${DeploymentTrack.staging.channel}
       late Ditto ditto;
       late Open open;
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               adbRef.overrideWith(() => adb),
               artifactManagerRef.overrideWith(() => artifactManager),
               authRef.overrideWith(() => auth),
@@ -2965,11 +3016,15 @@ channel: ${DeploymentTrack.staging.channel}
       late Directory windowsReleaseDirectory;
       late Windows windowsMock;
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               artifactManagerRef.overrideWith(() => artifactManager),
               authRef.overrideWith(() => auth),
               cacheRef.overrideWith(() => cache),
@@ -2989,6 +3044,9 @@ channel: ${DeploymentTrack.staging.channel}
       }
 
       void createShorebirdYaml({String? channel}) {
+        File(p.join(windowsReleaseDirectory.path, 'data', 'app.so'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(desktopElfHeader());
         final shorebirdYaml =
             File(
                 p.join(
@@ -3072,6 +3130,32 @@ channel: ${DeploymentTrack.staging.channel}
             platform: any(named: 'platform'),
           ),
         ).thenAnswer((_) async => windowsReleaseArtifact);
+      });
+
+      test('selects the native ARM64 archive for preview', () async {
+        when(
+          () => codePushClientWrapper.getReleaseArtifact(
+            appId: any(named: 'appId'),
+            releaseId: any(named: 'releaseId'),
+            arch: any(named: 'arch'),
+            platform: any(named: 'platform'),
+          ),
+        ).thenThrow(ProcessExit(ExitCode.software.code));
+        await expectLater(
+          () => runWithOverrides(
+            command.run,
+            processAbi: const TestDesktopAbi(Abi.windowsArm64),
+          ),
+          throwsA(isA<ProcessExit>()),
+        );
+        verify(
+          () => codePushClientWrapper.getReleaseArtifact(
+            appId: appId,
+            releaseId: releaseId,
+            arch: 'win_archive_aarch64',
+            platform: ReleasePlatform.windows,
+          ),
+        ).called(1);
       });
 
       group('when getting release artifact fails', () {
@@ -3286,11 +3370,15 @@ channel: ${DeploymentTrack.staging.channel}
       late Bundletool bundletool;
       late Process process;
 
-      R runWithOverrides<R>(R Function() body) {
+      R runWithOverrides<R>(
+        R Function() body, {
+        LocalAbi processAbi = const TestDesktopAbi(),
+      }) {
         return HttpOverrides.runZoned(
           () => runScoped(
             body,
             values: {
+              abiRef.overrideWith(() => processAbi),
               adbRef.overrideWith(() => adb),
               artifactManagerRef.overrideWith(() => artifactManager),
               authRef.overrideWith(() => auth),
@@ -3621,9 +3709,18 @@ channel: ${DeploymentTrack.staging.channel}
   group('assertPreviewableReleases', () {
     late ShorebirdLogger logger;
 
-    R runWithOverrides<R>(R Function() body) {
+    R runWithOverrides<R>(
+      R Function() body, {
+      LocalAbi processAbi = const TestDesktopAbi(),
+    }) {
       return HttpOverrides.runZoned(
-        () => runScoped(body, values: {loggerRef.overrideWith(() => logger)}),
+        () => runScoped(
+          body,
+          values: {
+            abiRef.overrideWith(() => processAbi),
+            loggerRef.overrideWith(() => logger),
+          },
+        ),
       );
     }
 

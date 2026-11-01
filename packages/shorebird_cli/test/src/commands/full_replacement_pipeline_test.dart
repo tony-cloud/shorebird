@@ -81,14 +81,13 @@ class _IosReleaser extends Releaser {
 }
 
 void main() {
+  useTempWorkingDirectory();
   for (final targetOS in ['ios', 'macos']) {
     group(targetOS, () => pipelineTests(targetOS));
   }
 }
 
 void pipelineTests(String targetOS) {
-  useTempWorkingDirectory();
-
   const appId = 'full-replacement-app';
   const releaseVersion = '1.2.3+4';
   const releaseId = 42;

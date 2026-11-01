@@ -13,6 +13,7 @@ import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:test/test.dart';
 
+import '../helpers.dart';
 import '../mocks.dart';
 import '../platform/apple/macho_fixture.dart' show image;
 
@@ -24,6 +25,7 @@ const _descriptorPath = '$_assets/shorebird_native_assets.json';
 const _root = 'package:app/main.dart';
 
 void main() {
+  useTempWorkingDirectory();
   late Directory temp;
   late List<int> released;
   late List<int> comparison;

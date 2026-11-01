@@ -1,3 +1,4 @@
+import 'dart:ffi' show Abi;
 import 'dart:io' hide Platform;
 
 import 'package:mason_logger/mason_logger.dart';
@@ -5,6 +6,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/platform.dart';
@@ -17,6 +19,7 @@ import '../mocks.dart';
 void main() {
   useTempWorkingDirectory();
   group('PatchExecutable', () {
+    late LocalAbi processAbi;
     late Cache cache;
     late Directory cacheArtifactDirectory;
     late TestNativePlatform platform;
@@ -28,6 +31,7 @@ void main() {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => processAbi),
           cacheRef.overrideWith(() => cache),
           platformRef.overrideWith(() => platform),
           processRef.overrideWith(() => shorebirdProcess),
@@ -37,13 +41,14 @@ void main() {
     }
 
     setUp(() {
+      processAbi = const TestDesktopAbi();
       patchExecutable = PatchExecutable();
       shorebirdProcess = MockShorebirdProcess();
       platform = TestNativePlatform(operatingSystem: NativePlatform.linux);
 
       when(
         () => shorebirdProcess.run(
-          any(that: endsWith('patch')),
+          any(that: matches(r'patch(?:\.exe)?$')),
           any(),
           runInShell: any(named: 'runInShell'),
         ),
@@ -96,6 +101,33 @@ void main() {
       ).called(1);
     });
 
+    for (final os in ['linux', 'windows']) {
+      test('invokes the isolated native ARM64 $os host tool', () async {
+        processAbi = TestDesktopAbi(
+          os == 'linux' ? Abi.linuxArm64 : Abi.windowsArm64,
+        );
+        platform = platform.copyWith(operatingSystem: os);
+        await runWithOverrides(
+          () => patchExecutable.run(
+            releaseArtifactPath: 'release',
+            patchArtifactPath: 'patch',
+            diffPath: p.join(cacheArtifactDirectory.path, 'diff'),
+          ),
+        );
+        verify(
+          () => shorebirdProcess.run(
+            p.join(
+              cacheArtifactDirectory.path,
+              '$os-arm64',
+              os == 'windows' ? 'patch.exe' : 'patch',
+            ),
+            any(),
+            runInShell: false,
+          ),
+        ).called(1);
+      });
+    }
+
     test('throws error when creating diff fails', () async {
       const stdout = 'uh oh';
       const stderr = 'oops something went wrong';
@@ -105,7 +137,7 @@ void main() {
 
       when(
         () => shorebirdProcess.run(
-          any(that: endsWith('patch')),
+          any(that: matches(r'patch(?:\.exe)?$')),
           any(),
           runInShell: any(named: 'runInShell'),
         ),
@@ -141,7 +173,7 @@ void main() {
 
         when(
           () => shorebirdProcess.run(
-            any(that: endsWith('patch')),
+            any(that: matches(r'patch(?:\.exe)?$')),
             any(),
             runInShell: any(named: 'runInShell'),
           ),

@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
 import 'package:pubspec_parse/pubspec_parse.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/abi.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
@@ -56,6 +57,7 @@ void main() {
       return runScoped(
         body,
         values: {
+          abiRef.overrideWith(() => const TestDesktopAbi()),
           artifactBuilderRef.overrideWith(() => artifactBuilder),
           artifactManagerRef.overrideWith(() => artifactManager),
           codePushClientWrapperRef.overrideWith(() => codePushClientWrapper),
@@ -156,11 +158,22 @@ void main() {
     group('supplement', () {
       test('uploads under the platform supplement names', () {
         expect(releaser.supplementPlatformSubdir, equals('windows'));
-        expect(releaser.supplementArtifactArch, equals('windows_supplement'));
+        expect(
+          runWithOverrides(() => releaser.supplementArtifactArch),
+          equals('windows_supplement'),
+        );
       });
     });
 
     group('assertArgsAreValid', () {
+      test('rejects the Android-only target-platform option', () async {
+        when(() => argResults.wasParsed('target-platform')).thenReturn(true);
+        await expectLater(
+          () => runWithOverrides(releaser.assertArgsAreValid),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+      });
+
       group('when release-version is passed', () {
         setUp(() {
           when(() => argResults.wasParsed('release-version')).thenReturn(true);

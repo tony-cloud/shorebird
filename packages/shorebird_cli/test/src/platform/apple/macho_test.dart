@@ -3,9 +3,11 @@ import 'dart:typed_data';
 import 'package:shorebird_cli/src/platform/apple/macho.dart';
 import 'package:test/test.dart';
 
+import '../../helpers.dart';
 import 'macho_fixture.dart';
 
 void main() {
+  useTempWorkingDirectory();
   for (final wide in [false, true]) {
     for (final endian in [Endian.big, Endian.little]) {
       test('normalizes exact UUID for thin wide=$wide endian=$endian', () {
