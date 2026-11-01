@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
@@ -8,6 +9,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/apple_build_helpers.dart';
 import 'package:shorebird_cli/src/commands/patch/apple_patcher_mixin.dart';
+import 'package:shorebird_cli/src/commands/patch/ios_interpreter_patcher_mixin.dart';
 import 'package:shorebird_cli/src/commands/patch/patch.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/executables/executables.dart';
@@ -37,7 +39,10 @@ import 'package:shorebird_cli/src/validators/validators.dart';
 ///   Podfile.lock hash and codesigning.
 /// {@endtemplate}
 class MacosPatcher extends Patcher
-    with ApplePatcherMixin, ApplePodfileLockPatcherMixin {
+    with
+        ApplePatcherMixin,
+        ApplePodfileLockPatcherMixin,
+        IosInterpreterPatcherMixin {
   /// {@macro macos_patcher}
   MacosPatcher({
     required super.argParser,
@@ -56,6 +61,18 @@ class MacosPatcher extends Patcher
 
   @override
   ReleaseType get releaseType => ReleaseType.macos;
+
+  @override
+  String get iosPatchRuntimeMode =>
+      shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode ??
+      open_patch.runtimeModeNativeAot;
+
+  @override
+  String? get interpreterPodfileLockHash => shorebirdEnv.macosPodfileLockHash;
+
+  @override
+  bool get requiresReleaseVersionArg =>
+      iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter;
 
   @override
   Version? get minimumFlutterVersion => minimumSupportedMacosFlutterVersion;
@@ -77,6 +94,13 @@ class MacosPatcher extends Patcher
 
   @override
   Future<File> buildPatchArtifact({String? releaseVersion}) async {
+    if ((shorebirdEnv.getShorebirdYaml()?.aotPatchFullReplacement ?? false) &&
+        iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
+      throw ArtifactBuildException(
+        'macOS full replacement requires the Dart bytecode interpreter '
+        'runtime policy.',
+      );
+    }
     final buildArgs = [
       ...argResults.forwardedArgs,
       ...extraBuildArgs,
@@ -85,32 +109,39 @@ class MacosPatcher extends Patcher
 
     // If buildMacos is called with a different codesign value than the
     // release was, we will erroneously report native diffs.
-    final macosBuildResult = await artifactBuilder.buildMacos(
-      codesign: argResults.appleCodesign,
-      flavor: flavor,
-      target: target,
-      args: buildArgs,
-      base64PublicKey: await getEncodedPublicKey(),
+    final macosBuildResult = await withInterpreterBaselineBuild(
+      () async => artifactBuilder.buildMacos(
+        codesign: argResults.appleCodesign,
+        flavor: flavor,
+        target: target,
+        args: buildArgs,
+        base64PublicKey: await getEncodedPublicKey(),
+      ),
+      buildArgs: buildArgs,
     );
 
-    await buildAppleElfAotSnapshot(
-      appDillPath: macosBuildResult.kernelFile.path,
-      outFilePath: _arm64AotOutputPath,
-      genSnapshotArtifact: ShorebirdArtifact.genSnapshotMacosArm64,
-    );
+    if (iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter) {
+      await buildInterpreterBytecodePatch(buildArgs);
+    } else {
+      await buildAppleElfAotSnapshot(
+        appDillPath: macosBuildResult.kernelFile.path,
+        outFilePath: _arm64AotOutputPath,
+        genSnapshotArtifact: ShorebirdArtifact.genSnapshotMacosArm64,
+      );
 
-    if (!File(_arm64AotOutputPath).existsSync()) {
-      throw Exception('Failed to build arm64 AOT snapshot');
-    }
+      if (!File(_arm64AotOutputPath).existsSync()) {
+        throw Exception('Failed to build arm64 AOT snapshot');
+      }
 
-    await buildAppleElfAotSnapshot(
-      appDillPath: macosBuildResult.kernelFile.path,
-      outFilePath: _x64AotOutputPath,
-      genSnapshotArtifact: ShorebirdArtifact.genSnapshotMacosX64,
-    );
+      await buildAppleElfAotSnapshot(
+        appDillPath: macosBuildResult.kernelFile.path,
+        outFilePath: _x64AotOutputPath,
+        genSnapshotArtifact: ShorebirdArtifact.genSnapshotMacosX64,
+      );
 
-    if (!File(_x64AotOutputPath).existsSync()) {
-      throw Exception('Failed to build x64 AOT snapshot');
+      if (!File(_x64AotOutputPath).existsSync()) {
+        throw Exception('Failed to build x64 AOT snapshot');
+      }
     }
 
     // Copy the kernel file to the build directory so that it can be used
@@ -138,6 +169,14 @@ class MacosPatcher extends Patcher
     Directory? supplementDirectory,
     String? releaseVersion,
   }) async {
+    if (iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter) {
+      return createInterpreterPatchArtifacts(
+        appId: appId,
+        releaseVersion: releaseVersion,
+        releaseId: releaseId,
+        releaseArtifact: releaseArtifact,
+      );
+    }
     final unzipProgress = logger.progress('Extracting release artifact');
     // The extracted release is only needed while creating the diffs, which
     // are written elsewhere, so it is deleted afterwards.

@@ -206,6 +206,27 @@ void main() {
       });
     });
 
+    test(
+      'interpreter requires release identity before building; native does not',
+      () {
+        expect(
+          runWithOverrides(() => patcher.requiresReleaseVersionArg),
+          isFalse,
+        );
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+          const ShorebirdYaml(
+            appId: 'app',
+            aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+            aotPatchFullReplacement: true,
+          ),
+        );
+        expect(
+          runWithOverrides(() => patcher.requiresReleaseVersionArg),
+          isTrue,
+        );
+      },
+    );
+
     group('minimumFlutterVersion', () {
       test('is minimumSupportedMacosFlutterVersion', () {
         expect(

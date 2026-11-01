@@ -40,6 +40,24 @@ import '../../helpers.dart';
 import '../../matchers.dart';
 import '../../mocks.dart';
 
+class _IdentityFirstMacosPatcher extends MacosPatcher {
+  _IdentityFirstMacosPatcher({
+    required super.argParser,
+    required super.argResults,
+  }) : super(flavor: null, target: null);
+
+  int builds = 0;
+
+  @override
+  Future<void> assertPreconditions() async {}
+
+  @override
+  Future<File> buildPatchArtifact({String? releaseVersion}) async {
+    builds++;
+    throw StateError('Speculative macOS interpreter build');
+  }
+}
+
 class _FakeRelease extends Fake with Equatable implements Release {
   _FakeRelease({required this.updatedAt});
 
@@ -1840,6 +1858,38 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
       setUp(() {
         when(() => patcher.requiresReleaseVersionArg).thenReturn(true);
       });
+
+      test(
+        'real macOS interpreter patcher rejects missing identity '
+        'before speculative build',
+        () async {
+          when(() => argResults.wasParsed('release-version')).thenReturn(false);
+          when(() => shorebirdEnv.canAcceptUserInput).thenReturn(false);
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+              aotPatchFullReplacement: true,
+            ),
+          );
+          final macos = _IdentityFirstMacosPatcher(
+            argParser: command.argParser,
+            argResults: argResults,
+          );
+          await expectLater(
+            runWithOverrides(() => command.createPatch(macos)),
+            throwsA(
+              isA<UsageException>().having(
+                (error) => error.message,
+                'message',
+                startsWith('Missing required argument: --release-version.'),
+              ),
+            ),
+          );
+          expect(macos.builds, 0);
+          expect(macos.releaseSupplementDirectory, isNull);
+        },
+      );
 
       group('when it is missing', () {
         setUp(() {

@@ -19,6 +19,7 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
   const FullReplacementArchiveDiffer({
     required this.releaseBaseHash,
     required this.comparisonBaseHash,
+    this.nativeAssetsTarget = 'ios_arm64',
   });
 
   /// SHA-256 of the original released baseline wrapper, not its component.
@@ -26,6 +27,9 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
 
   /// SHA-256 of the current component's baseline projection wrapper.
   final String comparisonBaseHash;
+
+  /// Compiler mapping target bound to this Apple build route.
+  final String nativeAssetsTarget;
 
   static const _baseAsset = 'shorebird_replacement_base.sbr';
   static final _hashPattern = RegExp(r'^[0-9a-f]{64}$');
@@ -144,7 +148,10 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         );
         final nativeAssetsDescriptor = archive.find(nativeAssetsDescriptorPath);
         if (nativeAssetsDescriptor != null) {
-          ShorebirdNativeAssetsDescriptor.canonicalBody(nativeAssetsDescriptor);
+          ShorebirdNativeAssetsDescriptor.canonicalBody(
+            nativeAssetsDescriptor,
+            target: nativeAssetsTarget,
+          );
           nativeAssetsDescriptor.clear();
         }
         final policyFile = archive.find(policyPath)!;

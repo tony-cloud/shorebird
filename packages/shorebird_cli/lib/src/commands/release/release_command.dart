@@ -7,6 +7,7 @@ import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
+import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/release/release.dart';
@@ -656,11 +657,16 @@ $error''');
         ReleaseType.ios,
         ReleaseType.iosFramework,
       }.contains(releaser.releaseType);
-      if (isIos &&
-          _iosPatchRuntimeMode ==
-              open_patch.runtimeModeDartBytecodeInterpreter) {
+      if ((isIos &&
+              _iosPatchRuntimeMode ==
+                  open_patch.runtimeModeDartBytecodeInterpreter) ||
+          (releaser.releaseType == ReleaseType.macos &&
+              shorebirdYaml?.aotPatchRuntimeMode ==
+                  open_patch.runtimeModeDartBytecodeInterpreter)) {
+        final platformName = isIos ? 'iOS' : 'macOS';
         usageException(
-          'Encrypted iOS interpreter releases require patch signing and '
+          'Encrypted $platformName interpreter releases require patch signing '
+          'and '
           'patch_verification: strict. Remove --no-patch-signing and '
           'patch_verification: install_only.',
         );
@@ -726,12 +732,37 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
   /// Runs before building or creating a release on the server.
   @visibleForTesting
   void assertIosInterpreterReleaseConfiguration(Releaser releaser) {
+    final macos = releaser.releaseType == ReleaseType.macos;
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    if (macos &&
+        ((yaml?.aotPatchFullReplacement ?? false) ||
+            yaml?.aotPatchRuntimeMode ==
+                open_patch.runtimeModeDartBytecodeInterpreter)) {
+      if (!(yaml?.aotPatchFullReplacement ?? false) ||
+          (yaml?.aotPatchStructuralUpdates ?? false) ||
+          yaml?.aotPatchRuntimeMode !=
+              open_patch.runtimeModeDartBytecodeInterpreter) {
+        usageException(
+          'macOS interpreter releases require full replacement without '
+          'additive or body-only profiles.',
+        );
+      }
+      try {
+        validateMacosFullReplacementBuildArgs(results.forwardedArgs);
+      } on ArtifactBuildException catch (error) {
+        usageException(error.message);
+      }
+    }
     final interpreter =
         const {
-          ReleaseType.ios,
-          ReleaseType.iosFramework,
-        }.contains(releaser.releaseType) &&
-        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter;
+              ReleaseType.ios,
+              ReleaseType.iosFramework,
+            }.contains(releaser.releaseType) &&
+            _iosPatchRuntimeMode ==
+                open_patch.runtimeModeDartBytecodeInterpreter ||
+        releaser.releaseType == ReleaseType.macos &&
+            yaml?.aotPatchRuntimeMode ==
+                open_patch.runtimeModeDartBytecodeInterpreter;
     if (!interpreter) {
       final customerKey = results[CommonArguments.publicKeyArg.name] as String?;
       final customerCommand =
@@ -751,10 +782,12 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       }
       return;
     }
+    final platformName = macos ? 'macOS' : 'iOS';
     if (results.wasParsed(CommonArguments.publicKeyArg.name) ||
         results.wasParsed(CommonArguments.publicKeyCmd.name)) {
       usageException(
-        'Encrypted iOS interpreter releases currently require managed signing '
+        'Encrypted $platformName interpreter releases currently require '
+        'managed signing '
         'to authenticate patch offers and rollback responses. Remove '
         '--public-key-path/--public-key-cmd and use the default managed key. '
         'Customer signing remains available for native AOT releases with '
@@ -763,12 +796,11 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     }
     if (releaser.useObfuscation) {
       usageException(
-        'iOS interpreter releases require stable Dart symbol names. '
+        '$platformName interpreter releases require stable Dart symbol names. '
         'Remove --obfuscate; obfuscated baselines cannot receive interpreter '
         'body patches.',
       );
     }
-    final yaml = shorebirdEnv.getShorebirdYaml();
     final required = <String, String?>{
       'aot_patch_runtime_mode': yaml?.aotPatchRuntimeMode,
       'aot_patch_base_flavor_id': yaml?.aotPatchBaseFlavorId,
@@ -781,7 +813,7 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
         .toList();
     if (missing.isNotEmpty) {
       usageException(
-        'Missing iOS interpreter baseline policy in shorebird.yaml: '
+        'Missing $platformName interpreter baseline policy in shorebird.yaml: '
         '${missing.join(', ')}. Set aot_patch_runtime_mode to '
         'dart-bytecode-interpreter. The SDK id and baseline bytecode hash '
         'are derived during the release build. App id and release build '

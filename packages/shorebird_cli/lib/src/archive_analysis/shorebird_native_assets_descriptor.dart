@@ -21,7 +21,7 @@ class ShorebirdNativeAssetsDescriptor {
   ///
   /// Re-encoding rejects duplicate keys, unknown fields, alternate key order,
   /// ambiguous numeric types and noncanonical JSON without a custom parser.
-  static String canonicalBody(ArchiveFile file) {
+  static String canonicalBody(ArchiveFile file, {String? target}) {
     if (!file.isFile ||
         file.isSymbolicLink ||
         file.size <= 0 ||
@@ -47,7 +47,8 @@ class ShorebirdNativeAssetsDescriptor {
     if (decoded is! Map<String, dynamic> ||
         decoded['schema'] is! int ||
         decoded['schema'] != 1 ||
-        decoded['target'] != 'ios_arm64' ||
+        !const ['ios_arm64', 'macos_arm64'].contains(decoded['target']) ||
+        (target != null && decoded['target'] != target) ||
         decoded['carrier_present'] is! bool) {
       throw const FormatException('Invalid native mapping descriptor schema.');
     }
@@ -59,7 +60,7 @@ class ShorebirdNativeAssetsDescriptor {
     }
     final canonical = jsonEncode({
       'schema': 1,
-      'target': 'ios_arm64',
+      'target': decoded['target'],
       'carrier_present': present,
       if (present) 'mapping_sha256': digest,
     });

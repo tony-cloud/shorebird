@@ -20,7 +20,15 @@ import 'package:yaml/yaml.dart';
 /// Resolves identical source, SDK, defines, and feature flags for iOS bytecode.
 class IosBytecodeBuilder {
   /// Creates the shared release/patch bytecode compiler.
-  IosBytecodeBuilder({required this.projectRoot, this.target, this.flavor});
+  IosBytecodeBuilder({
+    required this.projectRoot,
+    this.target,
+    this.flavor,
+    this.targetOS = 'ios',
+  });
+
+  /// Explicit Apple compiler platform; defaults preserve existing iOS callers.
+  final String targetOS;
 
   /// Project root containing the package configuration.
   final Directory projectRoot;
@@ -68,6 +76,7 @@ class IosBytecodeBuilder {
       structuralUpdates: structuralUpdates,
       fullReplacement: fullReplacement,
       hostAbi: hostAbi,
+      targetOS: targetOS,
     );
   }
 

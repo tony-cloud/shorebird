@@ -9,14 +9,18 @@ import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
 import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/ios_patcher.dart';
+import 'package:shorebird_cli/src/commands/patch/macos_patcher.dart';
+import 'package:shorebird_cli/src/commands/patch/patcher.dart';
 import 'package:shorebird_cli/src/commands/release/releaser.dart';
 import 'package:shorebird_cli/src/config/config.dart';
+import 'package:shorebird_cli/src/executables/executables.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart' as cli_platform;
 import 'package:shorebird_cli/src/platform/platform.dart';
@@ -34,16 +38,19 @@ class _MockHostResolver extends Mock implements IosReplacementHostResolver {}
 /// Only platform hooks are replaced; release preparation and supplements
 /// are real.
 class _IosReleaser extends Releaser {
-  _IosReleaser({required super.argResults}) : super(flavor: null, target: null);
+  _IosReleaser({required super.argResults, this.targetOS = 'ios'})
+    : super(flavor: null, target: null);
+  final String targetOS;
 
   @override
-  ReleaseType get releaseType => ReleaseType.ios;
+  ReleaseType get releaseType =>
+      targetOS == 'macos' ? ReleaseType.macos : ReleaseType.ios;
 
   @override
   String get artifactDisplayName => 'iOS app';
 
   @override
-  String get supplementPlatformSubdir => 'ios';
+  String get supplementPlatformSubdir => targetOS;
 
   @override
   String get supplementArtifactArch => 'ios_supplement';
@@ -74,6 +81,12 @@ class _IosReleaser extends Releaser {
 }
 
 void main() {
+  for (final targetOS in ['ios', 'macos']) {
+    group(targetOS, () => pipelineTests(targetOS));
+  }
+}
+
+void pipelineTests(String targetOS) {
   useTempWorkingDirectory();
 
   const appId = 'full-replacement-app';
@@ -97,7 +110,8 @@ void main() {
   late ArgResults args;
   late ShorebirdYaml yaml;
   late _IosReleaser releaser;
-  late IosPatcher patcher;
+  late Patcher patcher;
+  late Ditto ditto;
   late Map<String, String> buildEnvironment;
   late List<Invocation> compilations;
   late List<String> events;
@@ -162,6 +176,7 @@ void main() {
     values: {
       artifactBuilderRef.overrideWith(() => builder),
       artifactManagerRef.overrideWith(() => manager),
+      dittoRef.overrideWith(() => ditto),
       iosReplacementHostResolverRef.overrideWith(() => resolver),
       loggerRef.overrideWith(() => logger),
       shorebirdEnvRef.overrideWith(() => env),
@@ -178,7 +193,7 @@ void main() {
   );
 
   Directory getSupplement() => Directory(
-    p.join(project.path, 'build', 'ios', 'shorebird'),
+    p.join(project.path, 'build', targetOS, 'shorebird'),
   );
 
   Map<String, Object?> readManifest() =>
@@ -197,8 +212,13 @@ void main() {
     Map<String, Object?> manifest, {
     List<int>? replacementBase,
     String name = 'release.zip',
+    String? descriptorTarget,
+    String? mappingDigest,
+    Map<String, List<int>> extraFiles = const {},
   }) {
-    const assets = 'Runner.app/Frameworks/App.framework/flutter_assets';
+    final assets = targetOS == 'macos'
+        ? 'Contents/Frameworks/App.framework/Resources/flutter_assets'
+        : 'Runner.app/Frameworks/App.framework/flutter_assets';
     final compiledPolicy = utf8.encode(
       jsonEncode({
         'app_id': appId,
@@ -218,7 +238,22 @@ void main() {
         'patch_public_key': 'compiled-public-key',
       }),
     );
+    final descriptor = utf8.encode(
+      jsonEncode({
+        'schema': 1,
+        'target': descriptorTarget ?? '${targetOS}_arm64',
+        'carrier_present': mappingDigest != null,
+        'mapping_sha256': ?mappingDigest,
+      }),
+    );
     final archive = Archive()
+      ..addFile(
+        ArchiveFile(
+          '$assets/shorebird_native_assets.json',
+          descriptor.length,
+          descriptor,
+        ),
+      )
       ..addFile(
         ArchiveFile(
           '$assets/shorebird.yaml',
@@ -235,6 +270,9 @@ void main() {
           bytes,
         ),
       );
+    }
+    for (final entry in extraFiles.entries) {
+      archive.addFile(ArchiveFile(entry.key, entry.value.length, entry.value));
     }
     return File(p.join(project.path, name))
       ..writeAsBytesSync(ZipEncoder().encode(archive));
@@ -283,6 +321,7 @@ void main() {
     logger = MockShorebirdLogger();
     resolver = _MockHostResolver();
     host = IosReplacementHost(
+      targetOS: targetOS,
       artifacts: {
         'engine': 'a' * 64,
         'gen_snapshot': 'b' * 64,
@@ -302,7 +341,10 @@ void main() {
     );
     args = MockArgResults();
     when(() => args.options).thenReturn([]);
-    when(() => args.rest).thenReturn(['--dart-define=APP=changed']);
+    when(() => args.rest).thenReturn([
+      '--dart-define=APP=changed',
+      if (targetOS == 'macos') '--target-platform=darwin-arm64',
+    ]);
     when(() => args.wasParsed(any())).thenReturn(false);
     when(() => env.getShorebirdProjectRoot()).thenReturn(project);
     when(() => env.getShorebirdYaml()).thenAnswer((_) => yaml);
@@ -316,6 +358,9 @@ void main() {
     when(() => flutter.refreshVersionMetadata()).thenAnswer((_) async {});
     when(() => flutter.getConfig()).thenReturn({});
     when(() => resolver.resolve()).thenAnswer((_) async => host);
+    when(
+      () => resolver.resolve(targetOS: 'macos'),
+    ).thenAnswer((_) async => host);
     when(() => logger.progress(any())).thenReturn(MockProgress());
     buildEnvironment = {'PRESERVED': 'original'};
     when(
@@ -340,6 +385,19 @@ void main() {
       p.join(xcarchive.path, 'Info.plist'),
     ).writeAsStringSync('native archive');
     when(() => manager.getXcarchiveDirectory()).thenReturn(xcarchive);
+    ditto = MockDitto();
+    final app = Directory(p.join(project.path, 'native', 'Runner.app'))
+      ..createSync(recursive: true);
+    when(
+      () => manager.getMacOSAppDirectory(flavor: any(named: 'flavor')),
+    ).thenReturn(app);
+    when(
+      () => ditto.archive(
+        source: any(named: 'source'),
+        destination: any(named: 'destination'),
+      ),
+    ).thenAnswer((_) async {});
+    when(() => env.macosPodfileLockHash).thenReturn(null);
     compilations = [];
     events = [];
     nativeEnvironments = [];
@@ -355,6 +413,7 @@ void main() {
         structuralUpdates: any(named: 'structuralUpdates'),
         fullReplacement: any(named: 'fullReplacement'),
         hostAbi: any(named: 'hostAbi'),
+        targetOS: any(named: 'targetOS'),
       ),
     ).thenAnswer((invocation) async {
       compilations.add(invocation);
@@ -371,6 +430,20 @@ void main() {
     });
     when(
       () => builder.buildIpa(
+        codesign: any(named: 'codesign'),
+        flavor: any(named: 'flavor'),
+        target: any(named: 'target'),
+        args: any(named: 'args'),
+        base64PublicKey: any(named: 'base64PublicKey'),
+      ),
+    ).thenAnswer((_) async {
+      events.add('native');
+      nativeEnvironments.add(Map.of(buildEnvironment));
+      await nativeBuild?.call();
+      return AppleBuildResult(kernelFile: kernel);
+    });
+    when(
+      () => builder.buildMacos(
         codesign: any(named: 'codesign'),
         flavor: any(named: 'flavor'),
         target: any(named: 'target'),
@@ -401,13 +474,20 @@ void main() {
       )..writeAsBytesSync([1, 2, 3])).path;
     });
     yaml = policy();
-    releaser = _IosReleaser(argResults: args);
-    patcher = IosPatcher(
-      argParser: ArgParser(),
-      argResults: args,
-      flavor: null,
-      target: null,
-    );
+    releaser = _IosReleaser(argResults: args, targetOS: targetOS);
+    patcher = targetOS == 'macos'
+        ? MacosPatcher(
+            argParser: ArgParser(),
+            argResults: args,
+            flavor: null,
+            target: null,
+          )
+        : IosPatcher(
+            argParser: ArgParser(),
+            argResults: args,
+            flavor: null,
+            target: null,
+          );
   });
 
   test(
@@ -417,7 +497,10 @@ void main() {
       final previous = buildEnvironment;
       final result = await scoped(
         () => releaser.runReleaseBuild((buildArgs, key) async {
-          expect(buildArgs, ['--dart-define=APP=changed']);
+          expect(buildArgs, [
+            '--dart-define=APP=changed',
+            if (targetOS == 'macos') '--target-platform=darwin-arm64',
+          ]);
           expect(buildEnvironment['SHOREBIRD_AOT_HOST_ABI'], host.hostAbi);
           final nativeBase = File(
             buildEnvironment['SHOREBIRD_AOT_REPLACEMENT_BASE']!,
@@ -433,7 +516,11 @@ void main() {
       );
       expect(result, 'native release');
       expect(buildEnvironment, same(previous));
-      verify(() => resolver.resolve()).called(1);
+      if (targetOS == 'macos') {
+        verify(() => resolver.resolve(targetOS: 'macos')).called(1);
+      } else {
+        verify(() => resolver.resolve()).called(1);
+      }
       expect(compilations, hasLength(1));
       final compile = compilations.single.namedArguments;
       expect(compile[#fullReplacement], isTrue);
@@ -474,6 +561,21 @@ void main() {
     },
   );
 
+  if (targetOS == 'macos') {
+    test(
+      'release rejects compiler output that is an update instead of B',
+      () async {
+        baseline = update;
+        await expectLater(
+          scoped(() => releaser.runReleaseBuild((_, _) async {})),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        expect(nativeEnvironments, isEmpty);
+        expect(getSupplement().existsSync(), isFalse);
+      },
+    );
+  }
+
   test(
     'full patch compiles once before native comparison '
     'and publishes the original-bound update',
@@ -491,7 +593,11 @@ void main() {
         compile[#patchBasePath],
         p.join(getSupplement().path, IosBytecodeBuilder.baselineFileName),
       );
-      verify(() => resolver.resolve()).called(1);
+      if (targetOS == 'macos') {
+        verify(() => resolver.resolve(targetOS: 'macos')).called(1);
+      } else {
+        verify(() => resolver.resolve()).called(1);
+      }
       final native = nativeEnvironments.single;
       final comparisonBytes = File(
         native['SHOREBIRD_AOT_REPLACEMENT_BASE']!,
@@ -553,7 +659,7 @@ void main() {
       final artifacts = await packagePatch();
       expect(events, ['compile patch', 'native', 'transport']);
       final envelope = File(
-        p.join(project.path, 'build', 'ios_interpreter_patch.vmcode'),
+        p.join(project.path, 'build', '${targetOS}_interpreter_patch.vmcode'),
       );
       final encrypted = open_patch.EncryptedPatchArtifact.fromJson(
         (jsonDecode(envelope.readAsStringSync()) as Map)
@@ -573,6 +679,8 @@ void main() {
         encrypted.metadata.baseSnapshotHash,
         open_patch.sha256Hex(baseline.encode()),
       );
+      expect(encrypted.metadata.targetOs, targetOS);
+      expect(encrypted.metadata.targetArch, 'arm64');
       expect(encrypted.metadata.flavorId, 'pro');
       expect(
         artifacts[Arch.arm64]!.hash,
@@ -600,7 +708,7 @@ void main() {
       expect(buildEnvironment, same(previous));
       expect(
         File(
-          p.join(project.path, 'build', 'ios_interpreter_patch.vmcode'),
+          p.join(project.path, 'build', '${targetOS}_interpreter_patch.vmcode'),
         ).existsSync(),
         isFalse,
       );
@@ -614,11 +722,70 @@ void main() {
   );
 
   test(
+    'comparison keeps plugin/assets/mapping changes and rejects cross-target provenance',
+    () async {
+      await release();
+      await buildPatch();
+      final native = nativeEnvironments.single;
+      final currentBase = File(
+        native['SHOREBIRD_AOT_REPLACEMENT_BASE']!,
+      ).readAsBytesSync();
+      final manifest = {
+        ...readManifest(),
+        'base_snapshot_hash': native['SHOREBIRD_AOT_BASE_SNAPSHOT_HASH'],
+      };
+      final wrongTarget = writeCompiledRelease(
+        manifest,
+        replacementBase: currentBase,
+        name: 'wrong-target.zip',
+        descriptorTarget: targetOS == 'macos' ? 'ios_arm64' : 'macos_arm64',
+      );
+      await expectLater(
+        patcher.archiveDifferOverride!.changedFiles(
+          releaseArchive.path,
+          wrongTarget.path,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+      final assetRoot = targetOS == 'macos'
+          ? 'Contents/Frameworks/App.framework/Resources/flutter_assets'
+          : 'Runner.app/Frameworks/App.framework/flutter_assets';
+      const plugin = 'Contents/Frameworks/plugin.dylib';
+      final asset = '$assetRoot/config.json';
+      final comparison = writeCompiledRelease(
+        manifest,
+        replacementBase: currentBase,
+        name: 'changed.zip',
+        mappingDigest: 'f' * 64,
+        extraFiles: {
+          plugin: [1, 2, 3],
+          asset: utf8.encode('changed asset'),
+        },
+      );
+      final diff =
+          await scoped(
+                () => patcher.archiveDifferOverride!.changedFiles(
+                  releaseArchive.path,
+                  comparison.path,
+                ),
+              )
+              as AppleFileSetDiff;
+      expect(diff.addedPaths, containsAll([plugin, asset]));
+      expect(
+        diff.nativePaths,
+        containsAll([plugin, '$assetRoot/shorebird_native_assets.json']),
+      );
+      expect(diff.nativePaths, isNot(contains(asset)));
+    },
+  );
+
+  test(
     'a different native host is rejected before compiler or native build',
     () async {
       await release();
-      when(() => resolver.resolve()).thenAnswer(
+      when(() => resolver.resolve(targetOS: targetOS)).thenAnswer(
         (_) async => IosReplacementHost(
+          targetOS: targetOS,
           artifacts: {...host.artifacts, 'engine': 'f' * 64},
           toolchainVersion: host.toolchainVersion,
           toolchainProvenance: host.toolchainProvenance,
@@ -657,7 +824,7 @@ void main() {
                     p.join(
                       project.path,
                       'build',
-                      'ios_interpreter_patch.vmcode',
+                      '${targetOS}_interpreter_patch.vmcode',
                     ),
                   ).readAsStringSync(),
                 )
@@ -716,6 +883,16 @@ void main() {
   });
 
   for (final structural in [false, true]) {
+    if (targetOS == 'macos') {
+      test('rejects body/additive macOS structural=$structural', () async {
+        await expectLater(
+          release(full: false, structural: structural),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        expect(events, isEmpty);
+      });
+      continue;
+    }
     test(
       'legacy structural=$structural keeps '
       'the original native-then-bytecode flow',

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
+import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
@@ -111,10 +112,19 @@ To change the version of this release, change your app's version in your pubspec
     addSplitDebugInfoDefault(buildArgs);
     await addObfuscationMapArgs(buildArgs);
     final yaml = shorebirdEnv.getShorebirdYaml();
+    if (releaseType == ReleaseType.macos &&
+        (yaml?.aotPatchFullReplacement ?? false) &&
+        yaml?.aotPatchRuntimeMode != 'dart-bytecode-interpreter') {
+      throw ArtifactBuildException(
+        'macOS full replacement requires the Dart bytecode interpreter '
+        'runtime policy.',
+      );
+    }
     if ((yaml?.aotPatchFullReplacement ?? false) &&
         !const {
           ReleaseType.ios,
           ReleaseType.iosFramework,
+          ReleaseType.macos,
         }.contains(releaseType)) {
       throw ArtifactBuildException(
         'Full replacement currently requires an iOS release.',
@@ -130,6 +140,7 @@ To change the version of this release, change your app's version in your pubspec
         const {
           ReleaseType.ios,
           ReleaseType.iosFramework,
+          ReleaseType.macos,
         }.contains(releaseType) &&
         yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter';
     File? baseline;
@@ -137,15 +148,29 @@ To change the version of this release, change your app's version in your pubspec
     List<String>? bytecodeDartDefines;
     Map<String, String>? previousEnvironment;
     if (interpreter) {
+      final targetOS = releaseType == ReleaseType.macos ? 'macos' : 'ios';
+      if (targetOS == 'macos') {
+        if (!(yaml?.aotPatchFullReplacement ?? false) ||
+            (yaml?.aotPatchStructuralUpdates ?? false)) {
+          throw ArtifactBuildException(
+            'macOS interpreter releases require the complete full-replacement '
+            'profile; body-only and additive profiles are unsupported.',
+          );
+        }
+        validateMacosFullReplacementBuildArgs(buildArgs);
+      }
       await shorebirdFlutter.refreshVersionMetadata();
       final bytecodeBuilder = IosBytecodeBuilder(
         projectRoot: projectRoot,
         target: target,
         flavor: flavor,
+        targetOS: targetOS,
       );
       final fullReplacement = yaml!.aotPatchFullReplacement ?? false;
       if (fullReplacement) {
-        replacementHost = await iosReplacementHostResolver.resolve();
+        replacementHost = targetOS == 'macos'
+            ? await iosReplacementHostResolver.resolve(targetOS: targetOS)
+            : await iosReplacementHostResolver.resolve();
       }
       bytecodeDartDefines = List.unmodifiable(
         bytecodeBuilder.dartDefinesForBytecode(buildArgs),
@@ -154,7 +179,7 @@ To change the version of this release, change your app's version in your pubspec
         outputPath: p.join(
           projectRoot.path,
           'build',
-          'ios_interpreter_baseline.bytecode',
+          '${targetOS}_interpreter_baseline.bytecode',
         ),
         buildArgs: buildArgs,
         dartDefines: bytecodeDartDefines,
@@ -162,6 +187,18 @@ To change the version of this release, change your app's version in your pubspec
         fullReplacement: fullReplacement,
         hostAbi: replacementHost?.hostAbi,
       );
+      if (targetOS == 'macos') {
+        final bundled = open_patch.FullReplacementBundle.decode(
+          baseline.readAsBytesSync(),
+        );
+        if (!bundled.manifest.isBaseline ||
+            bundled.manifest.hostAbiHex != replacementHost!.hostAbi) {
+          throw ArtifactBuildException(
+            'macOS release compiler did not produce a baseline bound to '
+            'the selected native host.',
+          );
+        }
+      }
       final measured = sha256.convert(baseline.readAsBytesSync()).toString();
       final configured = yaml.aotPatchBaseSnapshotHash;
       if (configured != null && configured != measured) {

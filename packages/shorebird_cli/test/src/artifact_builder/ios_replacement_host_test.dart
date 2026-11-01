@@ -39,6 +39,59 @@ void main() {
       );
     });
 
+    test(
+      'macOS has an independent desktop ARM64 domain and release binding',
+      () {
+        final mac = IosReplacementHost(
+          targetOS: 'macos',
+          artifacts: host().artifacts,
+          toolchainVersion: 'version',
+          toolchainProvenance: {},
+        );
+        expect(
+          mac.hostAbi,
+          'c8ad62729c6baf7b76f9ae6ae0591ee2ba9b1fca858c9b84a14630d9210eaaaa',
+        );
+        expect(mac.hostAbi, isNot(host().hostAbi));
+        mac.validateReleased(mac.manifest);
+        for (final manifest in [
+          host().manifest,
+          {...mac.manifest, 'target_os': 'ios'},
+          {...mac.manifest, 'target_arch': 'x64'},
+        ]) {
+          expect(
+            () => mac.validateReleased(manifest),
+            throwsA(isA<ArtifactBuildException>()),
+          );
+        }
+      },
+    );
+
+    test(
+      'macOS architecture selection is explicit and never shrinks universal',
+      () {
+        validateMacosFullReplacementBuildArgs([
+          '--target-platform=darwin-arm64',
+        ]);
+        validateMacosFullReplacementBuildArgs([
+          '--target-platform',
+          'darwin-arm64',
+        ]);
+        for (final args in [
+          <String>[],
+          ['--target-platform=darwin-x64'],
+          ['--target-platform=darwin-x64,darwin-arm64'],
+          ['--target-platform=darwin-arm64', '--target-platform=darwin-arm64'],
+          ['--target-platform=darwin-arm64', '--obfuscate'],
+        ]) {
+          expect(
+            () => validateMacosFullReplacementBuildArgs(args),
+            throwsA(isA<ArtifactBuildException>()),
+          );
+        }
+      },
+    );
+
     test('host runtime architecture does not change the ABI binding', () {
       final release = host(runtime: 'macos_arm64');
       final patch = host(runtime: 'macos_x64');
@@ -75,17 +128,19 @@ void main() {
     const resolver = IosReplacementHostResolver();
     const version = 'Dart SDK version: 3.14.0-edge.revision (main) (timestamp)';
 
-    Future<IosReplacementHost> resolve({EngineConfig? engineConfig}) =>
-        runScoped(
-          resolver.resolve,
-          values: {
-            shorebirdArtifactsRef.overrideWith(() => artifacts),
-            processRef.overrideWith(() => process),
-            engineConfigRef.overrideWith(
-              () => engineConfig ?? const EngineConfig.empty(),
-            ),
-          },
-        );
+    Future<IosReplacementHost> resolve({
+      EngineConfig? engineConfig,
+      String targetOS = 'ios',
+    }) => runScoped(
+      () => resolver.resolve(targetOS: targetOS),
+      values: {
+        shorebirdArtifactsRef.overrideWith(() => artifacts),
+        processRef.overrideWith(() => process),
+        engineConfigRef.overrideWith(
+          () => engineConfig ?? const EngineConfig.empty(),
+        ),
+      },
+    );
 
     void setVersion(ShorebirdArtifact artifact, String output) {
       when(
@@ -111,6 +166,8 @@ void main() {
       files = {
         for (final artifact in [
           ShorebirdArtifact.iosEngineBinary,
+          ShorebirdArtifact.macosEngineBinary,
+          ShorebirdArtifact.genSnapshotMacosFullReplacementArm64,
           ShorebirdArtifact.genSnapshotIos,
           ShorebirdArtifact.flutterProductPlatformDill,
           ShorebirdArtifact.dartAotRuntime,
@@ -124,6 +181,10 @@ void main() {
         ).thenReturn(entry.value.path);
       }
       setVersion(ShorebirdArtifact.genSnapshotIos, '$version on "macos_arm64"');
+      setVersion(
+        ShorebirdArtifact.genSnapshotMacosFullReplacementArm64,
+        '$version on "macos_arm64"',
+      );
       setVersion(ShorebirdArtifact.dartAotRuntime, '$version on "macos_x64"');
       when(
         () => process.run(
@@ -255,6 +316,57 @@ ios_use_simulator = false
       writeArgs(productArgs);
       expect((await resolve(engineConfig: local)).toolchainVersion, version);
     });
+
+    test(
+      'macOS rejects hosted and mismatched local engines before tools',
+      () async {
+        await expectLater(
+          resolve(targetOS: 'macos'),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        final macProductArgs = productArgs.replaceFirst(
+          'target_os = "ios"',
+          'target_os = "mac"',
+        );
+        final macArgs =
+            '$macProductArgs'
+            '\ndart_enable_shorebird_interpreter = true\n'
+            'shorebird_use_interpreter = false\n';
+        for (final args in [
+          productArgs,
+          macArgs.replaceFirst('is_debug = false', 'is_debug = true'),
+          macArgs.replaceFirst('target_cpu = "arm64"', 'target_cpu = "x64"'),
+          macArgs.replaceFirst(
+            'dart_target_arch = "arm64"',
+            'dart_target_arch = "x64"',
+          ),
+          macArgs.replaceFirst(
+            'dart_enable_shorebird_interpreter = true',
+            'dart_enable_shorebird_interpreter = false',
+          ),
+          macArgs.replaceFirst(
+            'shorebird_use_interpreter = false',
+            'shorebird_use_interpreter = true',
+          ),
+          '$macArgs\ntarget_cpu = another_cpu\n',
+          macArgs.replaceFirst('dart_enable_shorebird_interpreter = true', ''),
+        ]) {
+          writeArgs(args);
+          await expectLater(
+            resolve(targetOS: 'macos', engineConfig: local),
+            throwsA(isA<ArtifactBuildException>()),
+          );
+        }
+        verifyZeroInteractions(process);
+        writeArgs(macArgs);
+        final mac = await resolve(targetOS: 'macos', engineConfig: local);
+        expect(mac.targetOS, 'macos');
+        expect(
+          mac.artifacts['engine'],
+          sha256.convert(utf8.encode('macosEngineBinary')).toString(),
+        );
+      },
+    );
 
     test(
       'rejects absent, debug, simulator and non-arm64 local metadata',

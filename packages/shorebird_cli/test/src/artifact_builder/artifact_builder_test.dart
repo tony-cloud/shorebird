@@ -2393,9 +2393,15 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
       });
 
       group('buildDartBytecodeSnapshot', () {
-        for (final hasRegistrant in [false, true]) {
+        for (final (targetOS, hasRegistrant) in [
+          ('ios', false),
+          ('ios', true),
+          ('macos', false),
+          ('macos', true),
+        ]) {
           test(
-            'full profile generates portable registrant inputs: $hasRegistrant',
+            '$targetOS full profile generates portable registrant inputs: '
+            '$hasRegistrant',
             () async {
               final packages =
                   File(
@@ -2458,6 +2464,7 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                   packageConfigPath: packages.path,
                   fullReplacement: true,
                   hostAbi: host,
+                  targetOS: targetOS,
                 ),
               );
               final args =
@@ -2473,7 +2480,7 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                 args,
                 containsAll([
                   '--shorebird-full-replacement',
-                  '--target-os=ios',
+                  '--target-os=$targetOS',
                   '--shorebird-host-abi=$host',
                   '--filesystem-root=${projectRoot.path}',
                   '--filesystem-scheme=org-dartlang-root',
@@ -2495,6 +2502,26 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                 hasRegistrant,
               );
               expect(args, isNot(contains('--shorebird-structural-patching')));
+              final flutterCalls = verify(
+                () => shorebirdProcess.stream(
+                  'flutter',
+                  captureAny(),
+                  workingDirectory: projectRoot.path,
+                  runInShell: false,
+                ),
+              ).captured.cast<List<String>>();
+              final registrantArgs = flutterCalls.singleWhere(
+                (args) => args.first == 'assemble',
+              );
+              expect(
+                registrantArgs,
+                contains(
+                  '-dTargetPlatform=${targetOS == 'macos' ? 'darwin' : 'ios'}',
+                ),
+              );
+              if (targetOS == 'macos') {
+                expect(registrantArgs, contains('-dDarwinArchs=arm64'));
+              }
             },
           );
         }

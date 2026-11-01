@@ -17,11 +17,18 @@ import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
+import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 
-/// Builds and packages public, data-only iOS interpreter patches.
+/// Builds and packages public, data-only Apple interpreter patches.
 mixin IosInterpreterPatcherMixin on Patcher {
+  String get _interpreterPlatform =>
+      interpreterTargetOS == 'macos' ? 'macOS' : 'iOS';
+
+  /// Explicit platform for the shared Apple interpreter transport.
+  String get interpreterTargetOS =>
+      releaseType == ReleaseType.macos ? 'macos' : 'ios';
   String? _comparisonReleaseBaseHash;
   String? _comparisonCurrentBaseHash;
   bool _preparedFullReplacement = false;
@@ -35,18 +42,21 @@ mixin IosInterpreterPatcherMixin on Patcher {
     return FullReplacementArchiveDiffer(
       releaseBaseHash: _comparisonReleaseBaseHash!,
       comparisonBaseHash: _comparisonCurrentBaseHash!,
+      nativeAssetsTarget: '${interpreterTargetOS}_arm64',
     );
   }
 
   /// Podfile.lock hash when patching an application rather than a framework.
   String? get interpreterPodfileLockHash => null;
 
-  String get _interpreterPatchOutputPath =>
-      p.join(shorebirdEnv.buildDirectory.path, 'ios_interpreter_patch.vmcode');
+  String get _interpreterPatchOutputPath => p.join(
+    shorebirdEnv.buildDirectory.path,
+    '${interpreterTargetOS}_interpreter_patch.vmcode',
+  );
 
   String get _interpreterPatchBytecodeOutputPath => p.join(
     shorebirdEnv.buildDirectory.path,
-    'ios_interpreter_patch.bytecode',
+    '${interpreterTargetOS}_interpreter_patch.bytecode',
   );
 
   /// Runtime mode selected for this iOS patch.
@@ -87,13 +97,17 @@ mixin IosInterpreterPatcherMixin on Patcher {
   }) async {
     final shorebirdYaml = shorebirdEnv.getShorebirdYaml();
     if (shorebirdYaml == null) {
-      logger.err('Unable to find shorebird.yaml for iOS interpreter patch.');
+      logger.err(
+        'Unable to find shorebird.yaml for $_interpreterPlatform '
+        'interpreter patch.',
+      );
       throw ProcessExit(ExitCode.software.code);
     }
 
     if (obfuscate) {
       logger.err(
-        'Obfuscated releases cannot receive iOS interpreter body patches. '
+        'Obfuscated releases cannot receive $_interpreterPlatform '
+        'interpreter body patches. '
         'Create an interpreter release without --obfuscate.',
       );
       throw ProcessExit(ExitCode.usage.code);
@@ -125,10 +139,10 @@ mixin IosInterpreterPatcherMixin on Patcher {
       logger.err(
         bytecodePath == null
             ? '''
-Unable to find generated iOS interpreter patch bytecode: ${bytecodeFile.path}
-Run `shorebird patch ios` so the patch build can generate it, or set aot_patch_bytecode_path/SHOREBIRD_IOS_INTERPRETER_PATCH_PATH to a Dart bytecode payload.'''
+Unable to find generated $_interpreterPlatform interpreter patch bytecode: ${bytecodeFile.path}
+Run `shorebird patch $interpreterTargetOS` so the patch build can generate it, or set aot_patch_bytecode_path/SHOREBIRD_IOS_INTERPRETER_PATCH_PATH to a Dart bytecode payload.'''
             : '''
-iOS interpreter patch bytecode does not exist: ${bytecodeFile.path}''',
+$_interpreterPlatform interpreter patch bytecode does not exist: ${bytecodeFile.path}''',
       );
       throw ProcessExit(ExitCode.software.code);
     }
@@ -151,7 +165,7 @@ iOS interpreter patch bytecode does not exist: ${bytecodeFile.path}''',
     if (_looksLikeNativeExecutable(patchSnapshot)) {
       logger.err(
         '''
-iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or ELF artifact: ${bytecodeFile.path}''',
+$_interpreterPlatform interpreter patch payload must be Dart bytecode data, not a native Mach-O or ELF artifact: ${bytecodeFile.path}''',
       );
       throw ProcessExit(ExitCode.software.code);
     }
@@ -239,7 +253,7 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       sdkHash: sdkHash,
       baseSnapshotHash: baseSnapshotHash,
       patchSnapshotHash: open_patch.sha256Hex(patchSnapshot),
-      targetOs: 'ios',
+      targetOs: interpreterTargetOS,
       targetArch: 'arm64',
       runtimeMode: open_patch.runtimeModeDartBytecodeInterpreter,
       obfuscationMapHash: _emptyToNull(obfuscationMapHash),
@@ -293,9 +307,13 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     if (iosPatchRuntimeMode != open_patch.runtimeModeDartBytecodeInterpreter) {
       return build();
     }
+    if (interpreterTargetOS == 'macos') {
+      validateMacosFullReplacementBuildArgs(buildArgs);
+    }
     if (obfuscate) {
       logger.err(
-        'Obfuscated releases cannot receive iOS interpreter body patches. '
+        'Obfuscated releases cannot receive $_interpreterPlatform '
+        'interpreter body patches. '
         'Create an interpreter release without --obfuscate.',
       );
       throw ProcessExit(ExitCode.usage.code);
@@ -324,7 +342,7 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
           File(
               p.join(
                 shorebirdEnv.buildDirectory.path,
-                'ios_interpreter_comparison_base.sbr',
+                '${interpreterTargetOS}_interpreter_comparison_base.sbr',
               ),
             )
             ..parent.createSync(recursive: true)
@@ -378,8 +396,11 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
     IosReplacementHost? replacementHost;
     if (IosBytecodeBuilder.fullReplacementForManifest(manifest)) {
       IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest);
-      replacementHost = await iosReplacementHostResolver.resolve()
-        ..validateReleased(manifest);
+      replacementHost =
+          (await (interpreterTargetOS == 'macos'
+                ? iosReplacementHostResolver.resolve(targetOS: 'macos')
+                : iosReplacementHostResolver.resolve()))
+            ..validateReleased(manifest);
     }
     final configuredBytecodePath = _configuredInterpreterBytecodePath(
       shorebirdYaml,
@@ -393,7 +414,7 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
         );
       }
       logger.info(
-        'Using configured iOS interpreter bytecode patch: '
+        'Using configured $_interpreterPlatform interpreter bytecode patch: '
         '${_projectRelativeFile(configuredBytecodePath).path}.',
       );
       return;
@@ -403,6 +424,7 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       projectRoot: projectRoot,
       target: target,
       flavor: flavor,
+      targetOS: interpreterTargetOS,
     );
     await bytecodeBuilder.build(
       outputPath: _interpreterPatchBytecodeOutputPath,
@@ -440,6 +462,14 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
       shorebirdEnv.getShorebirdYaml(),
       manifest,
     );
+    if (interpreterTargetOS == 'macos' &&
+        (!IosBytecodeBuilder.fullReplacementForManifest(manifest) ||
+            manifest['target_os'] != 'macos' ||
+            manifest['target_arch'] != 'arm64')) {
+      throw ArtifactBuildException(
+        'macOS interpreter patches require a released macos/arm64 full-replacement baseline.',
+      );
+    }
     return manifest;
   }
 
@@ -460,7 +490,9 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
 
   String? _configuredInterpreterBytecodePath(ShorebirdYaml? shorebirdYaml) {
     return _emptyToNull(
-      platform.environment['SHOREBIRD_IOS_INTERPRETER_PATCH_PATH'] ??
+      platform.environment[interpreterTargetOS == 'macos'
+              ? 'SHOREBIRD_MACOS_INTERPRETER_PATCH_PATH'
+              : 'SHOREBIRD_IOS_INTERPRETER_PATCH_PATH'] ??
           shorebirdYaml?.aotPatchBytecodePath,
     );
   }
@@ -474,7 +506,10 @@ iOS interpreter patch payload must be Dart bytecode data, not a native Mach-O or
 
   String _requiredPatchValue(String name, String? value) {
     if (value == null || value.trim().isEmpty) {
-      logger.err('Missing required iOS interpreter patch value: $name.');
+      logger.err(
+        'Missing required $_interpreterPlatform interpreter patch '
+        'value: $name.',
+      );
       throw ProcessExit(ExitCode.usage.code);
     }
     return value.trim();

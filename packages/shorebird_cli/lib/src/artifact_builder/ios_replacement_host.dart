@@ -17,6 +17,30 @@ final iosReplacementHostResolverRef = create(IosReplacementHostResolver.new);
 IosReplacementHostResolver get iosReplacementHostResolver =>
     read(iosReplacementHostResolverRef);
 
+/// Requires an explicit single ARM64 build; never shrink a universal request.
+void validateMacosFullReplacementBuildArgs(List<String> args) {
+  final architectures = <String>[];
+  for (var index = 0; index < args.length; index++) {
+    final arg = args[index];
+    if (arg.startsWith('--target-platform=')) {
+      architectures.addAll(
+        arg.substring('--target-platform='.length).split(','),
+      );
+    } else if (arg == '--target-platform' && index + 1 < args.length) {
+      architectures.addAll(args[++index].split(','));
+    }
+  }
+  if (architectures.length != 1 ||
+      architectures.single != 'darwin-arm64' ||
+      args.contains('--obfuscate')) {
+    throw ArtifactBuildException(
+      'macOS full replacement requires explicit '
+      '--target-platform=darwin-arm64 without obfuscation; x64, universal '
+      'and implicit architecture selection are unsupported.',
+    );
+  }
+}
+
 /// A fingerprint of the actual native iOS host, independent of cache paths.
 class IosReplacementHost {
   /// Creates a host from the selected artifacts' SHA-256 fingerprints.
@@ -24,11 +48,15 @@ class IosReplacementHost {
     required Map<String, String> artifacts,
     required this.toolchainVersion,
     required Map<String, String> toolchainProvenance,
+    this.targetOS = 'ios',
   }) : artifacts = Map.unmodifiable(artifacts),
        toolchainProvenance = Map.unmodifiable(toolchainProvenance);
 
   /// Native host inputs in the canonical descriptor.
   final Map<String, String> artifacts;
+
+  /// Explicit native platform; iOS retains its original device-domain stamp.
+  final String targetOS;
 
   /// Version reported by both the snapshot compiler and bytecode runtime.
   final String toolchainVersion;
@@ -40,9 +68,9 @@ class IosReplacementHost {
   String get hostAbi {
     final descriptor = BytesBuilder(copy: false);
     for (final value in [
-      'shorebird-ios-full-replacement-host-v1',
-      'ios',
-      'device',
+      'shorebird-$targetOS-full-replacement-host-v1',
+      targetOS,
+      if (targetOS == 'macos') 'desktop' else 'device',
       'arm64',
       'product',
       'dart-bytecode-interpreter',
@@ -62,6 +90,7 @@ class IosReplacementHost {
 
   /// Immutable release supplement fields used to validate future patch tools.
   Map<String, Object?> get manifest => {
+    if (targetOS == 'macos') ...{'target_os': targetOS, 'target_arch': 'arm64'},
     'host_abi_schema': 1,
     'host_abi': hostAbi,
     'host_artifacts': artifacts,
@@ -72,7 +101,10 @@ class IosReplacementHost {
   /// Refuses a patch built against a different frozen native host.
   void validateReleased(Map<String, Object?> manifest) {
     final releasedArtifacts = manifest['host_artifacts'];
-    if (manifest['host_abi_schema'] != 1 ||
+    if ((targetOS == 'macos' &&
+            (manifest['target_os'] != 'macos' ||
+                manifest['target_arch'] != 'arm64')) ||
+        manifest['host_abi_schema'] != 1 ||
         manifest['host_abi'] != hostAbi ||
         releasedArtifacts is! Map ||
         releasedArtifacts.length != artifacts.length ||
@@ -96,11 +128,24 @@ class IosReplacementHostResolver {
   const IosReplacementHostResolver();
 
   /// Validates the product toolchain and hashes its actual selected binaries.
-  Future<IosReplacementHost> resolve() async {
-    _validateLocalProductConfiguration();
+  Future<IosReplacementHost> resolve({String targetOS = 'ios'}) async {
+    if (!const ['ios', 'macos'].contains(targetOS)) {
+      throw ArtifactBuildException(
+        'Unsupported full-replacement Apple target.',
+      );
+    }
+    _validateLocalProductConfiguration(targetOS);
     final files = <String, File>{
-      'engine': _artifact(ShorebirdArtifact.iosEngineBinary),
-      'gen_snapshot': _artifact(ShorebirdArtifact.genSnapshotIos),
+      'engine': _artifact(
+        targetOS == 'macos'
+            ? ShorebirdArtifact.macosEngineBinary
+            : ShorebirdArtifact.iosEngineBinary,
+      ),
+      'gen_snapshot': _artifact(
+        targetOS == 'macos'
+            ? ShorebirdArtifact.genSnapshotMacosFullReplacementArm64
+            : ShorebirdArtifact.genSnapshotIos,
+      ),
       'platform': _artifact(ShorebirdArtifact.flutterProductPlatformDill),
       'dartaotruntime': _artifact(ShorebirdArtifact.dartAotRuntime),
       'dart2bytecode': _artifact(ShorebirdArtifact.dart2BytecodeSnapshot),
@@ -154,6 +199,7 @@ class IosReplacementHostResolver {
           (await sha256.bind(entry.value.openRead()).first).toString();
     }
     return IosReplacementHost(
+      targetOS: targetOS,
       artifacts: {
         for (final key in ['engine', 'gen_snapshot', 'platform'])
           key: fingerprints[key]!,
@@ -188,8 +234,24 @@ class IosReplacementHostResolver {
     return normalized;
   }
 
-  void _validateLocalProductConfiguration() {
-    if (engineConfig.localEngine == null) return;
+  void _validateLocalProductConfiguration(String targetOS) {
+    if (engineConfig.localEngine == null) {
+      if (targetOS == 'macos') {
+        throw ArtifactBuildException(
+          'macOS full replacement requires a verified local engine; hosted '
+          'capability artifacts are not available.',
+        );
+      }
+      return;
+    }
+    if (targetOS == 'macos' &&
+        (engineConfig.localEngineSrcPath == null ||
+            engineConfig.localEngineHost == null)) {
+      throw ArtifactBuildException(
+        'macOS full replacement requires explicit matching local target '
+        'and host engine directories.',
+      );
+    }
     final arguments = File(
       p.join(
         engineConfig.localEngineSrcPath!,
@@ -208,6 +270,15 @@ class IosReplacementHostResolver {
     for (final line in const LineSplitter().convert(
       arguments.readAsStringSync(),
     )) {
+      if (targetOS == 'macos') {
+        final assignment = RegExp(
+          r'^\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*(.*?)\s*(?:#.*)?$',
+        ).firstMatch(line);
+        if (assignment != null) {
+          values[assignment[1]!] = assignment[2]!.replaceAll('"', '');
+        }
+        continue;
+      }
       final assignment = RegExp(
         r'^\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*("[^"]*"|true|false)\s*(?:#.*)?$',
       ).firstMatch(line);
@@ -215,15 +286,20 @@ class IosReplacementHostResolver {
         values[assignment[1]!] = assignment[2]!.replaceAll('"', '');
       }
     }
-    const required = {
-      'target_os': 'ios',
+    final required = {
+      'target_os': targetOS == 'macos' ? 'mac' : 'ios',
       'target_cpu': 'arm64',
       'is_debug': 'false',
       'flutter_runtime_mode': 'release',
       'dart_runtime_mode': 'release',
       'dart_target_arch': 'arm64',
-      'use_ios_simulator': 'false',
-      'ios_use_simulator': 'false',
+      if (targetOS == 'ios') ...{
+        'use_ios_simulator': 'false',
+        'ios_use_simulator': 'false',
+      } else ...{
+        'dart_enable_shorebird_interpreter': 'true',
+        'shorebird_use_interpreter': 'false',
+      },
     };
     if (required.entries.any((entry) => values[entry.key] != entry.value)) {
       throw ArtifactBuildException(

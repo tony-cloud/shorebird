@@ -377,6 +377,83 @@ void main() {
       Directory(localEngineSrcPath).deleteSync(recursive: true);
     });
 
+    test(
+      'full macOS host uses the same executable candidate order as Flutter',
+      () async {
+        final root = p.join(localEngineSrcPath, 'out', localEngine);
+        final selected =
+            File(
+                p.join(
+                  root,
+                  'FlutterMacOS.xcframework',
+                  'macos-arm64_x86_64',
+                  'FlutterMacOS.framework',
+                  'FlutterMacOS',
+                ),
+              )
+              ..createSync(recursive: true)
+              ..writeAsStringSync('selected XC bytes');
+        final ignored =
+            File(p.join(root, 'FlutterMacOS.framework', 'FlutterMacOS'))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('divergent root bytes');
+        for (final directory in ['.', 'universal', 'clang_arm64']) {
+          final file = File(
+            p.normalize(p.join(root, directory, 'gen_snapshot_arm64')),
+          )..createSync(recursive: true);
+          if (!Platform.isWindows) {
+            await Process.run('chmod', ['+x', file.path]);
+          }
+        }
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.genSnapshotMacosFullReplacementArm64,
+            ),
+          ),
+          p.join(root, 'gen_snapshot_arm64'),
+        );
+        expect(
+          runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.macosEngineBinary,
+            ),
+          ),
+          selected.path,
+        );
+        ignored.deleteSync();
+        final xcOnly = runWithOverrides(
+          () => artifacts.getArtifactPath(
+            artifact: ShorebirdArtifact.macosEngineBinary,
+          ),
+        );
+        expect(File(xcOnly).readAsStringSync(), 'selected XC bytes');
+        ignored.writeAsStringSync('divergent root bytes');
+        Directory(
+          p.join(root, 'FlutterMacOS.xcframework'),
+        ).deleteSync(recursive: true);
+        expect(
+          () => runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.macosEngineBinary,
+            ),
+          ),
+          throwsStateError,
+        );
+        Directory(
+          p.join(root, 'FlutterMacOS.xcframework', 'unrelated'),
+        ).createSync(recursive: true);
+        expect(
+          () => runWithOverrides(
+            () => artifacts.getArtifactPath(
+              artifact: ShorebirdArtifact.macosEngineBinary,
+            ),
+          ),
+          throwsStateError,
+        );
+      },
+    );
+
     group('getArtifactPath', () {
       test('returns correct path for aot tools', () {
         expect(

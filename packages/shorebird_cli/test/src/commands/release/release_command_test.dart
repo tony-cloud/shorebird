@@ -1294,6 +1294,67 @@ Did you mean --release-version=1.0.0+1?''',
           () => shorebirdEnv.getShorebirdYaml(),
         ).thenReturn(ShorebirdYaml.fromJson(baseline));
       });
+      test('macOS requires full profile, explicit ARM64 and managed trust', () {
+        when(() => releaser.releaseType).thenReturn(ReleaseType.macos);
+        when(() => argResults.wasParsed(any())).thenReturn(false);
+        when(
+          () => argResults.rest,
+        ).thenReturn(['--target-platform=darwin-arm64']);
+        final full = {...baseline, 'aot_patch_full_replacement': true};
+        when(
+          () => shorebirdEnv.getShorebirdYaml(),
+        ).thenReturn(ShorebirdYaml.fromJson(full));
+        runWithOverrides(
+          () => command.assertIosInterpreterReleaseConfiguration(releaser),
+        );
+        for (final configuration in [
+          {...full, 'aot_patch_full_replacement': false},
+          {...full, 'aot_patch_structural_updates': true},
+          {...full, 'aot_patch_runtime_mode': 'native-aot'},
+        ]) {
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(
+            ShorebirdYaml(
+              appId: appId,
+              aotPatchRuntimeMode:
+                  configuration['aot_patch_runtime_mode']! as String,
+              aotPatchFullReplacement:
+                  configuration['aot_patch_full_replacement']! as bool,
+              aotPatchStructuralUpdates:
+                  configuration['aot_patch_structural_updates'] as bool?,
+            ),
+          );
+          expect(
+            () => runWithOverrides(
+              () => command.assertIosInterpreterReleaseConfiguration(releaser),
+            ),
+            throwsA(isA<UsageException>()),
+          );
+        }
+        when(
+          () => shorebirdEnv.getShorebirdYaml(),
+        ).thenReturn(ShorebirdYaml.fromJson(full));
+        when(
+          () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+        ).thenReturn(true);
+        expect(
+          () => runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          ),
+          throwsA(isA<UsageException>()),
+        );
+        when(
+          () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+        ).thenReturn(false);
+        when(() => releaser.useObfuscation).thenReturn(true);
+        expect(
+          () => runWithOverrides(
+            () => command.assertIosInterpreterReleaseConfiguration(releaser),
+          ),
+          throwsA(isA<UsageException>()),
+        );
+      });
       test(
         'accepts measured baseline policy without future target restrictions',
         () {
@@ -1501,6 +1562,39 @@ Did you mean --release-version=1.0.0+1?''',
     });
 
     group('assertArgsAreValid', () {
+      for (final installOnly in [false, true]) {
+        test(
+          'macOS encrypted release rejects weakened signing '
+          'installOnly=$installOnly',
+          () async {
+            when(() => releaser.releaseType).thenReturn(ReleaseType.macos);
+            when(
+              () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+            ).thenReturn(false);
+            when(
+              () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+            ).thenReturn(false);
+            when(
+              () => argResults[CommonArguments.patchSigningArg.name],
+            ).thenReturn(installOnly);
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              ShorebirdYaml(
+                appId: appId,
+                aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+                aotPatchFullReplacement: true,
+                patchVerification: installOnly
+                    ? PatchVerification.installOnly
+                    : PatchVerification.strict,
+              ),
+            );
+            await expectLater(
+              () =>
+                  runWithOverrides(() => command.assertArgsAreValid(releaser)),
+              throwsA(isA<UsageException>()),
+            );
+          },
+        );
+      }
       test('calls releaser.assertArgsAreValid', () async {
         final releaser = MockReleaser();
         when(() => releaser.minimumFlutterVersion).thenReturn(Version(0, 0, 0));

@@ -29,6 +29,12 @@ enum ShorebirdArtifact {
   /// The exact device Flutter engine executable selected for iOS release.
   iosEngineBinary,
 
+  /// The selected native desktop engine for a local full-replacement build.
+  macosEngineBinary,
+
+  /// The same ARM64 compiler selected by Flutter LocalEngineArtifacts.
+  genSnapshotMacosFullReplacementArm64,
+
   /// The gen_snapshot executable for macOS that creates arm64 snapshots.
   genSnapshotMacosArm64,
 
@@ -83,6 +89,11 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
         return _genSnapshotIosFile.path;
       case ShorebirdArtifact.iosEngineBinary:
         return _iosEngineBinaryFile.path;
+      case ShorebirdArtifact.macosEngineBinary:
+      case ShorebirdArtifact.genSnapshotMacosFullReplacementArm64:
+        throw StateError(
+          'Hosted macOS full replacement has no trusted capability artifact',
+        );
       case ShorebirdArtifact.genSnapshotMacosArm64:
         return _genSnapshotMacOsArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
@@ -263,6 +274,16 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
         return _genSnapshotIosFile.path;
       case ShorebirdArtifact.iosEngineBinary:
         return _iosEngineBinaryFile.path;
+      case ShorebirdArtifact.macosEngineBinary:
+        return _macosEngineBinary(
+          p.join(
+            engineConfig.localEngineSrcPath!,
+            'out',
+            engineConfig.localEngine,
+          ),
+        ).path;
+      case ShorebirdArtifact.genSnapshotMacosFullReplacementArm64:
+        return _localIosExecutable('gen_snapshot_arm64').path;
       case ShorebirdArtifact.genSnapshotMacosArm64:
         return _genSnapshotMacosArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:
@@ -433,6 +454,25 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
       ),
     );
   }
+}
+
+// Match Flutter's mandatory XCFramework and first macOS platform slice.
+File _macosEngineBinary(String engineDirectory) {
+  final xcframework = Directory(
+    p.join(engineDirectory, 'FlutterMacOS.xcframework'),
+  );
+  if (xcframework.existsSync()) {
+    for (final directory in xcframework.listSync().whereType<Directory>()) {
+      if (p.basename(directory.path).startsWith('macos-')) {
+        return File(
+          p.join(directory.path, 'FlutterMacOS.framework', 'FlutterMacOS'),
+        );
+      }
+    }
+  }
+  throw StateError(
+    'Unable to find the selected macOS XCFramework platform slice',
+  );
 }
 
 // Match Flutter's first physical-device xcframework slice selection.

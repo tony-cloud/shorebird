@@ -763,7 +763,14 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     bool structuralUpdates = false,
     bool fullReplacement = false,
     String? hostAbi,
+    String targetOS = 'ios',
   }) async {
+    if (!const ['ios', 'macos'].contains(targetOS) ||
+        (targetOS == 'macos' && !fullReplacement)) {
+      throw ArtifactBuildException(
+        'macOS interpreter builds require full replacement.',
+      );
+    }
     if (fullReplacement &&
         (structuralUpdates ||
             hostAbi == null ||
@@ -807,7 +814,8 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
         [
           'assemble',
           '--output=${p.join(projectRoot, 'build', 'shorebird_registrant')}',
-          '-dTargetPlatform=ios',
+          '-dTargetPlatform=${targetOS == 'macos' ? 'darwin' : 'ios'}',
+          if (targetOS == 'macos') '-dDarwinArchs=arm64',
           '-dBuildMode=release',
           '-dTargetFile=${p.absolute(inputFilePath)}',
           'gen_dart_plugin_registrant',
@@ -854,7 +862,7 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
       if (structuralUpdates) '--shorebird-structural-patching',
       if (fullReplacement) ...[
         '--shorebird-full-replacement',
-        '--target-os=ios',
+        '--target-os=$targetOS',
         '--shorebird-host-abi=$hostAbi',
         '--filesystem-root=$projectRoot',
         '--filesystem-scheme=org-dartlang-root',
