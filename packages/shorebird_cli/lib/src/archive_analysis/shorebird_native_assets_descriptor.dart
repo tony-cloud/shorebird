@@ -47,7 +47,11 @@ class ShorebirdNativeAssetsDescriptor {
     if (decoded is! Map<String, dynamic> ||
         decoded['schema'] is! int ||
         decoded['schema'] != 1 ||
-        !const ['ios_arm64', 'macos_arm64'].contains(decoded['target']) ||
+        !const [
+          'ios_arm64',
+          'macos_arm64',
+          'macos_x64',
+        ].contains(decoded['target']) ||
         (target != null && decoded['target'] != target) ||
         decoded['carrier_present'] is! bool) {
       throw const FormatException('Invalid native mapping descriptor schema.');

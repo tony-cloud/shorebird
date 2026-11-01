@@ -6,6 +6,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/native_selection_archive.dart';
 import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
@@ -15,6 +16,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
+import 'package:shorebird_cli/src/commands/release/native_selection_publication.dart';
 import 'package:shorebird_cli/src/commands/release/release.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
 import 'package:shorebird_cli/src/config/config.dart';
@@ -79,6 +81,13 @@ class ReleaseCommand extends ShorebirdCommand {
         'codesign',
         help: 'Codesign the app bundle or XCFrameworks (iOS and macOS only).',
         defaultsTo: true,
+      )
+      ..addFlag(
+        'stage-only',
+        negatable: false,
+        help:
+            'Build, upload and verify native protocol-2 packages '
+            'while leaving the platform draft.',
       )
       ..addFlag(
         'dry-run',
@@ -584,12 +593,14 @@ $error''');
     if (release.selectionProtocol == 2) {
       await _registerSelectionScope(release, releaser);
     }
-    await finalizeRelease(release: release, releaser: releaser);
+    if (results['stage-only'] != true) {
+      await finalizeRelease(release: release, releaser: releaser);
+    }
 
     logger
       ..success('''
 
-✅ Published Release ${release.version}!''')
+✅ ${results['stage-only'] == true ? 'Staged' : 'Published'} Release ${release.version}!''')
       ..info(releaser.postReleaseInstructions);
 
     printPatchInstructions(
@@ -608,6 +619,20 @@ $error''');
   ) async {
     final client = codePushClientWrapper.codePushClient;
     final platform = releaser.releaseType.releasePlatform;
+    if (NativeSelectionArchive.platforms.contains(platform.name)) {
+      await NativeSelectionPublication.verify(
+        appId: appId,
+        release: release,
+        platform: platform,
+        arches: releaser.nativeSelectionArches,
+        expectedNativePatchMaxBytes: shorebirdEnv
+            .getShorebirdYaml()
+            ?.nativePatchMaxBytes,
+        expectedSigningKeyId: releaser.signing?.keyId,
+        register: true,
+      );
+      return;
+    }
     final artifacts = await client.getReleaseArtifacts(
       appId: appId,
       releaseId: release.id,
@@ -658,6 +683,7 @@ $error''');
         version: release.version,
         platform: platform.name,
         expectedPublicKey: expectedPublicKey,
+        arch: releaser.interpreterArchitecture.arch,
       );
       final manifest = ReleaseSelectionArchive.verifySupplement(
         supplementFile,
@@ -707,19 +733,35 @@ $error''');
     assertPublicKeyArgsValid();
 
     final protocol = shorebirdEnv.getShorebirdYaml()?.selectionProtocol ?? 1;
+    final nativeSelection =
+        protocol == 2 &&
+        NativeSelectionArchive.platforms.contains(
+          releaser.releaseType.releasePlatform.name,
+        );
+    if (results['stage-only'] == true && (protocol != 2 || !nativeSelection)) {
+      usageException('--stage-only requires a native protocol-2 release.');
+    }
+    final supportedProfile =
+        protocol != 2 ||
+        (nativeSelection
+            ? const <String?>{
+                null,
+                'native-aot',
+              }.contains(shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode)
+            : const {
+                    ReleaseType.ios,
+                    ReleaseType.macos,
+                  }.contains(releaser.releaseType) &&
+                  shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode ==
+                      'dart-bytecode-interpreter');
     if (protocol == 2 &&
-        (!const {
-              ReleaseType.ios,
-              ReleaseType.macos,
-            }.contains(releaser.releaseType) ||
-            shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode !=
-                'dart-bytecode-interpreter' ||
+        (!supportedProfile ||
             !results.patchSigningEnabled ||
             results.wasParsed(CommonArguments.publicKeyArg.name) ||
             results.wasParsed(CommonArguments.publicKeyCmd.name))) {
       usageException(
-        'Protocol 2 publication requires an iOS or macOS interpreter '
-        'release with managed signing.',
+        'Protocol 2 publication requires a supported runtime profile '
+        'with managed signing.',
       );
     }
 
@@ -818,12 +860,17 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     final configuredBuildId = shorebirdEnv
         .getShorebirdYaml()
         ?.aotPatchAppBuildId;
-    if (const {
-          ReleaseType.ios,
-          ReleaseType.iosFramework,
-          ReleaseType.macos,
-        }.contains(releaser.releaseType) &&
-        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter &&
+    if (((shorebirdEnv.getShorebirdYaml()?.selectionProtocol == 2 &&
+                NativeSelectionArchive.platforms.contains(
+                  releaser.releaseType.releasePlatform.name,
+                )) ||
+            (const {
+                  ReleaseType.ios,
+                  ReleaseType.iosFramework,
+                  ReleaseType.macos,
+                }.contains(releaser.releaseType) &&
+                _iosPatchRuntimeMode ==
+                    open_patch.runtimeModeDartBytecodeInterpreter)) &&
         configuredBuildId != null &&
         configuredBuildId != releaseVersion) {
       usageException(
@@ -1160,7 +1207,11 @@ ${summary.join('\n')}
       releaseId: release.id,
       platform: releaser.releaseType.releasePlatform,
       status: ReleaseStatus.active,
-      selectionArches: release.selectionProtocol == 2 ? ['aarch64'] : null,
+      selectionArches: release.selectionProtocol == 2
+          ? (releaser.nativeSelectionArches.isEmpty
+                ? [releaser.interpreterArchitecture.arch]
+                : releaser.nativeSelectionArches)
+          : null,
       metadata: updatedMetadata.toJson(),
     );
   }

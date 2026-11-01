@@ -17,8 +17,8 @@ final iosReplacementHostResolverRef = create(IosReplacementHostResolver.new);
 IosReplacementHostResolver get iosReplacementHostResolver =>
     read(iosReplacementHostResolverRef);
 
-/// Requires an explicit single ARM64 build; never shrink a universal request.
-void validateMacosFullReplacementBuildArgs(List<String> args) {
+/// Returns the explicit single architecture; never shrinks a universal request.
+String validateMacosFullReplacementBuildArgs(List<String> args) {
   final architectures = <String>[];
   for (var index = 0; index < args.length; index++) {
     final arg = args[index];
@@ -31,14 +31,15 @@ void validateMacosFullReplacementBuildArgs(List<String> args) {
     }
   }
   if (architectures.length != 1 ||
-      architectures.single != 'darwin-arm64' ||
+      !const {'darwin-arm64', 'darwin-x64'}.contains(architectures.single) ||
       args.contains('--obfuscate')) {
     throw ArtifactBuildException(
       'macOS full replacement requires explicit '
-      '--target-platform=darwin-arm64 without obfuscation; x64, universal '
-      'and implicit architecture selection are unsupported.',
+      '--target-platform=darwin-arm64 or darwin-x64 without obfuscation; '
+      'universal and implicit architecture selection are unsupported.',
     );
   }
+  return architectures.single == 'darwin-x64' ? 'x64' : 'arm64';
 }
 
 /// A fingerprint of the actual native iOS host, independent of cache paths.
@@ -49,14 +50,20 @@ class IosReplacementHost {
     required this.toolchainVersion,
     required Map<String, String> toolchainProvenance,
     this.targetOS = 'ios',
+    this.targetArch = 'arm64',
   }) : artifacts = Map.unmodifiable(artifacts),
-       toolchainProvenance = Map.unmodifiable(toolchainProvenance);
+       toolchainProvenance = Map.unmodifiable(toolchainProvenance) {
+    validateAppleReplacementArchitecture(targetOS, targetArch);
+  }
 
   /// Native host inputs in the canonical descriptor.
   final Map<String, String> artifacts;
 
   /// Explicit native platform; iOS retains its original device-domain stamp.
   final String targetOS;
+
+  /// Verified native architecture in the frozen host stamp.
+  final String targetArch;
 
   /// Version reported by both the snapshot compiler and bytecode runtime.
   final String toolchainVersion;
@@ -71,7 +78,7 @@ class IosReplacementHost {
       'shorebird-$targetOS-full-replacement-host-v1',
       targetOS,
       if (targetOS == 'macos') 'desktop' else 'device',
-      'arm64',
+      targetArch,
       'product',
       'dart-bytecode-interpreter',
       'full-replacement-v1',
@@ -90,7 +97,10 @@ class IosReplacementHost {
 
   /// Immutable release supplement fields used to validate future patch tools.
   Map<String, Object?> get manifest => {
-    if (targetOS == 'macos') ...{'target_os': targetOS, 'target_arch': 'arm64'},
+    if (targetOS == 'macos') ...{
+      'target_os': targetOS,
+      'target_arch': targetArch,
+    },
     'host_abi_schema': 1,
     'host_abi': hostAbi,
     'host_artifacts': artifacts,
@@ -103,7 +113,7 @@ class IosReplacementHost {
     final releasedArtifacts = manifest['host_artifacts'];
     if ((targetOS == 'macos' &&
             (manifest['target_os'] != 'macos' ||
-                manifest['target_arch'] != 'arm64')) ||
+                manifest['target_arch'] != targetArch)) ||
         manifest['host_abi_schema'] != 1 ||
         manifest['host_abi'] != hostAbi ||
         releasedArtifacts is! Map ||
@@ -113,7 +123,7 @@ class IosReplacementHost {
         ) ||
         manifest['host_toolchain_version'] != toolchainVersion) {
       throw ArtifactBuildException(
-        'The selected iOS toolchain does not match the released '
+        'The selected Apple toolchain does not match the released '
         'full-replacement host. Use the exact released engine, snapshot '
         'compiler and platform SDK, '
         'or create a new native release.',
@@ -122,19 +132,23 @@ class IosReplacementHost {
   }
 }
 
-/// Resolves the same release/device/arm64 artifacts as Flutter's native build.
+/// Resolves the verified release artifacts selected by Flutter's native build.
 class IosReplacementHostResolver {
   /// Creates a resolver for the currently selected engine configuration.
   const IosReplacementHostResolver();
 
   /// Validates the product toolchain and hashes its actual selected binaries.
-  Future<IosReplacementHost> resolve({String targetOS = 'ios'}) async {
+  Future<IosReplacementHost> resolve({
+    String targetOS = 'ios',
+    String targetArch = 'arm64',
+  }) async {
+    validateAppleReplacementArchitecture(targetOS, targetArch);
     if (!const ['ios', 'macos'].contains(targetOS)) {
       throw ArtifactBuildException(
         'Unsupported full-replacement Apple target.',
       );
     }
-    _validateLocalProductConfiguration(targetOS);
+    _validateLocalProductConfiguration(targetOS, targetArch);
     final files = <String, File>{
       'engine': _artifact(
         targetOS == 'macos'
@@ -143,7 +157,9 @@ class IosReplacementHostResolver {
       ),
       'gen_snapshot': _artifact(
         targetOS == 'macos'
-            ? ShorebirdArtifact.genSnapshotMacosFullReplacementArm64
+            ? (targetArch == 'x64'
+                  ? ShorebirdArtifact.genSnapshotMacosFullReplacementX64
+                  : ShorebirdArtifact.genSnapshotMacosFullReplacementArm64)
             : ShorebirdArtifact.genSnapshotIos,
       ),
       'platform': _artifact(ShorebirdArtifact.flutterProductPlatformDill),
@@ -200,6 +216,7 @@ class IosReplacementHostResolver {
     }
     return IosReplacementHost(
       targetOS: targetOS,
+      targetArch: targetArch,
       artifacts: {
         for (final key in ['engine', 'gen_snapshot', 'platform'])
           key: fingerprints[key]!,
@@ -234,7 +251,7 @@ class IosReplacementHostResolver {
     return normalized;
   }
 
-  void _validateLocalProductConfiguration(String targetOS) {
+  void _validateLocalProductConfiguration(String targetOS, String targetArch) {
     if (engineConfig.localEngine == null) {
       if (targetOS == 'macos') {
         throw ArtifactBuildException(
@@ -263,7 +280,7 @@ class IosReplacementHostResolver {
     if (!arguments.existsSync()) {
       throw ArtifactBuildException(
         'Full replacement requires local engine args.gn to verify the '
-        'release/device/arm64 product SDK: ${arguments.path}.',
+        '$targetOS/$targetArch product SDK: ${arguments.path}.',
       );
     }
     final values = <String, String>{};
@@ -288,11 +305,11 @@ class IosReplacementHostResolver {
     }
     final required = {
       'target_os': targetOS == 'macos' ? 'mac' : 'ios',
-      'target_cpu': 'arm64',
+      'target_cpu': targetArch,
       'is_debug': 'false',
       'flutter_runtime_mode': 'release',
       'dart_runtime_mode': 'release',
-      'dart_target_arch': 'arm64',
+      'dart_target_arch': targetArch,
       if (targetOS == 'ios') ...{
         'use_ios_simulator': 'false',
         'ios_use_simulator': 'false',
@@ -303,10 +320,21 @@ class IosReplacementHostResolver {
     };
     if (required.entries.any((entry) => values[entry.key] != entry.value)) {
       throw ArtifactBuildException(
-        'Full replacement requires an iOS arm64 device release engine. '
+        'Full replacement requires a $targetOS $targetArch release engine. '
         'The selected args.gn does not establish this product profile: '
         '${arguments.path}.',
       );
     }
   }
+}
+
+/// Restricts full Apple replacement to supported explicit architecture pairs.
+void validateAppleReplacementArchitecture(String targetOS, String targetArch) {
+  if ((targetOS == 'ios' && targetArch == 'arm64') ||
+      (targetOS == 'macos' && const {'arm64', 'x64'}.contains(targetArch))) {
+    return;
+  }
+  throw ArtifactBuildException(
+    'Unsupported Apple full-replacement architecture.',
+  );
 }

@@ -28,6 +28,13 @@ class AndroidReleaser extends Releaser {
   });
 
   @override
+  FileSystemEntity get nativeSelectionPackage =>
+      shorebirdAndroidArtifacts.findAab(project: projectRoot, flavor: flavor);
+  @override
+  List<String> get nativeSelectionArches =>
+      architectures.map((a) => a.arch).toList()..sort();
+
+  @override
   ReleaseType get releaseType => ReleaseType.android;
 
   @override
@@ -78,32 +85,26 @@ Please file an issue at ${link(uri: Uri.parse(openShorebirdIssueUrl))} if you wo
 
   @override
   Future<FileSystemEntity> buildReleaseArtifacts() async {
-    // The APK is built after the obfuscation map check, with the same
-    // arguments as the AAB.
-    final (aab, buildArgs, base64PublicKey) = await runReleaseBuild(
-      (buildArgs, base64PublicKey) async => (
-        await artifactBuilder.buildAppBundle(
-          flavor: flavor,
-          target: target,
-          targetPlatforms: architectures,
-          args: buildArgs,
-          base64PublicKey: base64PublicKey,
-        ),
-        buildArgs,
-        base64PublicKey,
-      ),
-    );
-
-    if (generateApk) {
-      logger.info('Building APK');
-      await artifactBuilder.buildApk(
+    final aab = await runReleaseBuild((buildArgs, base64PublicKey) async {
+      final aab = await artifactBuilder.buildAppBundle(
         flavor: flavor,
         target: target,
         targetPlatforms: architectures,
         args: buildArgs,
         base64PublicKey: base64PublicKey,
       );
-    }
+      if (generateApk) {
+        logger.info('Building APK');
+        await artifactBuilder.buildApk(
+          flavor: flavor,
+          target: target,
+          targetPlatforms: architectures,
+          args: buildArgs,
+          base64PublicKey: base64PublicKey,
+        );
+      }
+      return aab;
+    });
 
     return aab;
   }

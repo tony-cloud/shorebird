@@ -68,6 +68,46 @@ void main() {
     );
 
     test(
+      'macOS x64 binds a distinct architecture stamp '
+      'and rejects ARM64 manifests',
+      () {
+        final arm = IosReplacementHost(
+          targetOS: 'macos',
+          artifacts: host().artifacts,
+          toolchainVersion: 'version',
+          toolchainProvenance: {},
+        );
+        final intel = IosReplacementHost(
+          targetOS: 'macos',
+          targetArch: 'x64',
+          artifacts: host().artifacts,
+          toolchainVersion: 'version',
+          toolchainProvenance: {},
+        );
+        expect(
+          intel.hostAbi,
+          '8d0aabf6906605e60bc9b44c36b3fdb9176eb245518c1778cd6b891fc040aee5',
+        );
+        expect(intel.hostAbi, isNot(arm.hostAbi));
+        expect(intel.manifest['target_arch'], 'x64');
+        intel.validateReleased(intel.manifest);
+        expect(
+          () => intel.validateReleased(arm.manifest),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        expect(
+          () => IosReplacementHost(
+            targetArch: 'x64',
+            artifacts: host().artifacts,
+            toolchainVersion: 'version',
+            toolchainProvenance: {},
+          ),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+      },
+    );
+
+    test(
       'macOS architecture selection is explicit and never shrinks universal',
       () {
         validateMacosFullReplacementBuildArgs([
@@ -77,9 +117,14 @@ void main() {
           '--target-platform',
           'darwin-arm64',
         ]);
+        expect(
+          validateMacosFullReplacementBuildArgs([
+            '--target-platform=darwin-x64',
+          ]),
+          'x64',
+        );
         for (final args in [
           <String>[],
-          ['--target-platform=darwin-x64'],
           ['--target-platform=darwin-x64,darwin-arm64'],
           ['--target-platform=darwin-arm64', '--target-platform=darwin-arm64'],
           ['--target-platform=darwin-arm64', '--obfuscate'],
@@ -131,8 +176,9 @@ void main() {
     Future<IosReplacementHost> resolve({
       EngineConfig? engineConfig,
       String targetOS = 'ios',
+      String targetArch = 'arm64',
     }) => runScoped(
-      () => resolver.resolve(targetOS: targetOS),
+      () => resolver.resolve(targetOS: targetOS, targetArch: targetArch),
       values: {
         shorebirdArtifactsRef.overrideWith(() => artifacts),
         processRef.overrideWith(() => process),
@@ -168,6 +214,7 @@ void main() {
           ShorebirdArtifact.iosEngineBinary,
           ShorebirdArtifact.macosEngineBinary,
           ShorebirdArtifact.genSnapshotMacosFullReplacementArm64,
+          ShorebirdArtifact.genSnapshotMacosFullReplacementX64,
           ShorebirdArtifact.genSnapshotIos,
           ShorebirdArtifact.flutterProductPlatformDill,
           ShorebirdArtifact.dartAotRuntime,
@@ -183,6 +230,10 @@ void main() {
       setVersion(ShorebirdArtifact.genSnapshotIos, '$version on "macos_arm64"');
       setVersion(
         ShorebirdArtifact.genSnapshotMacosFullReplacementArm64,
+        '$version on "macos_arm64"',
+      );
+      setVersion(
+        ShorebirdArtifact.genSnapshotMacosFullReplacementX64,
         '$version on "macos_arm64"',
       );
       setVersion(ShorebirdArtifact.dartAotRuntime, '$version on "macos_x64"');
@@ -316,6 +367,39 @@ ios_use_simulator = false
       writeArgs(productArgs);
       expect((await resolve(engineConfig: local)).toolchainVersion, version);
     });
+
+    test(
+      'macOS x64 resolves only matching verified local product artifacts',
+      () async {
+        final product = productArgs
+            .replaceAll('"arm64"', '"x64"')
+            .replaceFirst('target_os = "ios"', 'target_os = "mac"');
+        final args =
+            '$product\ndart_enable_shorebird_interpreter = true\n'
+            'shorebird_use_interpreter = false\n';
+        writeArgs(args);
+        final intel = await resolve(
+          targetOS: 'macos',
+          targetArch: 'x64',
+          engineConfig: local,
+        );
+        expect(intel.targetArch, 'x64');
+        expect(
+          intel.artifacts['gen_snapshot'],
+          sha256
+              .convert(utf8.encode('genSnapshotMacosFullReplacementX64'))
+              .toString(),
+        );
+        await expectLater(
+          resolve(targetOS: 'macos', engineConfig: local),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+        await expectLater(
+          resolve(targetArch: 'x64', engineConfig: local),
+          throwsA(isA<ArtifactBuildException>()),
+        );
+      },
+    );
 
     test(
       'macOS rejects hosted and mismatched local engines before tools',

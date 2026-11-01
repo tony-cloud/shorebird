@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
+import 'package:shorebird_cli/src/archive_analysis/native_selection_archive.dart';
 import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
@@ -382,26 +384,58 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
     }
     final variant = results['variant'] as String?;
     if (release.selectionProtocol == 2) {
+      final native = NativeSelectionArchive.platforms.contains(
+        patcher.releaseType.releasePlatform.name,
+      );
       final runtimeOverride =
           platform.environment['SHOREBIRD_IOS_PATCH_RUNTIME_MODE'];
-      if (!const {
-            ReleaseType.ios,
-            ReleaseType.macos,
-          }.contains(patcher.releaseType) ||
-          shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode !=
-              'dart-bytecode-interpreter' ||
-          const {
-            '1',
-            'true',
-            'yes',
-          }.contains(platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH']) ||
-          (runtimeOverride != null &&
-              runtimeOverride.trim().isNotEmpty &&
-              runtimeOverride.trim() != 'dart-bytecode-interpreter')) {
+      if (!native &&
+          (!const {
+                ReleaseType.ios,
+                ReleaseType.macos,
+              }.contains(patcher.releaseType) ||
+              shorebirdEnv.getShorebirdYaml()?.aotPatchRuntimeMode !=
+                  'dart-bytecode-interpreter' ||
+              const {
+                '1',
+                'true',
+                'yes',
+              }.contains(
+                platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH'],
+              ) ||
+              (runtimeOverride != null &&
+                  runtimeOverride.trim().isNotEmpty &&
+                  runtimeOverride.trim() != 'dart-bytecode-interpreter'))) {
         usageException(
           'Protocol 2 patch publication requires the released '
           'Apple interpreter profile.',
         );
+      }
+      if (native) {
+        final yaml = shorebirdEnv.getShorebirdYaml()!;
+        if (!const <String?>{
+              null,
+              'native-aot',
+            }.contains(yaml.aotPatchRuntimeMode) ||
+            yaml.aotPatchLicenseType == null ||
+            !RegExp(
+              r'^[a-z][a-z0-9_-]{0,63}$',
+            ).hasMatch(yaml.aotPatchLicenseType!)) {
+          usageException(
+            'Native protocol-2 patches require native-aot policy '
+            'and a canonical aot_patch_license_type.',
+          );
+        }
+        if (yaml.aotPatchOfflineExpiresAt case final expiry?) {
+          final parsed = DateTime.tryParse(expiry);
+          if (parsed == null ||
+              !parsed.isUtc ||
+              !parsed.isAfter(DateTime.now().toUtc())) {
+            usageException(
+              'aot_patch_offline_expires_at must be a future UTC timestamp.',
+            );
+          }
+        }
       }
       if (variant == null ||
           !RegExp(r'^[a-z][a-z0-9_-]{0,63}$').hasMatch(variant)) {
@@ -517,7 +551,8 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
       // Without a terminal to prompt in, the release version is guessed by
       // building and reading it back out of the artifact, which some release
       // types can't do.
-      if (patcher.requiresReleaseVersionArg) {
+      if (patcher.requiresReleaseVersionArg ||
+          shorebirdEnv.getShorebirdYaml()?.selectionProtocol == 2) {
         usageException(
           'Missing required argument: --release-version. The release version '
           "can't be determined from a ${patcher.releaseType.cliName} build, "
@@ -599,6 +634,82 @@ Building with Flutter $flutterVersionString to determine the release version...
         : null;
 
     if (release.selectionProtocol == 2) {
+      void verifyStored(File file, ReleaseArtifact artifact) {
+        if (file.lengthSync() != artifact.size ||
+            sha256.convert(file.readAsBytesSync()).toString() !=
+                artifact.hash) {
+          throw const FormatException(
+            'Downloaded original release hash/size mismatch',
+          );
+        }
+      }
+
+      verifyStored(releaseArchive, releaseArtifact);
+      if (supplementArchive != null) {
+        verifyStored(supplementArchive, supplementalArtifact!);
+      }
+    }
+    if (release.selectionProtocol == 2 &&
+        NativeSelectionArchive.platforms.contains(releasePlatform.name)) {
+      final signing = releaseArtifact.signing;
+      if (signing?.mode != 'managed' ||
+          signing?.keyId == null ||
+          signing?.publicKeyPem == null ||
+          (supplementalArtifact != null &&
+              supplementalArtifact.signing != signing)) {
+        throw const FormatException(
+          'Native protocol 2 requires consistent managed artifact signing',
+        );
+      }
+      final registered = await codePushClientWrapper.codePushClient
+          .getReleaseSelectionScopes(appId: appId, releaseId: release.id);
+      final registrations = registered
+          .where(
+            (r) =>
+                (r['scope'] as Map<String, dynamic>)['platform'] ==
+                    releasePlatform.name &&
+                r['release_artifact_id'] == releaseArtifact.id,
+          )
+          .toList();
+      final arches = registrations
+          .map((r) => (r['scope'] as Map<String, dynamic>)['arch'] as String)
+          .toList();
+      final scopes = NativeSelectionArchive.verify(
+        releaseArchive,
+        appId: appId,
+        version: release.version,
+        platform: releasePlatform.name,
+        arches: arches,
+        expectedPublicKey: codeSigner.base64PublicKeyFromPem(
+          signing!.publicKeyPem!,
+        ),
+        expectedNativePatchMaxBytes: shorebirdEnv
+            .getShorebirdYaml()
+            ?.nativePatchMaxBytes,
+      );
+      for (final registration in registrations) {
+        final scope = ReleaseSelectionScope.fromJson(
+          registration['scope'] as Map<String, dynamic>,
+        );
+        if (registration['published'] != true ||
+            registration['supplement_artifact_id'] !=
+                supplementalArtifact?.id ||
+            jsonEncode(scope.toJson()) !=
+                jsonEncode(scopes[scope.arch]!.toJson())) {
+          throw const FormatException(
+            'Registered original native scope differs from packaged release',
+          );
+        }
+      }
+      patcher
+        ..nativeSelectionScopes = scopes
+        ..nativeSelectionBaselines = NativeSelectionArchive.baselines(
+          releaseArchive,
+          releasePlatform.name,
+          arches,
+        )
+        ..nativeReleaseSigning = signing;
+    } else if (release.selectionProtocol == 2) {
       if (supplementArchive == null || supplementalArtifact == null) {
         throw const FormatException(
           'Protocol 2 requires the original baseline supplement',
@@ -621,6 +732,9 @@ Building with Flutter $flutterVersionString to determine the release version...
         expectedPublicKey: codeSigner.base64PublicKeyFromPem(
           signing!.publicKeyPem!,
         ),
+        arch: patcher is MacosPatcher
+            ? patcher.interpreterArchitecture.arch
+            : 'aarch64',
       );
       ReleaseSelectionArchive.verifySupplement(supplementArchive, scope);
       final registered = await codePushClientWrapper.codePushClient
@@ -864,11 +978,52 @@ Building with Flutter $flutterVersionString to determine the release version...
       logger.info('''
 Building patch with Flutter $flutterVersionString
 ''');
-      patchArtifactFile = await _tryBuildingArtifact<File>(
-        () => patcher.buildPatchArtifact(
-          releaseVersion: release.version,
-        ),
-      );
+      patchArtifactFile = await _tryBuildingArtifact<File>(() async {
+        if (release.selectionProtocol != 2 ||
+            !NativeSelectionArchive.platforms.contains(
+              patcher.releaseType.releasePlatform.name,
+            )) {
+          return patcher.buildPatchArtifact(releaseVersion: release.version);
+        }
+        final manifest = NativeSelectionManifest(
+          appId: appId,
+          version: release.version,
+          platform: patcher.releaseType.releasePlatform.name,
+          arches: patcher.nativeSelectionScopes.keys.toList()..sort(),
+        );
+        final previous = artifactBuilder.iosInterpreterBuildEnvironment;
+        try {
+          manifest.write(
+            scopes: patcher.nativeSelectionScopes,
+            baselines: patcher.nativeSelectionBaselines,
+          );
+          artifactBuilder.iosInterpreterBuildEnvironment = {
+            ...previous,
+            'SHOREBIRD_NATIVE_SELECTION_MANIFEST': manifest.file.absolute.path,
+          };
+          final package = await patcher.buildPatchArtifact(
+            releaseVersion: release.version,
+          );
+          NativeSelectionArchive.verify(
+            package,
+            appId: appId,
+            version: release.version,
+            platform: manifest.platform,
+            arches: manifest.arches,
+            expectedPublicKey: codeSigner.base64PublicKeyFromPem(
+              patcher.releaseManagedPublicKeyPem!,
+            ),
+            expectedNativePatchMaxBytes: shorebirdEnv
+                .getShorebirdYaml()
+                ?.nativePatchMaxBytes,
+            expectedScopes: patcher.nativeSelectionScopes,
+          );
+          return package;
+        } finally {
+          artifactBuilder.iosInterpreterBuildEnvironment = previous;
+          manifest.dispose();
+        }
+      });
     }
 
     final diffStatus = await assertUnpatchableDiffs(
@@ -915,12 +1070,17 @@ Building patch with Flutter $flutterVersionString
     );
 
     if (release.selectionProtocol == 2) {
+      final native = NativeSelectionArchive.platforms.contains(
+        patcher.releaseType.releasePlatform.name,
+      );
       for (final artifact in patchArtifactBundles.values) {
         if (artifact.variantId != results['variant'] ||
             artifact.licenseType == null ||
-            artifact.artifactKeyId == null) {
+            (!native
+                ? artifact.artifactKeyId == null
+                : artifact.artifactKeyId != null)) {
           throw const FormatException(
-            'Missing authenticated interpreter variant metadata',
+            'Missing or inconsistent variant publication metadata',
           );
         }
         await codePushClientWrapper.codePushClient.putReleaseVariant(
@@ -936,7 +1096,9 @@ Building patch with Flutter $flutterVersionString
               'kind': 'patch',
               'patch_number': '${patch.number}',
               'artifact_hash': artifact.hash,
-              'encryption': 'artifact-aes-256-gcm',
+              'encryption': !native
+                  ? 'artifact-aes-256-gcm'
+                  : 'transport-aes-256-gcm',
               'artifact_key_id': artifact.artifactKeyId,
             },
           },

@@ -10,16 +10,19 @@ import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/code_signer.dart';
 import 'package:shorebird_cli/src/commands/commands.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
+import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/deployment_track.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/flutter_tools.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 import 'package:test/test.dart';
 
 import '../../fakes.dart';
+import '../../fixtures/native_selection.dart';
 import '../../helpers.dart';
 import '../../mocks.dart';
 
@@ -407,6 +410,71 @@ void main() {
         expect(bundle.podfileLockHash, equals('podfile-lock-hash'));
         verifyNever(() => progress.fail(any()));
       });
+
+      test(
+        'native variant metadata preserves ordinary diff and content expiry',
+        () async {
+          final parser = ArgParser()
+            ..addOption('variant')
+            ..addOption('flavor')
+            ..addOption(CommonArguments.publicKeyArg.name)
+            ..addOption(CommonArguments.publicKeyCmd.name)
+            ..addOption(CommonArguments.privateKeyArg.name)
+            ..addOption(CommonArguments.signCmd.name);
+          patcher =
+              _TestPatcher(
+                  argParser: parser,
+                  argResults: parser.parse([
+                    '--variant=pro',
+                    '--flavor=production',
+                  ]),
+                  flavor: 'production',
+                  target: null,
+                )
+                ..nativeSelectionScopes = nativeScopes('android', {
+                  'aarch64': nativeElf('aarch64'),
+                });
+          const expiry = '2099-12-31T23:59:59.999Z';
+          final env = MockShorebirdEnv();
+          when(env.getShorebirdYaml).thenReturn(
+            const ShorebirdYaml(
+              appId: nativeAppId,
+              selectionProtocol: 2,
+              aotPatchLicenseType: 'paid-pro',
+              aotPatchOfflineExpiresAt: expiry,
+            ),
+          );
+          when(
+            () => artifactManager.createDiff(
+              releaseArtifactPath: 'original-release.so',
+              patchArtifactPath: patchArtifact.path,
+            ),
+          ).thenAnswer((_) async => diffFile.path);
+          final bundle = await runScoped(
+            () => runWithOverrides(
+              () => patcher.createDiffBundle(
+                arch: Arch.arm64,
+                releaseArtifactPath: 'original-release.so',
+                patchArtifactPath: patchArtifact.path,
+                progress: progress,
+              ),
+            ),
+            values: {shorebirdEnvRef.overrideWith(() => env)},
+          );
+          expect(bundle.variantId, 'pro');
+          expect(bundle.licenseType, 'paid-pro');
+          expect(bundle.artifactKeyId, isNull);
+          expect(bundle.offlineExpiresAt, expiry);
+          expect(bundle.path, diffFile.path);
+          expect(patcher.flavor, 'production');
+          verify(
+            () => artifactManager.createDiff(
+              releaseArtifactPath: 'original-release.so',
+              patchArtifactPath: patchArtifact.path,
+            ),
+          ).called(1);
+        },
+      );
 
       test('fails progress and exits when the diff fails', () async {
         when(

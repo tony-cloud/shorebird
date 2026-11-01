@@ -19,7 +19,13 @@ class ReleaseSelectionArchive {
     required String version,
     required String platform,
     required String expectedPublicKey,
+    String arch = 'aarch64',
   }) {
+    if (!const {'ios', 'macos'}.contains(platform) ||
+        (platform == 'ios' && arch != 'aarch64') ||
+        (platform == 'macos' && !const {'aarch64', 'x86_64'}.contains(arch))) {
+      throw const FormatException('Unsupported Apple selection architecture');
+    }
     final archive = ZipDecoder().decodeBytes(file.readAsBytesSync());
     final policies = archive.files
         .where(
@@ -45,11 +51,27 @@ class ReleaseSelectionArchive {
         return matches.single.content as List<int>;
       }
 
+      final scopeMembers = archive.files
+          .where(
+            (f) =>
+                f.isFile &&
+                p.posix.dirname(f.name) == prefix &&
+                p.posix
+                    .basename(f.name)
+                    .startsWith('shorebird_release_scope_') &&
+                f.name.endsWith('.json'),
+          )
+          .toList();
+      if (scopeMembers.length != 1) {
+        throw const FormatException(
+          'Apple interpreter requires exactly one architecture scope',
+        );
+      }
       final yaml =
           loadYaml(utf8.decode(policy.content as List<int>)) as YamlMap;
       final scope = ReleaseSelectionScope.decode(
         utf8.decode(
-          member('shorebird_release_scope_${platform}_aarch64.json'),
+          member('shorebird_release_scope_${platform}_$arch.json'),
         ),
       );
       final profile = yaml['aot_patch_full_replacement'] == true
@@ -65,8 +87,9 @@ class ReleaseSelectionArchive {
       if (scope.appId != appId ||
           scope.releaseVersion != version ||
           scope.platform != platform ||
-          scope.arch != 'aarch64' ||
+          scope.arch != arch ||
           scope.runtimeProfile != profile ||
+          (platform == 'macos' && profile != 'interpreter-full') ||
           sha256.convert(baseline).toString() != scope.baseArtifactHash ||
           yaml['selection_protocol'] != 2 ||
           yaml['app_id'] != appId ||
@@ -129,7 +152,11 @@ class ReleaseSelectionArchive {
         manifest['app_id'] != scope.appId ||
         manifest['app_build_id'] != scope.releaseVersion ||
         manifest['selection_protocol'] != 2 ||
-        manifest['host_abi'] != scope.hostAbiHash) {
+        manifest['host_abi'] != scope.hostAbiHash ||
+        (scope.platform == 'macos' &&
+            (manifest['target_os'] != 'macos' ||
+                manifest['target_arch'] !=
+                    (scope.arch == 'x86_64' ? 'x64' : 'arm64')))) {
       throw const FormatException(
         'Original release supplement differs from packaged scope',
       );

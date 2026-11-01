@@ -24,6 +24,14 @@ class LinuxReleaser extends Releaser {
   });
 
   @override
+  FileSystemEntity get nativeSelectionPackage =>
+      artifactManager.linuxBundleDirectory;
+  @override
+  List<String> get nativeSelectionArches => [
+    DesktopArchitecture.native('linux').arch,
+  ];
+
+  @override
   ReleaseType get releaseType => ReleaseType.linux;
 
   @override

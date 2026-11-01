@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/artifact_manager.dart';
@@ -108,12 +109,39 @@ Please refer to ${link(uri: Uri.parse(troubleshootingUrl))} for potential workar
               releaseArtifact.value,
               message: 'Downloading release artifact ${i + 1}/$numArtifacts',
             );
+        if (selectionProtocol == 2) {
+          final artifact = releaseArtifact.value;
+          final scope = nativeSelectionScopes[releaseArtifact.key.arch];
+          if (scope == null ||
+              artifact.signing != nativeReleaseSigning ||
+              releaseArtifactFile.lengthSync() != artifact.size ||
+              sha256
+                      .convert(releaseArtifactFile.readAsBytesSync())
+                      .toString() !=
+                  artifact.hash ||
+              artifact.hash != scope.baseArtifactHash) {
+            throw const FormatException(
+              'Separate original Android AOT differs from '
+              'registered AAB baseline',
+            );
+          }
+        }
         releaseArtifactPaths[releaseArtifact.key] = releaseArtifactFile.path;
       } on Exception {
         throw ProcessExit(ExitCode.software.code);
       }
     }
 
+    if (selectionProtocol == 2 &&
+        (releaseArtifactPaths.length != nativeSelectionScopes.length ||
+            !releaseArtifactPaths.keys
+                .map((a) => a.arch)
+                .toSet()
+                .containsAll(nativeSelectionScopes.keys))) {
+      throw const FormatException(
+        'Incomplete original Android AOT architecture set',
+      );
+    }
     artifactsDownloadCompleted = true;
     return releaseArtifactPaths;
   }
@@ -148,6 +176,11 @@ Please refer to ${link(uri: Uri.parse(troubleshootingUrl))} for potential workar
           'Skipping ${arch.arch}: no libapp.so at $patchArtifactPath. '
           'This is expected if the project excludes this ABI from packaging.',
         );
+        if (selectionProtocol == 2) {
+          throw const FormatException(
+            'Missing required native patch architecture',
+          );
+        }
         skippedArchs.add(arch);
         continue;
       }

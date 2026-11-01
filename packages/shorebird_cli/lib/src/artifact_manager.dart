@@ -425,12 +425,27 @@ class ArtifactManager {
     required Future<T> Function(Directory? archsDir) action,
     String? flavor,
     File? aab,
+    bool requireAab = false,
   }) async {
+    if (requireAab && (aab == null || !aab.existsSync())) {
+      throw const FormatException(
+        'Protocol 2 requires a final AAB; intermediate fallback is prohibited.',
+      );
+    }
     if (aab != null && aab.existsSync()) {
       final extracted = Directory.systemTemp.createTempSync(
         'shorebird_aab_libapps',
       );
       try {
+        if (requireAab) {
+          await extractAndroidLibappsFromAab(aab, into: extracted);
+          if (!_containsLibapp(extracted)) {
+            throw const FormatException(
+              'Final AAB contains no native AOT libraries.',
+            );
+          }
+          return await action(extracted);
+        }
         if (await _tryExtractAndroidLibappsFromAab(aab, into: extracted)) {
           return await action(extracted);
         }

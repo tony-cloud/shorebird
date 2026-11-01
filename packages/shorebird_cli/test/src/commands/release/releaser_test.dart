@@ -22,6 +22,7 @@ import 'package:shorebird_cli/src/third_party/flutter_tools/lib/src/base/process
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 import 'package:test/test.dart';
 
+import '../../fixtures/native_selection.dart';
 import '../../helpers.dart';
 import '../../matchers.dart';
 import '../../mocks.dart';
@@ -32,8 +33,16 @@ class _TestReleaser extends Releaser {
   _TestReleaser({
     required super.argResults,
     this.releaseType = ReleaseType.linux,
+    this.nativePackage,
+    this.nativeArches = const [],
   }) : super(flavor: null, target: null);
 
+  final File? nativePackage;
+  final List<String> nativeArches;
+  @override
+  FileSystemEntity? get nativeSelectionPackage => nativePackage;
+  @override
+  List<String> get nativeSelectionArches => nativeArches;
   @override
   final ReleaseType releaseType;
 
@@ -390,6 +399,102 @@ To change the version of this release, change your app's version in your pubspec
           ),
         ).thenAnswer((_) async => true);
       });
+
+      for (final mutated in [false, true]) {
+        test(
+          'native two-pass rejects mutated=$mutated sealed AOT '
+          'and cleans private inputs',
+          () async {
+            when(
+              () => argResults[CommonArguments.patchSigningArg.name],
+            ).thenReturn(true);
+            final file = File(p.join(projectRoot.path, 'release.aab'));
+            releaser = _TestReleaser(
+              argResults: argResults,
+              releaseType: ReleaseType.android,
+              nativePackage: file,
+              nativeArches: ['arm', 'aarch64', 'x86_64'],
+            );
+            when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+              const ShorebirdYaml(
+                appId: nativeAppId,
+                selectionProtocol: 2,
+                aotPatchAppBuildId: nativeVersion,
+              ),
+            );
+            var environment = <String, String>{'EXISTING': 'preserved'};
+            when(
+              () => artifactBuilder.iosInterpreterBuildEnvironment,
+            ).thenAnswer((_) => environment);
+            when(
+              () => artifactBuilder.iosInterpreterBuildEnvironment = any(),
+            ).thenAnswer((invocation) {
+              return environment =
+                  invocation.positionalArguments.single as Map<String, String>;
+            });
+            final modes = <String>[];
+            String? privatePath;
+            Future<int> build(List<String> _, String? publicKey) async {
+              final manifest = File(
+                environment['SHOREBIRD_NATIVE_SELECTION_MANIFEST']!,
+              );
+              privatePath = manifest.parent.path;
+              final input =
+                  jsonDecode(manifest.readAsStringSync())
+                      as Map<String, dynamic>;
+              modes.add(input['mode'] as String);
+              expect(input['arches'], ['arm', 'aarch64', 'x86_64']);
+              final libraries = {
+                for (final arch in ['arm', 'aarch64', 'x86_64'])
+                  arch: nativeElf(
+                    arch,
+                    content: modes.length == 2 && mutated ? 2 : 1,
+                  ),
+              };
+              final scopes = <String, ReleaseSelectionScope>{};
+              for (final entry in input['entries'] as List) {
+                final object = entry as Map<String, dynamic>;
+                final scope = ReleaseSelectionScope.fromJson(
+                  object['scope'] as Map<String, dynamic>,
+                );
+                scopes[scope.arch] = scope;
+                expect(
+                  File(
+                    object['original_baseline_path'] as String,
+                  ).readAsBytesSync(),
+                  nativeElf(scope.arch),
+                );
+              }
+              nativePackage(
+                file.path,
+                libraries: libraries,
+                scopes: scopes.isEmpty ? null : scopes,
+                omitScopes: modes.length == 1,
+                policy: {'patch_public_key': publicKey},
+              );
+              return modes.length;
+            }
+
+            if (mutated) {
+              await expectLater(
+                () => runWithOverrides(() => releaser.runReleaseBuild(build)),
+                throwsA(isA<ArtifactBuildException>()),
+              );
+            } else {
+              expect(
+                await runWithOverrides(() => releaser.runReleaseBuild(build)),
+                2,
+              );
+            }
+            expect(modes, ['measure', 'sealed']);
+            expect(environment, {'EXISTING': 'preserved'});
+            expect(Directory(privatePath!).existsSync(), isFalse);
+            verify(
+              () => codePushClientWrapper.getSigningKey(appId: nativeAppId),
+            ).called(1);
+          },
+        );
+      }
 
       const refreshedDefines = [
         'FOO=bar',

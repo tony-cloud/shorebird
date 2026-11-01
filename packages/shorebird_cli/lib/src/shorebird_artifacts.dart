@@ -35,6 +35,9 @@ enum ShorebirdArtifact {
   /// The same ARM64 compiler selected by Flutter LocalEngineArtifacts.
   genSnapshotMacosFullReplacementArm64,
 
+  /// The same x64 compiler selected by Flutter LocalEngineArtifacts.
+  genSnapshotMacosFullReplacementX64,
+
   /// The gen_snapshot executable for macOS that creates arm64 snapshots.
   genSnapshotMacosArm64,
 
@@ -91,6 +94,7 @@ class ShorebirdCachedArtifacts implements ShorebirdArtifacts {
         return _iosEngineBinaryFile.path;
       case ShorebirdArtifact.macosEngineBinary:
       case ShorebirdArtifact.genSnapshotMacosFullReplacementArm64:
+      case ShorebirdArtifact.genSnapshotMacosFullReplacementX64:
         throw StateError(
           'Hosted macOS full replacement has no trusted capability artifact',
         );
@@ -284,6 +288,8 @@ class ShorebirdLocalEngineArtifacts implements ShorebirdArtifacts {
         ).path;
       case ShorebirdArtifact.genSnapshotMacosFullReplacementArm64:
         return _localIosExecutable('gen_snapshot_arm64').path;
+      case ShorebirdArtifact.genSnapshotMacosFullReplacementX64:
+        return _localIosExecutable('gen_snapshot_x64').path;
       case ShorebirdArtifact.genSnapshotMacosArm64:
         return _genSnapshotMacosArm64File.path;
       case ShorebirdArtifact.genSnapshotMacosX64:

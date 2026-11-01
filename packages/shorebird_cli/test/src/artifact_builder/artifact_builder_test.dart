@@ -2395,14 +2395,16 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
       });
 
       group('buildDartBytecodeSnapshot', () {
-        for (final (targetOS, hasRegistrant) in [
-          ('ios', false),
-          ('ios', true),
-          ('macos', false),
-          ('macos', true),
+        for (final (targetOS, targetArch, hasRegistrant) in [
+          ('ios', 'arm64', false),
+          ('ios', 'arm64', true),
+          ('macos', 'arm64', false),
+          ('macos', 'arm64', true),
+          ('macos', 'x64', false),
+          ('macos', 'x64', true),
         ]) {
           test(
-            '$targetOS full profile generates portable registrant inputs: '
+            '$targetOS/$targetArch full profile generates portable registrant inputs: '
             '$hasRegistrant',
             () async {
               final packages =
@@ -2467,6 +2469,7 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                   fullReplacement: true,
                   hostAbi: host,
                   targetOS: targetOS,
+                  targetArch: targetArch,
                 ),
               );
               final args =
@@ -2522,7 +2525,12 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                 ),
               );
               if (targetOS == 'macos') {
-                expect(registrantArgs, contains('-dDarwinArchs=arm64'));
+                expect(
+                  registrantArgs,
+                  contains(
+                    '-dDarwinArchs=${targetArch == 'x64' ? 'x86_64' : 'arm64'}',
+                  ),
+                );
               }
             },
           );

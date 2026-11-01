@@ -13,6 +13,7 @@ import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/patch/patcher.dart';
 import 'package:shorebird_cli/src/config/config.dart';
+import 'package:shorebird_cli/src/extensions/arg_results.dart';
 import 'package:shorebird_cli/src/extensions/directory.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/platform.dart';
@@ -29,6 +30,18 @@ mixin IosInterpreterPatcherMixin on Patcher {
   /// Explicit platform for the shared Apple interpreter transport.
   String get interpreterTargetOS =>
       releaseType == ReleaseType.macos ? 'macos' : 'ios';
+
+  /// Exact single architecture requested for this interpreter patch.
+  Arch get interpreterArchitecture =>
+      interpreterTargetOS == 'macos' &&
+          validateMacosFullReplacementBuildArgs(argResults.forwardedArgs) ==
+              'x64'
+      ? Arch.x86_64
+      : Arch.arm64;
+
+  String get _interpreterTargetArch =>
+      interpreterArchitecture == Arch.x86_64 ? 'x64' : 'arm64';
+
   String? _comparisonReleaseBaseHash;
   String? _comparisonCurrentBaseHash;
   bool _preparedFullReplacement = false;
@@ -42,7 +55,7 @@ mixin IosInterpreterPatcherMixin on Patcher {
     return FullReplacementArchiveDiffer(
       releaseBaseHash: _comparisonReleaseBaseHash!,
       comparisonBaseHash: _comparisonCurrentBaseHash!,
-      nativeAssetsTarget: '${interpreterTargetOS}_arm64',
+      nativeAssetsTarget: '${interpreterTargetOS}_$_interpreterTargetArch',
     );
   }
 
@@ -257,7 +270,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       baseSnapshotHash: baseSnapshotHash,
       patchSnapshotHash: open_patch.sha256Hex(patchSnapshot),
       targetOs: interpreterTargetOS,
-      targetArch: 'arm64',
+      targetArch: _interpreterTargetArch,
       runtimeMode: open_patch.runtimeModeDartBytecodeInterpreter,
       obfuscationMapHash: _emptyToNull(obfuscationMapHash),
       offlineExpiresAt: offlineExpiresAt,
@@ -289,7 +302,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       // empty base produces a full replacement independent of its native base.
       // createDiffBundle signs the reconstructed AES envelope, not the diff.
       final bundle = await createDiffBundle(
-        arch: Arch.arm64,
+        arch: interpreterArchitecture,
         releaseArtifactPath: emptyBase.path,
         patchArtifactPath: outputFile.path,
         progress: progress,
@@ -300,7 +313,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
         artifactKeyId: encrypted.keyId,
       );
       progress.complete();
-      return {Arch.arm64: bundle};
+      return {interpreterArchitecture: bundle};
     } finally {
       emptyBaseDirectory.deleteTemporarySync();
     }
@@ -374,7 +387,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
           'app_id': manifest['app_id'],
           'release_version': manifest['app_build_id'],
           'platform': interpreterTargetOS,
-          'arch': 'aarch64',
+          'arch': interpreterArchitecture.arch,
           'base_artifact_hash': open_patch.sha256Hex(
             nativeBaseline.readAsBytesSync(),
           ),
@@ -432,7 +445,10 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest);
       replacementHost =
           (await (interpreterTargetOS == 'macos'
-                ? iosReplacementHostResolver.resolve(targetOS: 'macos')
+                ? iosReplacementHostResolver.resolve(
+                    targetOS: 'macos',
+                    targetArch: _interpreterTargetArch,
+                  )
                 : iosReplacementHostResolver.resolve()))
             ..validateReleased(manifest);
     }
@@ -459,6 +475,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       target: target,
       flavor: flavor,
       targetOS: interpreterTargetOS,
+      targetArch: _interpreterTargetArch,
     );
     await bytecodeBuilder.build(
       outputPath: _interpreterPatchBytecodeOutputPath,
@@ -499,9 +516,9 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
     if (interpreterTargetOS == 'macos' &&
         (!IosBytecodeBuilder.fullReplacementForManifest(manifest) ||
             manifest['target_os'] != 'macos' ||
-            manifest['target_arch'] != 'arm64')) {
+            manifest['target_arch'] != _interpreterTargetArch)) {
       throw ArtifactBuildException(
-        'macOS interpreter patches require a released macos/arm64 full-replacement baseline.',
+        'macOS interpreter patches require a released macos/$_interpreterTargetArch full-replacement baseline.',
       );
     }
     return manifest;

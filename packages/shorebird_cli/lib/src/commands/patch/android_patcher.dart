@@ -133,10 +133,16 @@ See more info in the open issue tracker: ${link(uri: Uri.parse(openShorebirdIssu
 
     // [buildPatchArtifact] runs before this and records the patch AAB; with
     // no AAB (a direct call without it) this reads AGP's stripped output.
+    if (selectionProtocol == 2 && _patchAab == null) {
+      throw const FormatException(
+        'Native protocol 2 requires the final built AAB',
+      );
+    }
     return ArtifactManager.withAndroidArchsDirectoryFromAab(
       projectRoot: projectRoot,
       flavor: flavor,
       aab: _patchAab,
+      requireAab: selectionProtocol == 2,
       action: (patchArchsBuildDir) async {
         if (patchArchsBuildDir == null) {
           logger

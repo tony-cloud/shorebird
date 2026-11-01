@@ -1041,6 +1041,33 @@ void main() {
         expect(extracted!.existsSync(), isFalse);
       });
 
+      test(
+        'protocol 2 forbids intermediate fallback for missing or invalid AAB',
+        () async {
+          final stripped = strippedOutLib()..createSync(recursive: true);
+          File(p.join(stripped.path, 'arm64-v8a', 'libapp.so'))
+            ..createSync(recursive: true)
+            ..writeAsStringSync('stale');
+          var calls = 0;
+          for (final aab in <File?>[
+            null,
+            File('missing.aab'),
+            File('invalid.aab')..writeAsStringSync('invalid ZIP'),
+          ]) {
+            await expectLater(
+              () => ArtifactManager.withAndroidArchsDirectoryFromAab(
+                projectRoot: projectRoot,
+                aab: aab,
+                requireAab: true,
+                action: (_) async => calls++,
+              ),
+              throwsA(isA<Exception>()),
+            );
+          }
+          expect(calls, 0);
+        },
+      );
+
       test('falls back to the stripped dir when no aab is provided', () async {
         final stripped = strippedOutLib()..createSync(recursive: true);
 

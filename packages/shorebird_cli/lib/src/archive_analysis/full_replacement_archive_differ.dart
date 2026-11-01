@@ -218,14 +218,15 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
         if (policy['selection_protocol'] == 2) {
           final platform = switch (nativeAssetsTarget) {
             'ios_arm64' => 'ios',
-            'macos_arm64' => 'macos',
+            'macos_arm64' || 'macos_x64' => 'macos',
             _ => throw const FormatException(
               'Unsupported native comparison selection target.',
             ),
           };
+          final arch = nativeAssetsTarget == 'macos_x64' ? 'x86_64' : 'aarch64';
           scopePath = policyPath.replaceFirst(
             RegExp(r'shorebird\.yaml$'),
-            'shorebird_release_scope_${platform}_aarch64.json',
+            'shorebird_release_scope_${platform}_$arch.json',
           );
           final scopeFile = archive.find(scopePath);
           if (scopeFile == null ||
@@ -253,7 +254,7 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
               scope.appId != policy['app_id'] ||
               scope.releaseVersion != policy['aot_patch_app_build_id'] ||
               scope.platform != platform ||
-              scope.arch != 'aarch64' ||
+              scope.arch != arch ||
               scope.runtimeProfile != 'interpreter-full') {
             throw const FormatException(
               'Native comparison selection scope binding mismatch.',

@@ -25,10 +25,14 @@ class IosBytecodeBuilder {
     this.target,
     this.flavor,
     this.targetOS = 'ios',
+    this.targetArch = 'arm64',
   });
 
   /// Explicit Apple compiler platform; defaults preserve existing iOS callers.
   final String targetOS;
+
+  /// Explicit native architecture, preserved in compiler build inputs.
+  final String targetArch;
 
   /// Project root containing the package configuration.
   final Directory projectRoot;
@@ -77,6 +81,7 @@ class IosBytecodeBuilder {
       fullReplacement: fullReplacement,
       hostAbi: hostAbi,
       targetOS: targetOS,
+      targetArch: targetArch,
     );
   }
 

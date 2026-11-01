@@ -767,7 +767,14 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     bool fullReplacement = false,
     String? hostAbi,
     String targetOS = 'ios',
+    String targetArch = 'arm64',
   }) async {
+    if ((targetOS == 'ios' && targetArch != 'arm64') ||
+        (targetOS == 'macos' && !const {'arm64', 'x64'}.contains(targetArch))) {
+      throw ArtifactBuildException(
+        'Unsupported Apple bytecode target architecture.',
+      );
+    }
     if (!const ['ios', 'macos'].contains(targetOS) ||
         (targetOS == 'macos' && !fullReplacement)) {
       throw ArtifactBuildException(
@@ -818,7 +825,8 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
           'assemble',
           '--output=${p.join(projectRoot, 'build', 'shorebird_registrant')}',
           '-dTargetPlatform=${targetOS == 'macos' ? 'darwin' : 'ios'}',
-          if (targetOS == 'macos') '-dDarwinArchs=arm64',
+          if (targetOS == 'macos')
+            '-dDarwinArchs=${targetArch == 'x64' ? 'x86_64' : 'arm64'}',
           '-dBuildMode=release',
           '-dTargetFile=${p.absolute(inputFilePath)}',
           'gen_dart_plugin_registrant',

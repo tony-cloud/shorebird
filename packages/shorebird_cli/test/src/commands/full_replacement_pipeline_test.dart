@@ -83,12 +83,18 @@ class _IosReleaser extends Releaser {
 
 void main() {
   useTempWorkingDirectory();
-  for (final targetOS in ['ios', 'macos']) {
-    group(targetOS, () => pipelineTests(targetOS));
+  for (final (targetOS, targetArch) in [
+    ('ios', 'arm64'),
+    ('macos', 'arm64'),
+    ('macos', 'x64'),
+  ]) {
+    group('$targetOS/$targetArch', () => pipelineTests(targetOS, targetArch));
   }
 }
 
-void pipelineTests(String targetOS) {
+void pipelineTests(String targetOS, String targetArch) {
+  final wireArch = targetArch == 'x64' ? 'x86_64' : 'aarch64';
+  final architecture = targetArch == 'x64' ? Arch.x86_64 : Arch.arm64;
   const appId = '11111111-1111-4111-8111-111111111111';
   const releaseVersion = '1.2.3+4';
   const releaseId = 42;
@@ -244,7 +250,7 @@ void pipelineTests(String targetOS) {
     final descriptor = utf8.encode(
       jsonEncode({
         'schema': 1,
-        'target': descriptorTarget ?? '${targetOS}_arm64',
+        'target': descriptorTarget ?? '${targetOS}_$targetArch',
         'carrier_present': mappingDigest != null,
         'mapping_sha256': ?mappingDigest,
       }),
@@ -280,7 +286,7 @@ void pipelineTests(String targetOS) {
           'app_id': appId,
           'release_version': releaseVersion,
           'platform': targetOS,
-          'arch': 'aarch64',
+          'arch': wireArch,
           'base_artifact_hash': manifest['base_snapshot_hash'],
           'host_abi_hash': manifest['host_abi'],
           'runtime_profile': 'interpreter-full',
@@ -288,7 +294,7 @@ void pipelineTests(String targetOS) {
       );
       archive.addFile(
         ArchiveFile(
-          '$assets/shorebird_release_scope_${targetOS}_aarch64.json',
+          '$assets/shorebird_release_scope_${targetOS}_$wireArch.json',
           scope.length,
           scope,
         ),
@@ -345,6 +351,7 @@ void pipelineTests(String targetOS) {
     resolver = _MockHostResolver();
     host = IosReplacementHost(
       targetOS: targetOS,
+      targetArch: targetArch,
       artifacts: {
         'engine': 'a' * 64,
         'gen_snapshot': 'b' * 64,
@@ -366,7 +373,7 @@ void pipelineTests(String targetOS) {
     when(() => args.options).thenReturn([]);
     when(() => args.rest).thenReturn([
       '--dart-define=APP=changed',
-      if (targetOS == 'macos') '--target-platform=darwin-arm64',
+      if (targetOS == 'macos') '--target-platform=darwin-$targetArch',
     ]);
     when(() => args.wasParsed(any())).thenReturn(false);
     when(() => env.getShorebirdProjectRoot()).thenReturn(project);
@@ -382,7 +389,7 @@ void pipelineTests(String targetOS) {
     when(() => flutter.getConfig()).thenReturn({});
     when(() => resolver.resolve()).thenAnswer((_) async => host);
     when(
-      () => resolver.resolve(targetOS: 'macos'),
+      () => resolver.resolve(targetOS: 'macos', targetArch: targetArch),
     ).thenAnswer((_) async => host);
     when(() => logger.progress(any())).thenReturn(MockProgress());
     buildEnvironment = {'PRESERVED': 'original'};
@@ -437,6 +444,7 @@ void pipelineTests(String targetOS) {
         fullReplacement: any(named: 'fullReplacement'),
         hostAbi: any(named: 'hostAbi'),
         targetOS: any(named: 'targetOS'),
+        targetArch: any(named: 'targetArch'),
       ),
     ).thenAnswer((invocation) async {
       compilations.add(invocation);
@@ -522,7 +530,7 @@ void pipelineTests(String targetOS) {
         () => releaser.runReleaseBuild((buildArgs, key) async {
           expect(buildArgs, [
             '--dart-define=APP=changed',
-            if (targetOS == 'macos') '--target-platform=darwin-arm64',
+            if (targetOS == 'macos') '--target-platform=darwin-$targetArch',
           ]);
           expect(buildEnvironment['SHOREBIRD_AOT_HOST_ABI'], host.hostAbi);
           final nativeBase = File(
@@ -537,10 +545,14 @@ void pipelineTests(String targetOS) {
           return 'native release';
         }),
       );
+      expect(compilations.single.namedArguments[#targetOS], targetOS);
+      expect(compilations.single.namedArguments[#targetArch], targetArch);
       expect(result, 'native release');
       expect(buildEnvironment, same(previous));
       if (targetOS == 'macos') {
-        verify(() => resolver.resolve(targetOS: 'macos')).called(1);
+        verify(
+          () => resolver.resolve(targetOS: 'macos', targetArch: targetArch),
+        ).called(1);
       } else {
         verify(() => resolver.resolve()).called(1);
       }
@@ -610,6 +622,7 @@ void pipelineTests(String targetOS) {
               jsonDecode(buildEnvironment['SHOREBIRD_RELEASE_SCOPE']!) as Map;
           expect(scope.keys, hasLength(7));
           expect(scope['release_version'], releaseVersion);
+          expect(scope['arch'], wireArch);
           expect(
             scope['base_artifact_hash'],
             open_patch.sha256Hex(baseline.encode()),
@@ -648,6 +661,7 @@ void pipelineTests(String targetOS) {
         version: releaseVersion,
         platform: targetOS,
         expectedPublicKey: 'compiled-public-key',
+        arch: wireArch,
       );
       nativeBuild = () async {
         // The native compiler requires the current domain, not the release's
@@ -700,6 +714,7 @@ void pipelineTests(String targetOS) {
           version: releaseVersion,
           platform: targetOS,
           expectedPublicKey: 'compiled-public-key',
+          arch: wireArch,
         ).toJson(),
         scope,
       );
@@ -765,7 +780,9 @@ void pipelineTests(String targetOS) {
         p.join(getSupplement().path, IosBytecodeBuilder.baselineFileName),
       );
       if (targetOS == 'macos') {
-        verify(() => resolver.resolve(targetOS: 'macos')).called(1);
+        verify(
+          () => resolver.resolve(targetOS: 'macos', targetArch: targetArch),
+        ).called(1);
       } else {
         verify(() => resolver.resolve()).called(1);
       }
@@ -851,10 +868,11 @@ void pipelineTests(String targetOS) {
         open_patch.sha256Hex(baseline.encode()),
       );
       expect(encrypted.metadata.targetOs, targetOS);
-      expect(encrypted.metadata.targetArch, 'arm64');
+      expect(artifacts.keys, [architecture]);
+      expect(encrypted.metadata.targetArch, targetArch);
       expect(encrypted.metadata.flavorId, 'pro');
       expect(
-        artifacts[Arch.arm64]!.hash,
+        artifacts[architecture]!.hash,
         open_patch.sha256Hex(envelope.readAsBytesSync()),
       );
       expect(compilations, hasLength(1));
@@ -950,13 +968,60 @@ void pipelineTests(String targetOS) {
     },
   );
 
+  if (targetOS == 'macos') {
+    test(
+      'original full scope and supplement reject the other macOS architecture',
+      () async {
+        yaml = policy(protocol: 2);
+        await scoped(() => releaser.runReleaseBuild((_, _) async {}));
+        final manifest = readManifest()
+          ..addAll({'release_id': releaseId, 'app_build_id': releaseVersion});
+        File(
+          p.join(getSupplement().path, IosBytecodeBuilder.manifestFileName),
+        ).writeAsStringSync(jsonEncode(manifest));
+        final package = writeCompiledRelease(manifest);
+        expect(
+          () => ReleaseSelectionArchive.verifyPackage(
+            package,
+            appId: appId,
+            version: releaseVersion,
+            platform: 'macos',
+            arch: wireArch == 'x86_64' ? 'aarch64' : 'x86_64',
+            expectedPublicKey: 'compiled-public-key',
+          ),
+          throwsFormatException,
+        );
+        final released = ReleaseSelectionArchive.verifyPackage(
+          package,
+          appId: appId,
+          version: releaseVersion,
+          platform: 'macos',
+          arch: wireArch,
+          expectedPublicKey: 'compiled-public-key',
+        );
+        expect(released.hostAbiHash, host.hostAbi);
+        patcher.releaseSupplementDirectory = getSupplement();
+        events.clear();
+        manifest['target_arch'] = targetArch == 'x64' ? 'arm64' : 'x64';
+        File(
+          p.join(getSupplement().path, IosBytecodeBuilder.manifestFileName),
+        ).writeAsStringSync(jsonEncode(manifest));
+        await expectLater(buildPatch(), throwsA(isA<ArtifactBuildException>()));
+        expect(events, isEmpty);
+      },
+    );
+  }
+
   test(
     'a different native host is rejected before compiler or native build',
     () async {
       await release();
-      when(() => resolver.resolve(targetOS: targetOS)).thenAnswer(
+      when(
+        () => resolver.resolve(targetOS: targetOS, targetArch: targetArch),
+      ).thenAnswer(
         (_) async => IosReplacementHost(
           targetOS: targetOS,
+          targetArch: targetArch,
           artifacts: {...host.artifacts, 'engine': 'f' * 64},
           toolchainVersion: host.toolchainVersion,
           toolchainProvenance: host.toolchainProvenance,
@@ -1095,7 +1160,7 @@ void pipelineTests(String targetOS) {
         expect(patcher.archiveDifferOverride, isNull);
         verifyZeroInteractions(resolver);
         final artifacts = await packagePatch();
-        expect(artifacts.keys, [Arch.arm64]);
+        expect(artifacts.keys, [architecture]);
       },
     );
   }

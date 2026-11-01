@@ -7,6 +7,7 @@ import 'package:mason_logger/mason_logger.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
+import 'package:shorebird_cli/src/archive_analysis/native_selection_archive.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_replacement_host.dart';
@@ -16,9 +17,9 @@ import 'package:shorebird_cli/src/code_signer.dart';
 import 'package:shorebird_cli/src/common_arguments.dart';
 import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/extensions/arg_results.dart';
-import 'package:shorebird_cli/src/flutter_version_constraints.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
+import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -93,6 +94,20 @@ To change the version of this release, change your app's version in your pubspec
   /// Implementations run their Flutter build through [runReleaseBuild].
   Future<FileSystemEntity> buildReleaseArtifacts();
 
+  /// Explicit interpreter architecture; existing iOS callers remain ARM64.
+  Arch get interpreterArchitecture =>
+      releaseType == ReleaseType.macos &&
+          validateMacosFullReplacementBuildArgs(argResults.forwardedArgs) ==
+              'x64'
+      ? Arch.x86_64
+      : Arch.arm64;
+
+  /// Native package and architecture set produced by this releaser.
+  FileSystemEntity? get nativeSelectionPackage => null;
+
+  /// Complete wire architecture set produced by this native build.
+  List<String> get nativeSelectionArches => const [];
+
   /// Runs a release's Flutter [build] with the arguments every release build
   /// shares, then checks the build produced what those arguments promised.
   ///
@@ -143,6 +158,81 @@ To change the version of this release, change your app's version in your pubspec
           ReleaseType.macos,
         }.contains(releaseType) &&
         yaml?.aotPatchRuntimeMode == 'dart-bytecode-interpreter';
+    if (yaml?.selectionProtocol == 2 &&
+        NativeSelectionArchive.platforms.contains(
+          releaseType.releasePlatform.name,
+        )) {
+      final version = yaml!.aotPatchAppBuildId;
+      if (version == null || version.isEmpty || base64PublicKey == null) {
+        throw ArtifactBuildException(
+          'Native protocol 2 requires aot_patch_app_build_id '
+          'and managed signing.',
+        );
+      }
+      final manifest = NativeSelectionManifest(
+        appId: yaml.getAppId(flavor: flavor),
+        version: version,
+        platform: releaseType.releasePlatform.name,
+        arches: nativeSelectionArches,
+      );
+      final previous = artifactBuilder.iosInterpreterBuildEnvironment;
+      artifactBuilder.iosInterpreterBuildEnvironment = {
+        ...previous,
+        'SHOREBIRD_NATIVE_SELECTION_MANIFEST': manifest.file.absolute.path,
+      };
+      try {
+        manifest.write();
+        await build(buildArgs, base64PublicKey);
+        final libraries = NativeSelectionArchive.baselines(
+          nativeSelectionPackage!,
+          manifest.platform,
+          manifest.arches,
+        );
+        final scopes = {
+          for (final entry in libraries.entries)
+            entry.key: ReleaseSelectionScope(
+              appId: manifest.appId,
+              releaseVersion: version,
+              platform: manifest.platform,
+              arch: entry.key,
+              baseArtifactHash: sha256.convert(entry.value).toString(),
+              hostAbiHash: null,
+              runtimeProfile: 'native-aot',
+            ),
+        };
+        manifest.write(scopes: scopes, baselines: libraries);
+        final result = await build(buildArgs, base64PublicKey);
+        final sealedLibraries = NativeSelectionArchive.baselines(
+          nativeSelectionPackage!,
+          manifest.platform,
+          manifest.arches,
+        );
+        for (final arch in manifest.arches) {
+          if (sha256.convert(sealedLibraries[arch]!).toString() !=
+              scopes[arch]!.baseArtifactHash) {
+            throw ArtifactBuildException(
+              'Sealed build changed packaged native AOT bytes; '
+              'refusing publication.',
+            );
+          }
+        }
+        NativeSelectionArchive.verify(
+          nativeSelectionPackage!,
+          appId: manifest.appId,
+          version: version,
+          platform: manifest.platform,
+          arches: manifest.arches,
+          expectedPublicKey: base64PublicKey,
+          expectedNativePatchMaxBytes: yaml.nativePatchMaxBytes,
+          expectedScopes: scopes,
+        );
+        verifyObfuscationMap();
+        return result;
+      } finally {
+        artifactBuilder.iosInterpreterBuildEnvironment = previous;
+        manifest.dispose();
+      }
+    }
     File? baseline;
     IosReplacementHost? replacementHost;
     List<String>? bytecodeDartDefines;
@@ -165,11 +255,17 @@ To change the version of this release, change your app's version in your pubspec
         target: target,
         flavor: flavor,
         targetOS: targetOS,
+        targetArch: interpreterArchitecture == Arch.x86_64 ? 'x64' : 'arm64',
       );
       final fullReplacement = yaml!.aotPatchFullReplacement ?? false;
       if (fullReplacement) {
         replacementHost = targetOS == 'macos'
-            ? await iosReplacementHostResolver.resolve(targetOS: targetOS)
+            ? await iosReplacementHostResolver.resolve(
+                targetOS: targetOS,
+                targetArch: interpreterArchitecture == Arch.x86_64
+                    ? 'x64'
+                    : 'arm64',
+              )
             : await iosReplacementHostResolver.resolve();
       }
       bytecodeDartDefines = List.unmodifiable(
@@ -221,7 +317,7 @@ To change the version of this release, change your app's version in your pubspec
           appId: yaml.getAppId(flavor: flavor),
           releaseVersion: version,
           platform: targetOS,
-          arch: 'aarch64',
+          arch: interpreterArchitecture.arch,
           baseArtifactHash: measured,
           hostAbiHash: replacementHost?.hostAbi,
           runtimeProfile: fullReplacement

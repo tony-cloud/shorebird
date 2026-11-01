@@ -29,6 +29,14 @@ class WindowsReleaser extends Releaser {
   });
 
   @override
+  FileSystemEntity get nativeSelectionPackage =>
+      artifactManager.getWindowsReleaseDirectory();
+  @override
+  List<String> get nativeSelectionArches => [
+    DesktopArchitecture.native('windows').arch,
+  ];
+
+  @override
   ReleaseType get releaseType => ReleaseType.windows;
 
   @override

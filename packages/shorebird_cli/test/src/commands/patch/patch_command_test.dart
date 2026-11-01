@@ -1854,6 +1854,40 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
       });
     });
 
+    for (final nativeType in [
+      ReleaseType.android,
+      ReleaseType.linux,
+      ReleaseType.windows,
+    ]) {
+      test(
+        'native protocol-2 $nativeType resolves identity before building',
+        () async {
+          when(() => argResults.wasParsed('release-version')).thenReturn(false);
+          when(() => shorebirdEnv.canAcceptUserInput).thenReturn(false);
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(const ShorebirdYaml(appId: appId, selectionProtocol: 2));
+          when(() => patcher.releaseType).thenReturn(nativeType);
+          when(() => patcher.requiresReleaseVersionArg).thenReturn(false);
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(
+              isA<UsageException>().having(
+                (error) => error.message,
+                'message',
+                startsWith('Missing required argument: --release-version.'),
+              ),
+            ),
+          );
+          verifyNever(
+            () => patcher.buildPatchArtifact(
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+        },
+      );
+    }
+
     group('when the patcher requires --release-version', () {
       setUp(() {
         when(() => patcher.requiresReleaseVersionArg).thenReturn(true);

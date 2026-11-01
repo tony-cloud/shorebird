@@ -912,6 +912,7 @@ Please create a release using "shorebird release" and try again.
       projectRoot: Directory(projectRoot),
       flavor: flavor,
       aab: File(aabPath),
+      requireAab: shorebirdEnv.getShorebirdYaml()?.selectionProtocol == 2,
       action: (archsDir) async {
         if (archsDir == null) {
           _handleErrorAndExit(

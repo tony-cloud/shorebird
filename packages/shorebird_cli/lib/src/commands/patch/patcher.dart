@@ -68,6 +68,15 @@ More info: ${troubleshootingUrl.toLink()}.
   /// Protocol fixed by the downloaded release, never inferred from source.
   int selectionProtocol = 1;
 
+  /// Original native scopes independently verified from the released package.
+  Map<String, ReleaseSelectionScope> nativeSelectionScopes = const {};
+
+  /// Exact original packaged libraries used only as private Flutter inputs.
+  Map<String, List<int>> nativeSelectionBaselines = const {};
+
+  /// Managed signing policy of the original native package.
+  ArtifactSigning? nativeReleaseSigning;
+
   /// The path to the release's obfuscation map, if the patch should reuse
   /// the release's obfuscated names. Set by the patch command. Only set when
   /// [obfuscate] is true and the release's Flutter supports loading the map.
@@ -351,9 +360,21 @@ More info: ${troubleshootingUrl.toLink()}.
       size: await File(diffPath).length(),
       hashSignature: hashSignature,
       podfileLockHash: podfileLockHash,
-      offlineExpiresAt: offlineExpiresAt,
-      variantId: variantId,
-      licenseType: licenseType,
+      offlineExpiresAt:
+          offlineExpiresAt ??
+          (nativeSelectionScopes.isNotEmpty
+              ? shorebirdEnv.getShorebirdYaml()?.aotPatchOfflineExpiresAt
+              : null),
+      variantId:
+          variantId ??
+          (nativeSelectionScopes.isNotEmpty
+              ? argResults['variant'] as String?
+              : null),
+      licenseType:
+          licenseType ??
+          (nativeSelectionScopes.isNotEmpty
+              ? shorebirdEnv.getShorebirdYaml()?.aotPatchLicenseType
+              : null),
       artifactKeyId: artifactKeyId,
     );
   }
