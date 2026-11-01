@@ -381,22 +381,6 @@ void main() {
       'full macOS host uses the same executable candidate order as Flutter',
       () async {
         final root = p.join(localEngineSrcPath, 'out', localEngine);
-        final selected =
-            File(
-                p.join(
-                  root,
-                  'FlutterMacOS.xcframework',
-                  'macos-arm64_x86_64',
-                  'FlutterMacOS.framework',
-                  'FlutterMacOS',
-                ),
-              )
-              ..createSync(recursive: true)
-              ..writeAsStringSync('selected XC bytes');
-        final ignored =
-            File(p.join(root, 'FlutterMacOS.framework', 'FlutterMacOS'))
-              ..createSync(recursive: true)
-              ..writeAsStringSync('divergent root bytes');
         for (final directory in ['.', 'universal', 'clang_arm64']) {
           final file = File(
             p.normalize(p.join(root, directory, 'gen_snapshot_arm64')),
@@ -413,6 +397,32 @@ void main() {
           ),
           p.join(root, 'gen_snapshot_arm64'),
         );
+      },
+      skip: Platform.isWindows
+          ? 'Requires POSIX executable permission bits'
+          : false,
+    );
+
+    test(
+      'full macOS host selects mandatory XC bytes without a root fallback',
+      () {
+        final root = p.join(localEngineSrcPath, 'out', localEngine);
+        final selected =
+            File(
+                p.join(
+                  root,
+                  'FlutterMacOS.xcframework',
+                  'macos-arm64_x86_64',
+                  'FlutterMacOS.framework',
+                  'FlutterMacOS',
+                ),
+              )
+              ..createSync(recursive: true)
+              ..writeAsStringSync('selected XC bytes');
+        final ignored =
+            File(p.join(root, 'FlutterMacOS.framework', 'FlutterMacOS'))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('divergent root bytes');
         expect(
           runWithOverrides(
             () => artifacts.getArtifactPath(
@@ -476,24 +486,10 @@ void main() {
         );
       });
 
-      test('returns correct path for gen_snapshot on iOS', () {
-        final executable = File(
-          p.join(
-            localEngineSrcPath,
-            'out',
-            localEngine,
-            'universal',
-            'gen_snapshot_arm64',
-          ),
-        )..createSync(recursive: true);
-        Process.runSync('chmod', ['+x', executable.path]);
-        expect(
-          runWithOverrides(
-            () => artifacts.getArtifactPath(
-              artifact: ShorebirdArtifact.genSnapshotIos,
-            ),
-          ),
-          equals(
+      test(
+        'returns correct path for gen_snapshot on iOS',
+        () {
+          final executable = File(
             p.join(
               localEngineSrcPath,
               'out',
@@ -501,43 +497,76 @@ void main() {
               'universal',
               'gen_snapshot_arm64',
             ),
-          ),
-        );
-      });
-
-      test('prefers the first runnable snapshot compiler candidate', () {
-        final root = p.join(localEngineSrcPath, 'out', localEngine);
-        for (final directory in ['.', 'universal', 'clang_x64']) {
-          final executable = File(p.join(root, directory, 'gen_snapshot_arm64'))
-            ..createSync(recursive: true);
+          )..createSync(recursive: true);
           Process.runSync('chmod', ['+x', executable.path]);
-        }
-        expect(
-          runWithOverrides(
-            () => artifacts.getArtifactPath(
-              artifact: ShorebirdArtifact.genSnapshotIos,
+          expect(
+            runWithOverrides(
+              () => artifacts.getArtifactPath(
+                artifact: ShorebirdArtifact.genSnapshotIos,
+              ),
             ),
-          ),
-          p.join(root, 'gen_snapshot_arm64'),
-        );
-      });
+            equals(
+              p.join(
+                localEngineSrcPath,
+                'out',
+                localEngine,
+                'universal',
+                'gen_snapshot_arm64',
+              ),
+            ),
+          );
+        },
+        skip: Platform.isWindows
+            ? 'Requires POSIX executable permission bits'
+            : false,
+      );
 
-      test('ignores nonexecutable snapshot compiler candidates', () {
-        final root = p.join(localEngineSrcPath, 'out', localEngine);
-        File(p.join(root, 'gen_snapshot_arm64')).createSync(recursive: true);
-        final executable = File(
-          p.join(root, 'clang_arm64', 'gen_snapshot_arm64'),
-        )..createSync(recursive: true);
-        Process.runSync('chmod', ['+x', executable.path]);
-        expect(
-          runWithOverrides(
-            () => artifacts.getArtifactPath(
-              artifact: ShorebirdArtifact.genSnapshotIos,
+      test(
+        'prefers the first runnable snapshot compiler candidate',
+        () {
+          final root = p.join(localEngineSrcPath, 'out', localEngine);
+          for (final directory in ['.', 'universal', 'clang_x64']) {
+            final executable = File(
+              p.join(root, directory, 'gen_snapshot_arm64'),
+            )..createSync(recursive: true);
+            Process.runSync('chmod', ['+x', executable.path]);
+          }
+          expect(
+            runWithOverrides(
+              () => artifacts.getArtifactPath(
+                artifact: ShorebirdArtifact.genSnapshotIos,
+              ),
             ),
-          ),
-          executable.path,
-        );
-      });
+            p.join(root, 'gen_snapshot_arm64'),
+          );
+        },
+        skip: Platform.isWindows
+            ? 'Requires POSIX executable permission bits'
+            : false,
+      );
+
+      test(
+        'ignores nonexecutable snapshot compiler candidates',
+        () {
+          final root = p.join(localEngineSrcPath, 'out', localEngine);
+          File(p.join(root, 'gen_snapshot_arm64')).createSync(recursive: true);
+          final executable = File(
+            p.join(root, 'clang_arm64', 'gen_snapshot_arm64'),
+          )..createSync(recursive: true);
+          Process.runSync('chmod', ['+x', executable.path]);
+          expect(
+            runWithOverrides(
+              () => artifacts.getArtifactPath(
+                artifact: ShorebirdArtifact.genSnapshotIos,
+              ),
+            ),
+            executable.path,
+          );
+        },
+        skip: Platform.isWindows
+            ? 'Requires POSIX executable permission bits'
+            : false,
+      );
 
       test('rejects a missing local iOS snapshot compiler', () {
         expect(
