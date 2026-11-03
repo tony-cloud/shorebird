@@ -64,6 +64,9 @@ class _E2eArtifactManager extends ArtifactManager {
 }
 
 void main() {
+  setUpAll(() {
+    registerFallbackValue(Directory(''));
+  });
   final configPath = io.Platform.environment['SHOREBIRD_AOT_LINK_E2E'];
   test(
     'ios-aot-link host end-to-end',
@@ -96,6 +99,7 @@ void main() {
       ).thenReturn(File(config['dart'] as String));
       when(() => shorebirdEnv.iosPodfileLockHash).thenReturn(null);
       final platform = TestNativePlatform(
+        operatingSystem: 'macos',
         environment: {iosLinkerEnvVar: config['tool'] as String},
       );
       final artifactManager = _E2eArtifactManager(

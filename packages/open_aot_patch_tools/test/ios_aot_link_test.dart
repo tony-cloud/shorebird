@@ -11,8 +11,10 @@ const _head =
     'id\tsnapshot_hash\taaaa\n'
     'id\tfeatures\tproduct arm64 ios\n'
     'meta\tnum_cids\t10\n'
-    'meta\ttext_image_size\t4096\n'
-    'class\t176\tpackage:x/x.dart::X\t16\n';
+    'meta\tnum_cids\t10\n'
+    'class\t176\tpackage:x/x.dart::X\t16\n'
+    'code\t_kDartSnapshotText\t128\t252\tfn:package:x/x.dart::f#0/0\n'
+    'meta\ttext_image_size\t4096\n';
 final _textSha = sha256.convert(utf8.encode('text')).toString();
 
 void main() {

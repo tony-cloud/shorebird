@@ -313,31 +313,39 @@ typedef SidecarIdentity = ({
 /// Reads the compiler identity (`id` lines) and `meta text_image_size` from
 /// the head of [sidecar] without parsing the (multi-megabyte) rest.
 SidecarIdentity readSidecarIdentity(File sidecar) {
+  // The `id` lines open the file; `meta text_image_size` is written last,
+  // after the code table.
+  const window = 65536;
   final raf = sidecar.openSync();
   final String head;
+  final String tail;
   try {
-    head = utf8.decode(raf.readSync(65536), allowMalformed: true);
+    final length = raf.lengthSync();
+    head = utf8.decode(raf.readSync(window), allowMalformed: true);
+    raf.setPositionSync(length > window ? length - window : 0);
+    tail = utf8.decode(raf.readSync(window), allowMalformed: true);
   } finally {
     raf.closeSync();
   }
-  final lines = head.split('\n');
-  if (lines.isEmpty || !lines.first.startsWith('#osb-link-info ')) {
+  if (!head.startsWith('#osb-link-info ')) {
     throw const AotLinkSupplementException('App.link is not a link sidecar');
   }
   String? snapshotHash;
   String? features;
-  int? textImageSize;
-  for (final line in lines.skip(1)) {
+  for (final line in head.split('\n')) {
     final cells = line.split('\t');
     if (cells[0] == 'id' && cells.length >= 3) {
       if (cells[1] == 'snapshot_hash') snapshotHash = cells[2];
       if (cells[1] == 'features') features = cells[2];
-    } else if (cells[0] == 'meta' &&
+    }
+  }
+  int? textImageSize;
+  for (final line in tail.split('\n')) {
+    final cells = line.split('\t');
+    if (cells[0] == 'meta' &&
         cells.length >= 3 &&
         cells[1] == 'text_image_size') {
       textImageSize = int.tryParse(cells[2]);
-    } else if (cells[0] != 'meta' && cells[0] != 'id' && cells[0].isNotEmpty) {
-      break;
     }
   }
   if (snapshotHash == null || features == null || textImageSize == null) {
