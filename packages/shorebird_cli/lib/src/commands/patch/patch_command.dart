@@ -192,6 +192,12 @@ To target the latest release (e.g. the release that was most recently updated) u
         CommonArguments.ddMaxBytesArg.name,
         hide: true,
         help: CommonArguments.ddMaxBytesArg.description,
+      )
+      ..addOption(
+        CommonArguments.warnLinkPercentage.name,
+        hide: true,
+        help: CommonArguments.warnLinkPercentage.description,
+        defaultsTo: CommonArguments.warnLinkPercentage.defaultValue,
       );
   }
 

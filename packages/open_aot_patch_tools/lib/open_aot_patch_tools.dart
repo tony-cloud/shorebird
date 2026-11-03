@@ -2,4 +2,6 @@
 library;
 
 export 'src/full_replacement.dart';
+export 'src/ios_aot_link.dart';
 export 'src/patch_artifact.dart';
+export 'src/vmcode.dart';

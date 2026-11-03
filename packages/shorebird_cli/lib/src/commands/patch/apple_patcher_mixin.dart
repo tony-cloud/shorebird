@@ -128,6 +128,12 @@ mixin AppleLinkerPatcherMixin on Patcher, ApplePatcherMixin {
   @visibleForTesting
   Json? lastBuildLinkMetadata;
 
+  /// Records the link result of the patch build for the patch metadata.
+  void recordLinkResult({required double percentage, Json? metadata}) {
+    lastBuildLinkPercentage = percentage;
+    lastBuildLinkMetadata = metadata;
+  }
+
   @override
   double? get linkPercentage => lastBuildLinkPercentage;
 

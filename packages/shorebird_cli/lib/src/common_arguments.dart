@@ -264,4 +264,24 @@ The minimum link percentage ($minLinkPercentageMin-$minLinkPercentageMax) requir
 Patches with a lower link percentage than what is provided here will fail.
 ''',
   );
+
+  /// Enables DD (indirect calls that keep a change from unlinking its callers)
+  /// for an `aot-link` iOS release, with this caller-tree byte threshold.
+  /// Off unless given. Targets come only from the app's own packages.
+  static const aotLinkDdMaxBytesArg = ArgumentDescriber(
+    name: 'aot-link-dd-max-bytes',
+    description:
+        "Enable DD for an ios-aot-link release: functions of the app's own "
+        'packages whose transitive caller tree exceeds this many bytes are '
+        'called indirectly. Off by default.',
+  );
+
+  /// Warn when an `aot-link` patch links less than this percentage.
+  static const warnLinkPercentage = ArgumentDescriber(
+    name: 'warn-link-percentage',
+    defaultValue: '90',
+    description: '''
+Warn when less than this percentage (0-100) of an ios-aot-link patch's code can reuse the release's native code.
+''',
+  );
 }

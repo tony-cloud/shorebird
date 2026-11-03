@@ -10,6 +10,7 @@ export 'git.dart';
 export 'gradlew.dart';
 export 'idevicesyslog.dart';
 export 'ios_deploy.dart';
+export 'ios_linker.dart';
 export 'java.dart';
 export 'open.dart';
 export 'patch_executable.dart';

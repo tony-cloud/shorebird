@@ -55,6 +55,8 @@ class MockAotTools extends Mock implements AotTools {}
 
 class MockApple extends Mock implements Apple {}
 
+class MockIosLinker extends Mock implements IosLinker {}
+
 class MockAppMetadata extends Mock implements AppMetadata {}
 
 class MockAppleDevice extends Mock implements AppleDevice {}

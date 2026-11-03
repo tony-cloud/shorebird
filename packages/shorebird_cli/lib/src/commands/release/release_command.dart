@@ -189,6 +189,11 @@ of the iOS app that is using this module. (aar and ios-framework only)''',
         defaultsTo: '10000',
         hide: true,
         help: CommonArguments.ddMaxBytesArg.description,
+      )
+      ..addOption(
+        CommonArguments.aotLinkDdMaxBytesArg.name,
+        hide: true,
+        help: CommonArguments.aotLinkDdMaxBytesArg.description,
       );
   }
 

@@ -11,6 +11,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/code_push_client_wrapper.dart';
 import 'package:shorebird_cli/src/commands/apple_build_helpers.dart';
 import 'package:shorebird_cli/src/commands/patch/apple_patcher_mixin.dart';
+import 'package:shorebird_cli/src/commands/patch/ios_aot_link_patcher_mixin.dart';
 import 'package:shorebird_cli/src/commands/patch/ios_interpreter_patcher_mixin.dart';
 import 'package:shorebird_cli/src/commands/patch/patcher.dart';
 import 'package:shorebird_cli/src/doctor.dart';
@@ -32,6 +33,7 @@ class IosPatcher extends Patcher
         ApplePatcherMixin,
         ApplePodfileLockPatcherMixin,
         AppleLinkerPatcherMixin,
+        IosAotLinkPatcherMixin,
         IosInterpreterPatcherMixin {
   /// {@macro ios_patcher}
   IosPatcher({
@@ -70,6 +72,15 @@ class IosPatcher extends Patcher
   String get podfileLockRelativePath => 'ios/Podfile.lock';
 
   @override
+  void preflightReleaseArtifact(File releaseArchive) {
+    if (aotLinkSelected) {
+      verifyAotLinkSupplement();
+      return;
+    }
+    super.preflightReleaseArtifact(releaseArchive);
+  }
+
+  @override
   Future<void> assertArgsAreValid() async =>
       argResults.assertValidExportOptionsPlistArg();
 
@@ -83,7 +94,8 @@ class IosPatcher extends Patcher
 
     // If buildIpa is called with a different codesign value than the
     // release was, we will erroneously report native diffs.
-    final ipaBuildResult = await withInterpreterBaselineBuild(
+    final aotLink = aotLinkSelected;
+    Future<AppleBuildResult> build() => withInterpreterBaselineBuild(
       () async => artifactBuilder.buildIpa(
         codesign: argResults.appleCodesign,
         flavor: flavor,
@@ -93,9 +105,15 @@ class IosPatcher extends Patcher
       ),
       buildArgs: buildArgs,
     );
+    final ipaBuildResult = aotLink
+        ? await withAotLinkBuild(build)
+        : await build();
 
     final runtimeMode = iosPatchRuntimeMode;
-    if (runtimeMode == open_patch.runtimeModeNativeAot) {
+    if (aotLink) {
+      // flutter_tools wrote the patch ELF and sidecar next to the build; the
+      // link happens in createPatchArtifacts, after the diff check.
+    } else if (runtimeMode == open_patch.runtimeModeNativeAot) {
       if (!allowsNativeIosAotPatch) {
         logger.err(
           'iOS native AOT patches require '
@@ -136,6 +154,12 @@ class IosPatcher extends Patcher
     // Verify that we have built a patch .xcarchive
     if (artifactManager.getXcarchiveDirectory()?.path == null) {
       _noXcarchiveFound();
+    }
+
+    if (aotLinkSelected) {
+      return createAotLinkPatchArtifacts(
+        podfileLockHash: shorebirdEnv.iosPodfileLockHash,
+      );
     }
 
     final runtimeMode = iosPatchRuntimeMode;
