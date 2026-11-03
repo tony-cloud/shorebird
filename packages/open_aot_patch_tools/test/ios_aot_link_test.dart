@@ -188,6 +188,7 @@ void main() {
         IosLinkerFailure.sidecarMismatch,
       );
       expect(IosLinkerFailure.fromExitCode(1), IosLinkerFailure.checkFailed);
+      expect(IosLinkerFailure.fromExitCode(5), IosLinkerFailure.gateBudget);
       expect(IosLinkerFailure.fromExitCode(70), isNull);
     });
 

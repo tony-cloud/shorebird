@@ -152,6 +152,7 @@ void main() {
       2: IosLinkerFailure.unlinkedStub,
       3: IosLinkerFailure.belowMinimum,
       4: IosLinkerFailure.sidecarMismatch,
+      5: IosLinkerFailure.gateBudget,
     }.entries) {
       test('exit code ${entry.key} is ${entry.value.name}', () async {
         stubRun(entry.key, stderr: 'link: detail');

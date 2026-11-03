@@ -265,6 +265,12 @@ The rest runs in the simulator and may be much slower. ${report.unlinkedEntries}
         'linked_code_bytes': report.linkedCodeBytes,
         'unlinked_entries': report.unlinkedEntries,
         'unlinked_by_reason': report.json['unlinked_by_reason'],
+        for (final key in const [
+          'gates_needed',
+          'gate_count',
+          'unlinked_call_sites',
+        ])
+          if (report.json[key] != null) key: report.json[key],
         'profile': profileAotLink,
       },
     );

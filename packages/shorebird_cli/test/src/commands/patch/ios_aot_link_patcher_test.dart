@@ -460,6 +460,7 @@ void main() {
         2: 'same Flutter engine',
         3: 'Too little of the patch',
         4: 'different gen_snapshot',
+        5: 'runtime gates',
       }.entries) {
         test('maps linker exit code ${entry.key} to a clear error', () async {
           stubLinkSuccess();

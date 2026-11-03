@@ -402,6 +402,10 @@ enum IosLinkerFailure {
   /// Sidecar version, compiler identity or format mismatch.
   sidecarMismatch(4),
 
+  /// The patch needs more runtime gates (simulator entry points) than the
+  /// engine provides; no vmcode is written.
+  gateBudget(5),
+
   /// Bad usage.
   usage(64);
 
@@ -438,6 +442,11 @@ enum IosLinkerFailure {
         'The release link data does not match this patch build: the release '
             'was built by a different gen_snapshot (or an old sidecar format). '
             'Patch with the Flutter version the release was built with.$suffix',
+      gateBudget =>
+        'Too much of the patch would run in the simulator: it needs more '
+            'runtime gates than the engine supports. Reduce the change, or '
+            'create the release with DD (--aot-link-dd-max-bytes) so a small '
+            'change does not unlink its callers.$suffix',
       usage => 'ios_linker was invoked incorrectly (a Shorebird bug).$suffix',
     };
   }
