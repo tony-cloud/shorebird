@@ -416,7 +416,10 @@ $error''');
     final targetFlutterRevision = await resolveTargetFlutterRevision();
     try {
       await shorebirdFlutter.installRevision(revision: targetFlutterRevision);
-    } on Exception {
+    } on Exception catch (error, stackTrace) {
+      logger
+        ..err('Unable to install Flutter $targetFlutterRevision.\n$error')
+        ..detail('$stackTrace');
       throw ProcessExit(ExitCode.software.code);
     }
     return targetFlutterRevision;

@@ -355,7 +355,12 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
 
     try {
       await shorebirdFlutter.installRevision(revision: release.flutterRevision);
-    } on Exception {
+    } on Exception catch (error, stackTrace) {
+      logger
+        ..err(
+          'Unable to install Flutter ${release.flutterRevision}.\n$error',
+        )
+        ..detail('$stackTrace');
       throw ProcessExit(ExitCode.software.code);
     }
 

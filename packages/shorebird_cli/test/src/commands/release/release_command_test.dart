@@ -839,13 +839,23 @@ $exception'''),
             ).thenThrow(Exception('oops'));
           });
 
-          test('exits with code 70', () async {
+          test('logs the error and exits with code 70', () async {
             await expectLater(
               () => runWithOverrides(command.run),
               exitsWithCode(ExitCode.software),
             );
             verify(
               () => shorebirdFlutter.installRevision(revision: revision),
+            ).called(1);
+            verify(
+              () => logger.err(
+                any(
+                  that: allOf(
+                    contains('Unable to install Flutter $revision.'),
+                    contains('Exception: oops'),
+                  ),
+                ),
+              ),
             ).called(1);
           });
         });

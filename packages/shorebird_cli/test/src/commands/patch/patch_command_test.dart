@@ -1846,11 +1846,21 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
         ).thenThrow(error);
       });
 
-      test('exits with code 70', () async {
+      test('logs the error and exits with code 70', () async {
         await expectLater(
           () => runWithOverrides(command.run),
           exitsWithCode(ExitCode.software),
         );
+        verify(
+          () => logger.err(
+            any(
+              that: allOf(
+                contains('Unable to install Flutter'),
+                contains('Failed to install Flutter revision.'),
+              ),
+            ),
+          ),
+        ).called(1);
       });
     });
 
