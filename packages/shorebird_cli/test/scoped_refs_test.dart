@@ -44,4 +44,28 @@ void main() {
     expect(declared, isNotEmpty);
     expect(declared.difference(provided), isEmpty);
   });
+
+  test('the entrypoint root scope provides the ios-aot-link refs', () {
+    // `shorebird release ios` with the ios-aot-link profile crashed with
+    // "read(ScopedRef<IosLinker>) was called in a scope which does not contain
+    // a corresponding value" when `iosLinkerRef` was missing from the root
+    // `runScoped` in bin/shorebird.dart.
+    final entrypoint = File(
+      packagePath('bin/shorebird.dart'),
+    ).readAsStringSync();
+    final rootScope = entrypoint.substring(
+      entrypoint.indexOf(
+        'values: {',
+        entrypoint.indexOf('ShorebirdCliCommandRunner()'),
+      ),
+    );
+    for (final ref in ['iosLinkerRef', 'iosReplacementHostResolverRef']) {
+      expect(
+        RegExp('^\\s*$ref,\\s*\$', multiLine: true).hasMatch(rootScope),
+        isTrue,
+        reason:
+            '$ref must be listed in the root runScoped in bin/shorebird.dart',
+      );
+    }
+  });
 }
