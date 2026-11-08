@@ -1082,10 +1082,12 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             profile: SecurityProfile.hardened,
             toolchainId: toolchainId,
             developmentExceptions: false,
+            releaseRoot: releaseRoot,
           );
           platformEnvironment = {
             buildManifestSigningKeyEnvironmentVariable:
                 writeBuildManifestSigningKey(),
+            releaseTrustEnvironmentVariable: writeReleaseTrust(),
           };
           when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
             const ShorebirdYaml(
@@ -1152,6 +1154,8 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
               () => artifactBuilder.securityBuildEnvironment = {
                 'SHOREBIRD_SECURITY_PROFILE': 'hardened',
                 'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+                'SHOREBIRD_RELEASE_ROOT': releaseRoot,
+                'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
               },
             ).called(1);
             verify(
@@ -3252,6 +3256,22 @@ Valid platforms: aar, android, ios, ios-framework, linux, macos, windows''',
 
 /// A PKCS#8 PEM Ed25519 build-manifest signing key (hardening P3) in a temp
 /// directory, and a platform whose environment names it.
+/// A file shaped like a contract v2 release-trust bundle.
+String writeReleaseTrust() {
+  final dir = Directory.systemTemp.createTempSync('release-trust');
+  return (File(p.join(dir.path, 'release-trust.json'))..writeAsStringSync(
+        jsonEncode({
+          'schema': 'open-shorebird.release-trust',
+          'contract_version': 2,
+          'root_chain': <Object>[],
+          'delegations': {'payload': '', 'signatures': <Object>[]},
+        }),
+      ))
+      .path;
+}
+
+const releaseRoot = 'eyJjb250cmFjdF92ZXJzaW9uIjoyfQ==';
+
 String writeBuildManifestSigningKey() {
   final dir = Directory.systemTemp.createTempSync('manifest-key');
   final der = [

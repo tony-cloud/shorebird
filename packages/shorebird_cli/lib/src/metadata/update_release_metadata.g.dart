@@ -37,6 +37,10 @@ UpdateReleaseMetadata _$UpdateReleaseMetadataFromJson(
         'build_trace_summary',
         (v) => v as Map<String, dynamic>?,
       ),
+      securityRecord: $checkedConvert(
+        'security_record',
+        (v) => v as Map<String, dynamic>?,
+      ),
     );
     return val;
   },
@@ -46,6 +50,7 @@ UpdateReleaseMetadata _$UpdateReleaseMetadataFromJson(
     'includesPublicKey': 'includes_public_key',
     'generatedApks': 'generated_apks',
     'buildTraceSummary': 'build_trace_summary',
+    'securityRecord': 'security_record',
   },
 );
 
@@ -58,4 +63,5 @@ Map<String, dynamic> _$UpdateReleaseMetadataToJson(
   'includes_public_key': instance.includesPublicKey,
   'environment': instance.environment.toJson(),
   'build_trace_summary': instance.buildTraceSummary,
+  'security_record': ?instance.securityRecord,
 };

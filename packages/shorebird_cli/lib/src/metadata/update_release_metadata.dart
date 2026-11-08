@@ -25,6 +25,7 @@ class UpdateReleaseMetadata extends Equatable {
     required this.includesPublicKey,
     this.generatedApks,
     this.buildTraceSummary,
+    this.securityRecord,
   });
 
   // coverage:ignore-start
@@ -63,6 +64,7 @@ class UpdateReleaseMetadata extends Equatable {
     BuildEnvironmentMetadata? environment,
     bool? includesPublicKey,
     Json? buildTraceSummary,
+    Json? securityRecord,
   }) => UpdateReleaseMetadata(
     releasePlatform: releasePlatform ?? this.releasePlatform,
     flutterVersionOverride:
@@ -71,6 +73,7 @@ class UpdateReleaseMetadata extends Equatable {
     environment: environment ?? this.environment,
     includesPublicKey: includesPublicKey ?? this.includesPublicKey,
     buildTraceSummary: buildTraceSummary ?? this.buildTraceSummary,
+    securityRecord: securityRecord ?? this.securityRecord,
   );
 
   /// The platform for which the patch was created.
@@ -111,6 +114,17 @@ class UpdateReleaseMetadata extends Equatable {
   /// server consumes the blob as-is.
   final Json? buildTraceSummary;
 
+  /// The hardened release record (`release-record.v2`,
+  /// docs/HARDENING_CONTRACTS.md §10): profile, toolchain, release-root and
+  /// delegations digests, and the digest of every signed build manifest.
+  ///
+  /// Reason: lets the update server and operators tie a hardened release to
+  /// the exact signed builds and trust it shipped with. Contains no keys,
+  /// paths or personal data. Omitted (not null) for legacy releases, so their
+  /// metadata is unchanged.
+  @JsonKey(includeIfNull: false)
+  final Json? securityRecord;
+
   @override
   List<Object?> get props => [
     releasePlatform,
@@ -119,5 +133,6 @@ class UpdateReleaseMetadata extends Equatable {
     includesPublicKey,
     environment,
     buildTraceSummary,
+    securityRecord,
   ];
 }

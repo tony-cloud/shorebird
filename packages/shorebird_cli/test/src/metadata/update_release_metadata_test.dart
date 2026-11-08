@@ -29,6 +29,32 @@ void main() {
       );
     });
 
+    test('a legacy release omits the security record entirely', () {
+      final metadata = UpdateReleaseMetadata.forTest();
+      expect(metadata.toJson().keys, isNot(contains('security_record')));
+      expect(metadata.toJson().keys, [
+        'release_platform',
+        'flutter_version_override',
+        'generated_apks',
+        'includes_public_key',
+        'environment',
+        'build_trace_summary',
+      ]);
+    });
+
+    test('a hardened release carries its security record', () {
+      final record = {'schema': 'open-shorebird.release-record'};
+      final metadata = UpdateReleaseMetadata.forTest().copyWith(
+        securityRecord: record,
+      );
+      expect(metadata.toJson()['security_record'], record);
+      expect(
+        UpdateReleaseMetadata.fromJson(metadata.toJson()).securityRecord,
+        record,
+      );
+      expect(metadata, isNot(UpdateReleaseMetadata.forTest()));
+    });
+
     group('copyWith', () {
       test('creates a copy with the same fields', () {
         const metadata = UpdateReleaseMetadata(

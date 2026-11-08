@@ -537,10 +537,10 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
   /// toolchain ID to every `flutter build`. On a legacy toolchain, does
   /// nothing.
   ///
-  // TODO(hardening-p4): compare with the security_profile and toolchain_id
-  // recorded in the release and have the server reject mismatched patches
-  // (docs/HARDENING_CONTRACTS.md §7). Until then the toolchain's floor is the
-  // only profile the CLI knows.
+  // TODO(hardening-p4b): compare with the security_profile, toolchain_id and
+  // release root recorded in the release (`security_record`) and have the
+  // server reject mismatched patches (docs/HARDENING_CONTRACTS.md §10.9).
+  // Until then the toolchain's floor is the only profile the CLI knows.
   void _assertHardenedPatchAdmitted(String releasePlatform) {
     final toolchain = loadToolchainSecurityOrExit();
     if (toolchain.profile != SecurityProfile.hardened) return;
@@ -588,7 +588,9 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
             '${manifestProblems.map((problem) => '  - $problem').join('\n')}',
         hint:
             'Use the same build-manifest signing inputs as the release '
-            '($buildManifestSigningKeyEnvironmentVariable, '
+            '($releaseTrustEnvironmentVariable, '
+            '$buildManifestSigningKeyEnvironmentVariable or '
+            '$buildManifestSignerEnvironmentVariable, '
             '$androidSigningCertEnvironmentVariable, '
             '$appleTeamIdsEnvironmentVariable).',
       );

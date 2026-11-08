@@ -321,10 +321,12 @@ void main() {
 
     group('--security-profile', () {
       final toolchainId = 'sha256:${'a' * 64}';
+      const releaseRoot = 'eyJjb250cmFjdF92ZXJzaW9uIjoyfQ==';
       final hardenedToolchain = ToolchainSecurity(
         profile: SecurityProfile.hardened,
         toolchainId: toolchainId,
         developmentExceptions: false,
+        releaseRoot: releaseRoot,
       );
       const hardenedYaml = ShorebirdYaml(
         appId: appId,
@@ -470,7 +472,17 @@ void main() {
           platformEnvironment = {
             buildManifestSigningKeyEnvironmentVariable:
                 writeBuildManifestSigningKey(),
+            releaseTrustEnvironmentVariable: writeReleaseTrust(),
           };
+          when(
+            () => shorebirdEnv.getFlutterProjectRoot(),
+          ).thenReturn(projectRoot);
+          // `flutter build` writes the release record; the mock build does
+          // what a contract v2 Flutter does.
+          when(() => releaser.buildReleaseArtifacts()).thenAnswer((_) async {
+            writeReleaseRecord(command.releaseRecordDirectory!, toolchainId);
+            return File('');
+          });
           when(
             () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
           ).thenReturn(false);
@@ -513,16 +525,68 @@ void main() {
         });
 
         test('admits a hardened release with the managed key and an https '
-            'base_url and passes exactly the two variables', () async {
+            'base_url and passes exactly the hardened variables', () async {
+          // A stale record of an earlier build is never attributed.
+          final stale = Directory(
+            p.join(projectRoot.path, 'build', 'shorebird', 'release-record'),
+          )..createSync(recursive: true);
+          File(p.join(stale.path, 'stale.json')).writeAsStringSync('{}');
           await runWithOverrides(command.run);
           verify(() => releaser.requireManagedSigning = true).called(1);
           verify(
             () => artifactBuilder.securityBuildEnvironment = {
               'SHOREBIRD_SECURITY_PROFILE': 'hardened',
               'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+              'SHOREBIRD_RELEASE_ROOT': releaseRoot,
+              'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
+              'SHOREBIRD_BUILD_MANIFEST_RECORD_DIR': stale.path,
             },
           ).called(1);
           verify(() => releaser.buildReleaseArtifacts()).called(1);
+          // The release record is stored with the release metadata.
+          final metadata =
+              verify(
+                    () => releaser.updatedReleaseMetadata(captureAny()),
+                  ).captured.single
+                  as UpdateReleaseMetadata;
+          final record = metadata.securityRecord!;
+          expect(record['schema'], 'open-shorebird.release-record');
+          expect(record['toolchain_id'], toolchainId);
+          expect(record['build_manifests'], hasLength(1));
+          expect(metadata.toJson()['security_record'], record);
+        });
+
+        test('stops before activation when the build wrote no release '
+            'record', () async {
+          when(
+            () => releaser.buildReleaseArtifacts(),
+          ).thenAnswer((_) async => File(''));
+          await expectLater(
+            runWithOverrides(command.run),
+            throwsA(
+              isA<PreconditionFailedExit>().having(
+                (e) => e.failure.message,
+                'message',
+                contains('wrote no release record'),
+              ),
+            ),
+          );
+          // Built, but nothing uploaded and the release never activated.
+          verifyNever(
+            () => releaser.uploadReleaseArtifacts(
+              release: any(named: 'release'),
+              appId: any(named: 'appId'),
+            ),
+          );
+        });
+
+        test('refuses a release without a release-trust bundle', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            releaseTrustEnvironmentVariable: '',
+          };
+          await expectRefused('cannot sign its build manifest');
+          verifyNever(() => releaser.buildReleaseArtifacts());
         });
 
         test('refuses a release that cannot sign its build manifest', () async {
@@ -2294,6 +2358,49 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}'''),
       });
     });
   });
+}
+
+/// A file shaped like a contract v2 release-trust bundle (flutter build
+/// verifies its signatures; the CLI checks only its shape).
+String writeReleaseTrust() {
+  final dir = Directory.systemTemp.createTempSync('release-trust');
+  return (File(p.join(dir.path, 'release-trust.json'))..writeAsStringSync(
+        jsonEncode({
+          'schema': 'open-shorebird.release-trust',
+          'contract_version': 2,
+          'root_chain': <Object>[],
+          'delegations': {'payload': '', 'signatures': <Object>[]},
+        }),
+      ))
+      .path;
+}
+
+/// What a contract v2 `flutter build` writes for one build manifest.
+void writeReleaseRecord(Directory directory, String toolchainId) {
+  directory.createSync(recursive: true);
+  File(
+    p.join(directory.path, 'build-manifest-${'a' * 64}.json'),
+  ).writeAsStringSync(
+    jsonEncode({
+      'schema': 'open-shorebird.release-record',
+      'contract_version': 2,
+      'security_profile': 'hardened',
+      'toolchain_id': toolchainId,
+      'development_exceptions': false,
+      'release_root_sha256': 'sha256:${'1' * 64}',
+      'root_version': 1,
+      'delegations_version': 1,
+      'delegations_sha256': '2' * 64,
+      'build_manifests': [
+        {
+          'manifest_sha256': 'a' * 64,
+          'signer_key_id': 'sha256:${'3' * 64}',
+          'config_sha256': '4' * 64,
+          'modules': <Object>[],
+        },
+      ],
+    }),
+  );
 }
 
 /// A PKCS#8 PEM Ed25519 build-manifest signing key (hardening P3) in a temp

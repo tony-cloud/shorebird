@@ -561,7 +561,11 @@ $error''');
       '''Building ${releaser.artifactDisplayName} with Flutter $flutterVersionString''',
     );
     try {
-      return await releaser.buildReleaseArtifacts();
+      final artifact = await releaser.buildReleaseArtifacts();
+      // A hardened build must have written its release record; stop before
+      // anything is uploaded if it did not.
+      _releaseRecord = _hardenedReleaseRecord();
+      return artifact;
     } on ArtifactBuildException catch (e) {
       logger.err(e.message);
       if (!e.fixRecommendation.isNullOrEmpty) {
@@ -905,9 +909,12 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
   /// release's `flutter build`s receive SHOREBIRD_SECURITY_PROFILE and
   /// SHOREBIRD_TOOLCHAIN_ID; a legacy release's environment is unchanged.
   ///
-  // TODO(hardening-p4): record security_profile and toolchain_id in the
-  // release record and have the server reject mismatched patches
-  // (docs/HARDENING_CONTRACTS.md §7).
+  /// A hardened release also has `flutter build` write its release record
+  /// (`release-record.v2`: profile, toolchain, release-root and delegations
+  /// digests, and every signed build-manifest digest) to
+  /// [releaseRecordDirectory]; [finalizeRelease] stores it in the release
+  /// metadata (docs/HARDENING_CONTRACTS.md §10). Server-side enforcement of
+  /// the record is a later stage.
   @visibleForTesting
   void assertSecurityProfileAdmitted(Releaser releaser) {
     final requested = requestedSecurityProfile;
@@ -1028,8 +1035,31 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     }
 
     releaser.requireManagedSigning = true;
-    artifactBuilder.securityBuildEnvironment = toolchain.buildEnvironment;
+    final recordDirectory = Directory(
+      p.join(
+        shorebirdEnv.getFlutterProjectRoot()?.path ?? Directory.current.path,
+        'build',
+        'shorebird',
+        'release-record',
+      ),
+    );
+    // A record from an earlier build must never be attributed to this one.
+    if (recordDirectory.existsSync()) {
+      recordDirectory.deleteSync(recursive: true);
+    }
+    releaseRecordDirectory = recordDirectory;
+    artifactBuilder.securityBuildEnvironment = {
+      ...toolchain.buildEnvironment,
+      buildManifestRecordDirEnvironmentVariable: recordDirectory.path,
+    };
   }
+
+  /// Where a hardened release's builds write their release records; null for
+  /// legacy releases.
+  @visibleForTesting
+  Directory? releaseRecordDirectory;
+
+  Map<String, Object?>? _releaseRecord;
 
   Never _refuseRelease(String message, {required String hint}) {
     final failure = ValidationFailedException(message: message, hint: hint);
@@ -1399,6 +1429,7 @@ ${summary.join('\n')}
       // Null for older Flutter pins without the --shorebird-trace flag
       // or when trace parsing failed; uploader sends null-as-omitted.
       buildTraceSummary: buildTraceSession.summary?.toJson(),
+      securityRecord: _releaseRecord ?? _hardenedReleaseRecord(),
     );
     final updatedMetadata = await releaser.updatedReleaseMetadata(baseMetadata);
     await codePushClientWrapper.updateReleaseStatus(
@@ -1413,6 +1444,24 @@ ${summary.join('\n')}
           : null,
       metadata: updatedMetadata.toJson(),
     );
+  }
+
+  /// The merged release record of a hardened release (null for legacy). A
+  /// hardened build that wrote none, or inconsistent ones, stops the release
+  /// before it becomes active.
+  Map<String, Object?>? _hardenedReleaseRecord() {
+    final directory = releaseRecordDirectory;
+    if (directory == null) return null;
+    try {
+      return readReleaseRecord(directory);
+    } on ReleaseRecordException catch (error) {
+      _refuseRelease(
+        error.message,
+        hint:
+            'Rebuild with a contract v2 Flutter toolchain; the release stays '
+            'a draft until its record is stored.',
+      );
+    }
   }
 
   /// Instructions explaining how to patch the release that was just created.
