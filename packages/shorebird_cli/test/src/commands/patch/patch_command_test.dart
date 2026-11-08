@@ -9,6 +9,7 @@ import 'package:equatable/equatable.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
+import 'package:platform/testing.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/archive_analysis.dart';
@@ -26,6 +27,7 @@ import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/security_profile.dart';
@@ -190,6 +192,8 @@ void main() {
 
     late PatchCommand command;
 
+    Map<String, String>? platformEnvironment;
+
     R runWithOverrides<R>(R Function() body) {
       return runScoped(
         body,
@@ -207,6 +211,10 @@ void main() {
           shorebirdFlutterRef.overrideWith(() => shorebirdFlutter),
           shorebirdValidatorRef.overrideWith(() => shorebirdValidator),
           toolchainSecurityRef.overrideWith(() => toolchainFloor),
+          if (platformEnvironment case final environment?)
+            platformRef.overrideWith(
+              () => platformWithEnvironment(environment),
+            ),
         },
       );
     }
@@ -253,6 +261,8 @@ void main() {
         () => codePushClientWrapper.getReleases(appId: any(named: 'appId')),
       ).thenAnswer((_) async => [versionedRelease]);
     }
+
+    setUp(() => platformEnvironment = null);
 
     setUp(() {
       aotTools = MockAotTools();
@@ -1073,6 +1083,10 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             toolchainId: toolchainId,
             developmentExceptions: false,
           );
+          platformEnvironment = {
+            buildManifestSigningKeyEnvironmentVariable:
+                writeBuildManifestSigningKey(),
+          };
           when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
             const ShorebirdYaml(
               appId: appId,
@@ -1108,6 +1122,27 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
           );
           verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
         });
+
+        test(
+          'refuses a patch build that cannot sign its build manifest',
+          () async {
+            platformEnvironment = {
+              buildManifestSigningKeyEnvironmentVariable: '',
+              androidSigningCertEnvironmentVariable: '',
+              appleTeamIdsEnvironmentVariable: '',
+            };
+            await expectLater(
+              runWithOverrides(() => command.createPatch(patcher)),
+              throwsA(isA<PreconditionFailedExit>()),
+            );
+            verify(
+              () => logger.err(
+                any(that: contains('cannot sign its build manifest')),
+              ),
+            ).called(1);
+            verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
+          },
+        );
 
         test(
           'passes the profile and toolchain ID for a managed release',
@@ -3214,3 +3249,26 @@ Valid platforms: aar, android, ios, ios-framework, linux, macos, windows''',
     });
   });
 }
+
+/// A PKCS#8 PEM Ed25519 build-manifest signing key (hardening P3) in a temp
+/// directory, and a platform whose environment names it.
+String writeBuildManifestSigningKey() {
+  final dir = Directory.systemTemp.createTempSync('manifest-key');
+  final der = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, //
+    0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+    ...List.filled(32, 7),
+  ];
+  return (File(p.join(dir.path, 'manifest.pem'))..writeAsStringSync(
+        '-----BEGIN PRIVATE KEY-----\n${base64.encode(der)}\n'
+        '-----END PRIVATE KEY-----\n',
+      ))
+      .path;
+}
+
+NativePlatform platformWithEnvironment(Map<String, String> environment) =>
+    TestNativePlatform.from(
+      NativePlatform.current!,
+    ).copyWith(
+      environment: {...NativePlatform.current!.environment, ...environment},
+    );

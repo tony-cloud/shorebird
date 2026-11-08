@@ -44,7 +44,123 @@ const reservedSecurityYamlKeys = {
   'security_contract_version',
   'toolchain_id',
   'security_development_exceptions',
+  'shorebird_build_manifest',
 };
+
+/// The path of the PKCS#8 PEM Ed25519 key that signs the build manifest of a
+/// hardened build (hardening P3, docs/HARDENING_CONTRACTS.md §9). Its public
+/// key must be compiled into the hardened engine
+/// (`shorebird_build_manifest_keys`). `flutter build` reads it directly.
+const buildManifestSigningKeyEnvironmentVariable =
+    'SHOREBIRD_BUILD_MANIFEST_SIGNING_KEY';
+
+/// Comma-separated SHA-256 digests of the Android signer certificate(s) a
+/// hardened Android install must carry (optional; enables repack detection).
+const androidSigningCertEnvironmentVariable =
+    'SHOREBIRD_ANDROID_SIGNING_CERT_SHA256';
+
+/// Comma-separated Apple team identifiers a hardened macOS app must be signed
+/// by (optional; enables repack detection).
+const appleTeamIdsEnvironmentVariable = 'SHOREBIRD_APPLE_TEAM_IDS';
+
+const _pkcs8Ed25519Prefix = [
+  0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, //
+  0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+
+/// The problems that keep a hardened build of [platform] (a release platform
+/// name such as `android` or `macos`) from signing its build manifest with
+/// [environment], as complete sentences. Empty when the build can sign.
+///
+/// `flutter build` enforces the same rules; checking here fails a release or
+/// patch before any build starts.
+List<String> hardenedBuildManifestProblems(
+  Map<String, String> environment, {
+  required String platform,
+}) {
+  final problems = <String>[];
+  final keyPath = environment[buildManifestSigningKeyEnvironmentVariable] ?? '';
+  if (keyPath.isEmpty) {
+    problems.add(
+      'Set $buildManifestSigningKeyEnvironmentVariable to the Ed25519 '
+      'build-manifest signing key (PKCS#8 PEM) whose public key this hardened '
+      'toolchain was built with.',
+    );
+  } else {
+    final file = File(keyPath);
+    String? pem;
+    try {
+      pem = file.readAsStringSync();
+    } on FileSystemException {
+      problems.add(
+        '$buildManifestSigningKeyEnvironmentVariable names $keyPath, which '
+        'cannot be read.',
+      );
+    }
+    if (pem != null && !_isPkcs8Ed25519Pem(pem)) {
+      problems.add(
+        '$buildManifestSigningKeyEnvironmentVariable must be a PKCS#8 PEM '
+        'Ed25519 private key (openssl genpkey -algorithm ed25519).',
+      );
+    }
+  }
+  final certs = _list(environment[androidSigningCertEnvironmentVariable]);
+  if (certs.isNotEmpty && platform != 'android') {
+    problems.add(
+      '$androidSigningCertEnvironmentVariable applies only to Android '
+      'releases.',
+    );
+  }
+  for (final cert in certs) {
+    if (!RegExp(
+      r'^[0-9a-f]{64}$',
+    ).hasMatch(cert.replaceAll(':', '').toLowerCase())) {
+      problems.add(
+        '$androidSigningCertEnvironmentVariable entry $cert is not a SHA-256 '
+        'certificate digest.',
+      );
+    }
+  }
+  final teams = _list(environment[appleTeamIdsEnvironmentVariable]);
+  if (teams.isNotEmpty && platform != 'macos') {
+    problems.add(
+      '$appleTeamIdsEnvironmentVariable applies only to macOS releases (iOS '
+      'cannot verify a team identifier at run time).',
+    );
+  }
+  for (final team in teams) {
+    if (!RegExp(r'^[A-Z0-9]{10}$').hasMatch(team)) {
+      problems.add(
+        '$appleTeamIdsEnvironmentVariable entry $team is not an Apple team '
+        'identifier.',
+      );
+    }
+  }
+  return problems;
+}
+
+List<String> _list(String? value) => [
+  for (final item in (value ?? '').split(','))
+    if (item.trim().isNotEmpty) item.trim(),
+];
+
+bool _isPkcs8Ed25519Pem(String pem) {
+  final match = RegExp(
+    r'^-----BEGIN PRIVATE KEY-----\s+([A-Za-z0-9+/=\s]+?)\s*-----END PRIVATE KEY-----$',
+  ).firstMatch(pem.trim());
+  if (match == null) return false;
+  final List<int> der;
+  try {
+    der = base64.decode(match.group(1)!.replaceAll(RegExp(r'\s'), ''));
+  } on FormatException {
+    return false;
+  }
+  if (der.length != _pkcs8Ed25519Prefix.length + 32) return false;
+  for (var i = 0; i < _pkcs8Ed25519Prefix.length; i++) {
+    if (der[i] != _pkcs8Ed25519Prefix[i]) return false;
+  }
+  return true;
+}
 
 final _toolchainIdPattern = RegExp(r'^sha256:[0-9a-f]{64}$');
 

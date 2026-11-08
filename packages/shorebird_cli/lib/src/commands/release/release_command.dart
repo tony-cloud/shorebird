@@ -1013,6 +1013,20 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       );
     }
 
+    final manifestProblems = hardenedBuildManifestProblems(
+      platform.environment,
+      platform: releaser.releaseType.releasePlatform.name,
+    );
+    if (manifestProblems.isNotEmpty) {
+      _refuseRelease(
+        'A hardened release cannot sign its build manifest:\n'
+        '${manifestProblems.map((problem) => '  - $problem').join('\n')}',
+        hint:
+            'The hardened updater refuses to start without a manifest signed '
+            'by a key compiled into this toolchain.',
+      );
+    }
+
     releaser.requireManagedSigning = true;
     artifactBuilder.securityBuildEnvironment = toolchain.buildEnvironment;
   }

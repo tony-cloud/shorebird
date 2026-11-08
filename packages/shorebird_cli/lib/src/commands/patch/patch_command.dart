@@ -506,7 +506,7 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
     await patcher.assertPreconditions();
     await patcher.assertArgsAreValid();
     assertSigningArgsValid();
-    _assertHardenedPatchAdmitted();
+    _assertHardenedPatchAdmitted(patcher.releaseType.releasePlatform.name);
 
     // A new track is created on first publish, so reject a name that
     // `channels create` and `patches set-track` would also reject.
@@ -541,7 +541,7 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
   // recorded in the release and have the server reject mismatched patches
   // (docs/HARDENING_CONTRACTS.md §7). Until then the toolchain's floor is the
   // only profile the CLI knows.
-  void _assertHardenedPatchAdmitted() {
+  void _assertHardenedPatchAdmitted(String releasePlatform) {
     final toolchain = loadToolchainSecurityOrExit();
     if (toolchain.profile != SecurityProfile.hardened) return;
 
@@ -567,6 +567,30 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
             'shorebird.yaml does not meet the hardened profile:\n'
             '${problems.map((problem) => '  - $problem').join('\n')}',
         hint: 'Fix shorebird.yaml to match the hardened release.',
+      );
+      logger
+        ..err(failure.message)
+        ..info(failure.hint);
+      throw PreconditionFailedExit(failure);
+    }
+
+    // The patch build rewrites the bundled shorebird.yaml like the release
+    // did; with the release's signing inputs it is byte-identical, so the
+    // asset diff stays clean.
+    final manifestProblems = hardenedBuildManifestProblems(
+      platform.environment,
+      platform: releasePlatform,
+    );
+    if (manifestProblems.isNotEmpty) {
+      final failure = ValidationFailedException(
+        message:
+            'A hardened patch build cannot sign its build manifest:\n'
+            '${manifestProblems.map((problem) => '  - $problem').join('\n')}',
+        hint:
+            'Use the same build-manifest signing inputs as the release '
+            '($buildManifestSigningKeyEnvironmentVariable, '
+            '$androidSigningCertEnvironmentVariable, '
+            '$appleTeamIdsEnvironmentVariable).',
       );
       logger
         ..err(failure.message)

@@ -326,4 +326,85 @@ base_url: https://example.com
       );
     });
   });
+
+  group('hardenedBuildManifestProblems', () {
+    late String keyPath;
+
+    setUp(() {
+      final dir = Directory.systemTemp.createTempSync('manifest-key');
+      final der = [
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, //
+        0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+        ...List.filled(32, 7),
+      ];
+      keyPath =
+          (File('${dir.path}/manifest.pem')..writeAsStringSync(
+                '-----BEGIN PRIVATE KEY-----\n${base64.encode(der)}\n'
+                '-----END PRIVATE KEY-----\n',
+              ))
+              .path;
+    });
+
+    test('accepts a PKCS#8 Ed25519 key and well-formed identities', () {
+      expect(
+        hardenedBuildManifestProblems({
+          buildManifestSigningKeyEnvironmentVariable: keyPath,
+          androidSigningCertEnvironmentVariable:
+              '${'ab' * 32}, AB:${'CD:' * 30}EF',
+        }, platform: 'android'),
+        isEmpty,
+      );
+      expect(
+        hardenedBuildManifestProblems({
+          buildManifestSigningKeyEnvironmentVariable: keyPath,
+          appleTeamIdsEnvironmentVariable: 'ABCDE12345',
+        }, platform: 'macos'),
+        isEmpty,
+      );
+    });
+
+    test('refuses a missing, unreadable or non-Ed25519 key', () {
+      final rsa = File('${File(keyPath).parent.path}/rsa.pem')
+        ..writeAsStringSync(
+          File(keyPath).readAsStringSync().replaceFirst('MC4C', 'MC8C'),
+        );
+      for (final environment in [
+        <String, String>{},
+        {buildManifestSigningKeyEnvironmentVariable: ''},
+        {buildManifestSigningKeyEnvironmentVariable: '/no/such/key.pem'},
+        {buildManifestSigningKeyEnvironmentVariable: rsa.path},
+      ]) {
+        expect(
+          hardenedBuildManifestProblems(environment, platform: 'linux'),
+          isNotEmpty,
+          reason: '$environment',
+        );
+      }
+    });
+
+    test('refuses identities the target platform cannot verify', () {
+      for (final (platform, environment) in [
+        ('ios', {appleTeamIdsEnvironmentVariable: 'ABCDE12345'}),
+        ('linux', {androidSigningCertEnvironmentVariable: 'ab' * 32}),
+        ('android', {androidSigningCertEnvironmentVariable: 'abc'}),
+        ('macos', {appleTeamIdsEnvironmentVariable: 'abcde12345'}),
+      ]) {
+        expect(
+          hardenedBuildManifestProblems({
+            buildManifestSigningKeyEnvironmentVariable: keyPath,
+            ...environment,
+          }, platform: platform),
+          isNotEmpty,
+          reason: '$platform $environment',
+        );
+      }
+    });
+
+    test('reserves the manifest key in checked-in shorebird.yaml', () {
+      expect(
+        reservedSecurityKeysIn('app_id: a\nshorebird_build_manifest: x\n'),
+        ['shorebird_build_manifest'],
+      );
+    });
+  });
 }

@@ -6,6 +6,7 @@ import 'package:args/command_runner.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
+import 'package:platform/testing.dart';
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/build_trace_session.dart';
@@ -18,6 +19,7 @@ import 'package:shorebird_cli/src/flutter_version_constraints.dart';
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
+import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
 import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
@@ -79,6 +81,8 @@ void main() {
 
     late ReleaseCommand command;
 
+    Map<String, String>? platformEnvironment;
+
     R runWithOverrides<R>(R Function() body) {
       return runScoped(
         body,
@@ -96,6 +100,10 @@ void main() {
           toolchainSecurityRef.overrideWith(
             () => toolchainFloor ?? ToolchainSecurity.load(shorebirdRoot),
           ),
+          if (platformEnvironment case final environment?)
+            platformRef.overrideWith(
+              () => platformWithEnvironment(environment),
+            ),
         },
       );
     }
@@ -107,6 +115,8 @@ void main() {
       registerFallbackValue(ReleaseStatus.draft);
       registerFallbackValue(UpdateReleaseMetadata.forTest());
     });
+
+    setUp(() => platformEnvironment = null);
 
     setUp(() {
       argResults = MockArgResults();
@@ -457,6 +467,10 @@ void main() {
         setUp(() {
           toolchainFloor = hardenedToolchain;
           requestProfile('hardened');
+          platformEnvironment = {
+            buildManifestSigningKeyEnvironmentVariable:
+                writeBuildManifestSigningKey(),
+          };
           when(
             () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
           ).thenReturn(false);
@@ -508,6 +522,40 @@ void main() {
               'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
             },
           ).called(1);
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+        });
+
+        test('refuses a release that cannot sign its build manifest', () async {
+          for (final environment in <Map<String, String>>[
+            {buildManifestSigningKeyEnvironmentVariable: ''},
+            {buildManifestSigningKeyEnvironmentVariable: '/no/such/key.pem'},
+            {
+              buildManifestSigningKeyEnvironmentVariable: (File(
+                p.join(Directory.systemTemp.createTempSync().path, 'k'),
+              )..writeAsStringSync('not a key')).path,
+            },
+            {
+              ...platformEnvironment!,
+              appleTeamIdsEnvironmentVariable: 'ABCDE12345',
+            },
+          ]) {
+            platformEnvironment = {
+              buildManifestSigningKeyEnvironmentVariable: '',
+              androidSigningCertEnvironmentVariable: '',
+              appleTeamIdsEnvironmentVariable: '',
+              ...environment,
+            };
+            await expectRefused('cannot sign its build manifest');
+          }
+          verifyNever(() => releaser.buildReleaseArtifacts());
+        });
+
+        test('admits a declared Android signer certificate', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            androidSigningCertEnvironmentVariable: 'AB:${'CD:' * 30}EF',
+          };
+          await runWithOverrides(command.run);
           verify(() => releaser.buildReleaseArtifacts()).called(1);
         });
 
@@ -2247,3 +2295,26 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}'''),
     });
   });
 }
+
+/// A PKCS#8 PEM Ed25519 build-manifest signing key (hardening P3) in a temp
+/// directory, and a platform whose environment names it.
+String writeBuildManifestSigningKey() {
+  final dir = Directory.systemTemp.createTempSync('manifest-key');
+  final der = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, //
+    0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+    ...List.filled(32, 7),
+  ];
+  return (File(p.join(dir.path, 'manifest.pem'))..writeAsStringSync(
+        '-----BEGIN PRIVATE KEY-----\n${base64.encode(der)}\n'
+        '-----END PRIVATE KEY-----\n',
+      ))
+      .path;
+}
+
+NativePlatform platformWithEnvironment(Map<String, String> environment) =>
+    TestNativePlatform.from(
+      NativePlatform.current!,
+    ).copyWith(
+      environment: {...NativePlatform.current!.environment, ...environment},
+    );
