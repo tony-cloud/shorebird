@@ -27,6 +27,7 @@ import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/pubspec_editor.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_cli_command_runner.dart';
@@ -115,6 +116,7 @@ Command: shorebird ${args.join(' ')}
           shorebirdTracerRef,
           shorebirdValidatorRef,
           shorebirdVersionRef,
+          toolchainSecurityRef,
           userConfigRef,
           windowsRef,
           xcodeBuildRef,

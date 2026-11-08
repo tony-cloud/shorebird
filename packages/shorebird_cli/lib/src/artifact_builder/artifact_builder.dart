@@ -19,6 +19,7 @@ import 'package:shorebird_cli/src/os/operating_system_interface.dart';
 import 'package:shorebird_cli/src/platform.dart' as scoped_platform;
 import 'package:shorebird_cli/src/platform/desktop_architecture.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
@@ -71,11 +72,15 @@ ArtifactBuilder get artifactBuilder => read(artifactBuilderRef);
 /// backwards compatibility: older Flutter builds that don't recognize a
 /// variable will silently ignore it, whereas an unknown flag would cause
 /// a build failure.
+///
+/// [security] holds the variables that select the release's security profile
+/// (see [ToolchainSecurity.buildEnvironment]); it is empty for legacy builds.
 Map<String, String>? buildEnvironment({
   String? base64PublicKey,
   int? ddMaxBytes,
+  Map<String, String> security = const {},
 }) {
-  final env = <String, String>{};
+  final env = <String, String>{...security};
   if (base64PublicKey != null) {
     env['SHOREBIRD_PUBLIC_KEY'] = base64PublicKey;
   }
@@ -91,6 +96,11 @@ Map<String, String>? buildEnvironment({
 class ArtifactBuilder {
   /// Public metadata overrides applied only while sealing an interpreter build.
   Map<String, String> iosInterpreterBuildEnvironment = const {};
+
+  /// The security-profile variables every `flutter build` receives, set by
+  /// `shorebird release` and `shorebird patch` once the profile is admitted.
+  /// Empty (legacy) unless the release is hardened.
+  Map<String, String> securityBuildEnvironment = const {};
 
   /// A general recommendation when building artifacts fails.
   static String runVanillaFlutterBuildRecommendation(String buildCommand) =>
@@ -428,11 +438,13 @@ ${link(uri: Uri.parse(openShorebirdIssueUrl))}
           ? buildEnvironment(
               base64PublicKey: base64PublicKey,
               ddMaxBytes: ddMaxBytes,
+              security: securityBuildEnvironment,
             )
           : {
               ...?buildEnvironment(
                 base64PublicKey: base64PublicKey,
                 ddMaxBytes: ddMaxBytes,
+                security: securityBuildEnvironment,
               ),
               ...iosInterpreterBuildEnvironment,
             },

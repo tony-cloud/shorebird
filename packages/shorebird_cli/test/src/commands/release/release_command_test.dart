@@ -19,6 +19,7 @@ import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -73,6 +74,8 @@ void main() {
     late ShorebirdEnv shorebirdEnv;
     late ShorebirdFlutter shorebirdFlutter;
     late ShorebirdValidator shorebirdValidator;
+    // Null reads the real toolchain security file under shorebirdRoot.
+    late ToolchainSecurity? toolchainFloor;
 
     late ReleaseCommand command;
 
@@ -90,6 +93,9 @@ void main() {
           shorebirdEnvRef.overrideWith(() => shorebirdEnv),
           shorebirdFlutterRef.overrideWith(() => shorebirdFlutter),
           shorebirdValidatorRef.overrideWith(() => shorebirdValidator),
+          toolchainSecurityRef.overrideWith(
+            () => toolchainFloor ?? ToolchainSecurity.load(shorebirdRoot),
+          ),
         },
       );
     }
@@ -122,6 +128,7 @@ void main() {
       shorebirdEnv = MockShorebirdEnv();
       shorebirdFlutter = MockShorebirdFlutter();
       shorebirdValidator = MockShorebirdValidator();
+      toolchainFloor = ToolchainSecurity.legacyToolchain;
 
       when(() => argResults['dry-run']).thenReturn(false);
       when(() => argResults['platforms']).thenReturn(['android']);
@@ -299,6 +306,335 @@ void main() {
         verifyNever(
           () => codePushClientWrapper.getApp(appId: any(named: 'appId')),
         );
+      });
+    });
+
+    group('--security-profile', () {
+      final toolchainId = 'sha256:${'a' * 64}';
+      final hardenedToolchain = ToolchainSecurity(
+        profile: SecurityProfile.hardened,
+        toolchainId: toolchainId,
+        developmentExceptions: false,
+      );
+      const hardenedYaml = ShorebirdYaml(
+        appId: appId,
+        baseUrl: 'https://updates.example.com',
+      );
+
+      void requestProfile(String profile) {
+        when(
+          () => argResults[ReleaseCommand.securityProfileOption],
+        ).thenReturn(profile);
+      }
+
+      void expectNothingBuilt() {
+        verifyNever(() => releaser.buildReleaseArtifacts());
+        verifyNever(
+          () => codePushClientWrapper.getApp(appId: any(named: 'appId')),
+        );
+        verifyNever(
+          () => artifactBuilder.securityBuildEnvironment = any(),
+        );
+        verifyNever(() => releaser.requireManagedSigning = any());
+      }
+
+      Future<void> expectRefused(Pattern message) async {
+        await expectLater(
+          runWithOverrides(command.run),
+          throwsA(
+            isA<PreconditionFailedExit>().having(
+              (e) => e.failure.message,
+              'message',
+              contains(message),
+            ),
+          ),
+        );
+        expectNothingBuilt();
+      }
+
+      Future<void> expectUsageError(Pattern message) async {
+        await expectLater(
+          runWithOverrides(command.run),
+          throwsA(
+            isA<UsageException>().having(
+              (e) => e.message,
+              'message',
+              contains(message),
+            ),
+          ),
+        );
+        expectNothingBuilt();
+      }
+
+      test('defaults to legacy and documents the reserved profile', () {
+        final option = ReleaseCommand().argParser.options['security-profile']!;
+        expect(option.defaultsTo, 'legacy');
+        expect(option.help, contains('"hardened-diversified" is reserved'));
+      });
+
+      test('rejects the reserved hardened-diversified profile', () async {
+        requestProfile('hardened-diversified');
+        toolchainFloor = hardenedToolchain;
+        await expectUsageError('is reserved');
+      });
+
+      test('rejects an unknown profile', () async {
+        requestProfile('strict');
+        await expectUsageError('must be legacy or hardened, not "strict"');
+      });
+
+      group('on a legacy toolchain', () {
+        test('legacy release passes no security environment', () async {
+          requestProfile('legacy');
+          await runWithOverrides(command.run);
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+          verifyNever(
+            () => artifactBuilder.securityBuildEnvironment = any(),
+          );
+          verifyNever(() => releaser.requireManagedSigning = any());
+        });
+
+        test('refuses a hardened release', () async {
+          requestProfile('hardened');
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(hardenedYaml);
+          await expectRefused('this toolchain was not built hardened');
+        });
+
+        test('refuses a checked-in security key', () async {
+          requestProfile('legacy');
+          File(
+            p.join(projectRoot.path, 'shorebird.yaml'),
+          ).writeAsStringSync('app_id: $appId\ntoolchain_id: $toolchainId\n');
+          await expectRefused('must not set toolchain_id');
+        });
+      });
+
+      group('on a development toolchain', () {
+        test('refuses a hardened release', () async {
+          toolchainFloor = ToolchainSecurity(
+            profile: SecurityProfile.hardened,
+            toolchainId: toolchainId,
+            developmentExceptions: true,
+          );
+          requestProfile('hardened');
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(hardenedYaml);
+          await expectRefused('development security exceptions');
+        });
+
+        test('refuses a legacy release too', () async {
+          toolchainFloor = const ToolchainSecurity(
+            profile: SecurityProfile.legacy,
+            toolchainId: null,
+            developmentExceptions: true,
+          );
+          requestProfile('legacy');
+          await expectRefused('development security exceptions');
+        });
+      });
+
+      group('when the toolchain security file is invalid', () {
+        test('fails closed before building', () async {
+          ToolchainSecurity.fileIn(shorebirdRoot)
+            ..createSync(recursive: true)
+            ..writeAsStringSync('{"schema": 1');
+          toolchainFloor = null;
+          await expectLater(
+            runWithOverrides(command.run),
+            throwsA(isA<PreconditionFailedExit>()),
+          );
+          verify(
+            () => logger.err(any(that: contains('not valid JSON'))),
+          ).called(1);
+          verifyNever(() => releaser.buildReleaseArtifacts());
+        });
+      });
+
+      group('on a hardened toolchain', () {
+        setUp(() {
+          toolchainFloor = hardenedToolchain;
+          requestProfile('hardened');
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+          ).thenReturn(false);
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+          ).thenReturn(false);
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(hardenedYaml);
+        });
+
+        test('refuses a legacy release', () async {
+          requestProfile('legacy');
+          await expectRefused(
+            'This Shorebird toolchain is hardened ($toolchainId)',
+          );
+          verify(
+            () => logger.info(
+              any(that: contains('--security-profile=hardened')),
+            ),
+          ).called(1);
+        });
+
+        test('never selects hardened by itself', () async {
+          when(
+            () => argResults[ReleaseCommand.securityProfileOption],
+          ).thenReturn(null);
+          await expectRefused('cannot build a legacy release');
+        });
+
+        test('admits a hardened release with the managed key and an https '
+            'base_url and passes exactly the two variables', () async {
+          await runWithOverrides(command.run);
+          verify(() => releaser.requireManagedSigning = true).called(1);
+          verify(
+            () => artifactBuilder.securityBuildEnvironment = {
+              'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+              'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+            },
+          ).called(1);
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+        });
+
+        test('admits selection_protocol 2 with managed signing', () async {
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              baseUrl: 'https://updates.example.com',
+              selectionProtocol: 2,
+            ),
+          );
+          await runWithOverrides(() => command.assertArgsAreValid(releaser));
+          verify(() => releaser.requireManagedSigning = true).called(1);
+        });
+
+        test('admits --flutter-version naming the pinned revision', () async {
+          when(() => argResults['flutter-version']).thenReturn(flutterRevision);
+          when(
+            () => shorebirdFlutter.resolveFlutterRevision(flutterRevision),
+          ).thenAnswer((_) async => flutterRevision);
+          await runWithOverrides(command.run);
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+        });
+
+        test('refuses another --flutter-version', () async {
+          when(() => argResults['flutter-version']).thenReturn('3.22.0');
+          await expectUsageError(
+            "builds with the installed toolchain's own Flutter "
+            '($flutterRevision)',
+          );
+        });
+
+        test('refuses --public-key-path', () async {
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+          ).thenReturn(true);
+          await expectUsageError(
+            'uses the Shorebird-managed patch signing key',
+          );
+        });
+
+        test('refuses --public-key-cmd', () async {
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+          ).thenReturn(true);
+          await expectUsageError(
+            'uses the Shorebird-managed patch signing key',
+          );
+        });
+
+        test('refuses --no-patch-signing', () async {
+          when(
+            () => argResults[CommonArguments.patchSigningArg.name],
+          ).thenReturn(false);
+          await expectUsageError('cannot be built with --no-patch-signing');
+        });
+
+        test('refuses a checked-in security key', () async {
+          File(p.join(projectRoot.path, 'shorebird.yaml')).writeAsStringSync(
+            'app_id: $appId\nsecurity_profile: hardened\n',
+          );
+          await expectRefused('must not set security_profile');
+        });
+
+        group('refuses shorebird.yaml', () {
+          final cases = <String, (ShorebirdYaml, String)>{
+            'without base_url': (
+              const ShorebirdYaml(appId: appId),
+              'must set base_url',
+            ),
+            'with an http base_url': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'http://updates.example.com',
+              ),
+              'must use https',
+            ),
+            'with an http loopback base_url': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'http://127.0.0.1:8080',
+              ),
+              'must use https',
+            ),
+            'with an http localhost base_url': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'http://localhost:8080',
+              ),
+              'must use https',
+            ),
+            'with user info in base_url': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'https://user:secret@updates.example.com',
+              ),
+              'must not contain user info',
+            ),
+            'with a base_url without a host': (
+              const ShorebirdYaml(appId: appId, baseUrl: 'https:///updates'),
+              'must name a host',
+            ),
+            'with patch_verification: install_only': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'https://updates.example.com',
+                patchVerification: PatchVerification.installOnly,
+              ),
+              'patch_verification in shorebird.yaml must be strict',
+            ),
+            'with patch_response_verification: optional': (
+              const ShorebirdYaml(
+                appId: appId,
+                baseUrl: 'https://updates.example.com',
+                patchResponseVerification: PatchResponseVerification.optional,
+              ),
+              'patch_response_verification in shorebird.yaml must be required',
+            ),
+          };
+          for (final MapEntry(key: name, value: (yaml, message))
+              in cases.entries) {
+            test(name, () async {
+              when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(yaml);
+              await expectRefused(message);
+            });
+          }
+        });
+
+        test('admits explicit strict and required verification', () async {
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              baseUrl: 'https://updates.example.com/api',
+              patchVerification: PatchVerification.strict,
+              patchResponseVerification: PatchResponseVerification.required,
+            ),
+          );
+          await runWithOverrides(command.run);
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+        });
       });
     });
 

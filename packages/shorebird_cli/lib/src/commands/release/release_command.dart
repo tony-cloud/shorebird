@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:meta/meta.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart' as open_patch;
+import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/archive_analysis/native_selection_archive.dart';
 import 'package:shorebird_cli/src/archive_analysis/release_selection_archive.dart';
@@ -29,6 +30,7 @@ import 'package:shorebird_cli/src/patch_verification.dart';
 import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_command.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -194,8 +196,26 @@ of the iOS app that is using this module. (aar and ios-framework only)''',
         CommonArguments.aotLinkDdMaxBytesArg.name,
         hide: true,
         help: CommonArguments.aotLinkDdMaxBytesArg.description,
+      )
+      ..addOption(
+        securityProfileOption,
+        defaultsTo: SecurityProfile.legacy.name,
+        valueHelp: 'legacy|hardened',
+        help:
+            'The security profile of this release, fixed for all of its '
+            'patches.\n'
+            'legacy (default) keeps the current behavior. hardened requires a '
+            'Shorebird toolchain built hardened and its pinned Flutter, the '
+            'Shorebird-managed patch signing key (no --public-key-path, '
+            '--public-key-cmd or --no-patch-signing), and an https base_url '
+            'in shorebird.yaml.\n'
+            '"${SecurityProfile.reservedDiversified}" is reserved and not yet '
+            'supported.',
       );
   }
+
+  /// The name of the option that selects the release's security profile.
+  static const securityProfileOption = 'security-profile';
 
   late final ResolveReleaser _resolveReleaser;
 
@@ -739,6 +759,7 @@ $error''');
   /// Validates arguments that are common to all release types.
   Future<void> assertArgsAreValid(Releaser releaser) async {
     assertPublicKeyArgsValid();
+    assertSecurityProfileAdmitted(releaser);
 
     final protocol = shorebirdEnv.getShorebirdYaml()?.selectionProtocol ?? 1;
     final nativeSelection =
@@ -846,6 +867,158 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
 
     // Ask the releaser to assert its own args are valid.
     await releaser.assertArgsAreValid();
+  }
+
+  /// The profile requested with `--security-profile`. Usage error for the
+  /// reserved profile or an unknown value.
+  SecurityProfile get requestedSecurityProfile {
+    final value =
+        results[securityProfileOption] as String? ??
+        SecurityProfile.legacy.name;
+    if (value == SecurityProfile.reservedDiversified) {
+      usageException(
+        '--$securityProfileOption=$value is reserved for a later version of '
+        'the security contract and is not supported. Use legacy or hardened.',
+      );
+    }
+    final profile = SecurityProfile.tryParse(value);
+    if (profile == null) {
+      usageException(
+        '--$securityProfileOption must be legacy or hardened, not "$value".',
+      );
+    }
+    return profile;
+  }
+
+  /// Release admission for the security profile (docs/HARDENING_CONTRACTS.md
+  /// §2). Runs before anything is built, for every platform.
+  ///
+  /// The requested profile must match the installed toolchain's floor in both
+  /// directions, the toolchain must not be a development toolchain, and the
+  /// checked-in shorebird.yaml must not set the keys only the build writes.
+  /// A hardened release additionally needs the Shorebird-managed signing key
+  /// (no --no-patch-signing, no customer key: only managed signing lets the
+  /// server authenticate patch-check responses, which hardened requires), the
+  /// installed toolchain's pinned Flutter, and a shorebird.yaml that meets the
+  /// hardened floor. [releaser] then fails closed if the managed key does not
+  /// resolve (see [Releaser.requireManagedSigning]). On success, a hardened
+  /// release's `flutter build`s receive SHOREBIRD_SECURITY_PROFILE and
+  /// SHOREBIRD_TOOLCHAIN_ID; a legacy release's environment is unchanged.
+  ///
+  // TODO(hardening-p4): record security_profile and toolchain_id in the
+  // release record and have the server reject mismatched patches
+  // (docs/HARDENING_CONTRACTS.md §7).
+  @visibleForTesting
+  void assertSecurityProfileAdmitted(Releaser releaser) {
+    final requested = requestedSecurityProfile;
+    final toolchain = loadToolchainSecurityOrExit();
+
+    if (toolchain.developmentExceptions) {
+      _refuseRelease(
+        'This Shorebird toolchain was built with development security '
+        'exceptions, so it cannot build releases.',
+        hint:
+            'Install a production Shorebird toolchain (one whose '
+            '${ToolchainSecurity.fileName} sets development_exceptions: '
+            'false) and run the release again.',
+      );
+    }
+    if (requested != toolchain.profile) {
+      switch (requested) {
+        case SecurityProfile.hardened:
+          _refuseRelease(
+            '--$securityProfileOption=hardened needs a hardened Shorebird '
+            'toolchain, but this toolchain was not built hardened.',
+            hint:
+                'Release without --$securityProfileOption (legacy), or '
+                'install a Shorebird toolchain built with the hardened '
+                'profile.',
+          );
+        case SecurityProfile.legacy:
+          _refuseRelease(
+            'This Shorebird toolchain is hardened '
+            '(${toolchain.toolchainId}), so it cannot build a legacy '
+            'release.',
+            hint:
+                'Pass --$securityProfileOption=hardened, or use a legacy '
+                'Shorebird toolchain.',
+          );
+      }
+    }
+
+    if (shorebirdEnv.getShorebirdProjectRoot() case final root?) {
+      final file = File(p.join(root.path, 'shorebird.yaml'));
+      if (file.existsSync()) {
+        final reserved = reservedSecurityKeysIn(file.readAsStringSync());
+        if (reserved.isNotEmpty) {
+          _refuseRelease(
+            'shorebird.yaml must not set ${reserved.join(', ')}: the build '
+            'writes ${reserved.length == 1 ? 'it' : 'them'} into the bundled '
+            'shorebird.yaml from --$securityProfileOption.',
+            hint: 'Remove ${reserved.join(', ')} from shorebird.yaml.',
+          );
+        }
+      }
+    }
+
+    if (requested == SecurityProfile.legacy) return;
+
+    if (!results.patchSigningEnabled) {
+      usageException(
+        'A hardened release only accepts signed patches, so it cannot be '
+        'built with --no-${CommonArguments.patchSigningArg.name}. Remove '
+        '--no-${CommonArguments.patchSigningArg.name}: hardened releases '
+        'embed the Shorebird-managed patch signing key.',
+      );
+    }
+    if (results.wasParsed(CommonArguments.publicKeyArg.name) ||
+        results.wasParsed(CommonArguments.publicKeyCmd.name)) {
+      usageException(
+        'A hardened release uses the Shorebird-managed patch signing key, so '
+        'it cannot be combined with --${CommonArguments.publicKeyArg.name} '
+        'or --${CommonArguments.publicKeyCmd.name}: with a customer key the '
+        'server cannot authenticate patch-check responses, which hardened '
+        'requires. Remove --${CommonArguments.publicKeyArg.name} and '
+        '--${CommonArguments.publicKeyCmd.name}.',
+      );
+    }
+
+    // toolchain_id describes only the installed toolchain, so a hardened
+    // release must be built with its pinned Flutter.
+    final flutterVersion = results['flutter-version'] as String? ?? 'latest';
+    if (flutterVersion != 'latest' &&
+        flutterVersion != shorebirdEnv.flutterRevision) {
+      usageException(
+        '--$securityProfileOption=hardened builds with the installed '
+        "toolchain's own Flutter (${shorebirdEnv.flutterRevision}), because "
+        'its toolchain_id describes only that toolchain. Remove '
+        '--flutter-version=$flutterVersion.',
+      );
+    }
+
+    final problems = hardenedShorebirdYamlProblems(
+      shorebirdEnv.getShorebirdYaml(),
+    );
+    if (problems.isNotEmpty) {
+      _refuseRelease(
+        'shorebird.yaml does not meet the hardened profile:\n'
+        '${problems.map((problem) => '  - $problem').join('\n')}',
+        hint:
+            'Fix shorebird.yaml, or release without '
+            '--$securityProfileOption (legacy).',
+      );
+    }
+
+    releaser.requireManagedSigning = true;
+    artifactBuilder.securityBuildEnvironment = toolchain.buildEnvironment;
+  }
+
+  Never _refuseRelease(String message, {required String hint}) {
+    final failure = ValidationFailedException(message: message, hint: hint);
+    logger
+      ..err(failure.message)
+      ..info(hint);
+    throw PreconditionFailedExit(failure);
   }
 
   String get _iosPatchRuntimeMode {

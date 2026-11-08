@@ -123,6 +123,17 @@ To change the version of this release, change your app's version in your pubspec
   ) async {
     clearSupplementDirectory();
     final base64PublicKey = await resolvePatchSigningKey();
+    if (requireManagedSigning &&
+        (base64PublicKey == null ||
+            signing?.mode != ReleaseSigningMode.managed)) {
+      final resolved = base64PublicKey == null
+          ? 'no key'
+          : 'a ${signing?.mode.value} key';
+      throw ArtifactBuildException(
+        'A hardened release must embed the Shorebird-managed patch signing '
+        'key, but this build resolved $resolved.',
+      );
+    }
     final buildArgs = [...argResults.forwardedArgs];
     addSplitDebugInfoDefault(buildArgs);
     await addObfuscationMapArgs(buildArgs);
@@ -437,6 +448,12 @@ To change the version of this release, change your app's version in your pubspec
   ///
   /// Returns null if no public key is configured.
   Future<String?> getEncodedPublicKey() => argResults.getEncodedPublicKey();
+
+  /// Whether this release must embed the Shorebird-managed key (set by
+  /// `shorebird release --security-profile=hardened`). When set,
+  /// [runReleaseBuild] refuses to build unless [resolvePatchSigningKey]
+  /// returned a managed key.
+  bool requireManagedSigning = false;
 
   /// How this platform's build is signed for patch signing. Set by
   /// [resolvePatchSigningKey]; null until the build runs.

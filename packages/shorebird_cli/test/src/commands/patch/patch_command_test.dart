@@ -28,6 +28,7 @@ import 'package:shorebird_cli/src/metadata/metadata.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -185,6 +186,7 @@ void main() {
     late ShorebirdEnv shorebirdEnv;
     late ShorebirdFlutter shorebirdFlutter;
     late ShorebirdValidator shorebirdValidator;
+    late ToolchainSecurity toolchainFloor;
 
     late PatchCommand command;
 
@@ -204,6 +206,7 @@ void main() {
           shorebirdEnvRef.overrideWith(() => shorebirdEnv),
           shorebirdFlutterRef.overrideWith(() => shorebirdFlutter),
           shorebirdValidatorRef.overrideWith(() => shorebirdValidator),
+          toolchainSecurityRef.overrideWith(() => toolchainFloor),
         },
       );
     }
@@ -270,6 +273,7 @@ void main() {
       shorebirdEnv = MockShorebirdEnv();
       shorebirdFlutter = MockShorebirdFlutter();
       shorebirdValidator = MockShorebirdValidator();
+      toolchainFloor = ToolchainSecurity.legacyToolchain;
 
       when(() => argResults['dry-run']).thenReturn(false);
       when(() => argResults['platforms']).thenReturn(['android']);
@@ -1034,6 +1038,174 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
           await runWithOverrides(() => command.createPatch(patcher));
 
           verifyNever(() => patcher.releaseManagedPublicKeyPem = any());
+        });
+      });
+
+      group('on a hardened toolchain', () {
+        final toolchainId = 'sha256:${'b' * 64}';
+
+        void stubReleaseSigning(ArtifactSigning? signing) {
+          when(
+            () => codePushClientWrapper.getReleaseArtifact(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              arch: 'aab',
+              platform: ReleasePlatform.android,
+            ),
+          ).thenAnswer(
+            (_) async => ReleaseArtifact(
+              id: aabArtifact.id,
+              releaseId: aabArtifact.releaseId,
+              arch: aabArtifact.arch,
+              platform: aabArtifact.platform,
+              hash: aabArtifact.hash,
+              size: aabArtifact.size,
+              url: aabArtifact.url,
+              canSideload: aabArtifact.canSideload,
+              signing: signing,
+            ),
+          );
+        }
+
+        setUp(() {
+          toolchainFloor = ToolchainSecurity(
+            profile: SecurityProfile.hardened,
+            toolchainId: toolchainId,
+            developmentExceptions: false,
+          );
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              baseUrl: 'https://updates.example.com',
+            ),
+          );
+          stubReleaseSigning(
+            const ArtifactSigning(
+              mode: 'managed',
+              keyId: 7,
+              publicKeyPem: 'managed-public-key-pem',
+            ),
+          );
+        });
+
+        test(
+          'passes the profile and toolchain ID for a managed release',
+          () async {
+            await runWithOverrides(() => command.createPatch(patcher));
+            verify(
+              () => artifactBuilder.securityBuildEnvironment = {
+                'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+                'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+              },
+            ).called(1);
+            verify(
+              () =>
+                  patcher.releaseManagedPublicKeyPem = 'managed-public-key-pem',
+            ).called(1);
+          },
+        );
+
+        for (final arg in [
+          CommonArguments.publicKeyArg.name,
+          CommonArguments.publicKeyCmd.name,
+          CommonArguments.privateKeyArg.name,
+          CommonArguments.signCmd.name,
+        ]) {
+          test('refuses --$arg', () async {
+            when(() => argResults.wasParsed(arg)).thenReturn(true);
+            // Keep assertSigningArgsValid satisfied so the hardened rule is
+            // what rejects the run.
+            if (arg == CommonArguments.privateKeyArg.name ||
+                arg == CommonArguments.publicKeyArg.name) {
+              when(
+                () => argResults.wasParsed(CommonArguments.privateKeyArg.name),
+              ).thenReturn(true);
+              when(
+                () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+              ).thenReturn(true);
+              when(
+                () => argResults[CommonArguments.privateKeyArg.name],
+              ).thenReturn(createTempFile('private.pem').path);
+              when(
+                () => argResults[CommonArguments.publicKeyArg.name],
+              ).thenReturn(createTempFile('public.pem').path);
+            }
+            if (arg == CommonArguments.signCmd.name) {
+              when(
+                () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+              ).thenReturn(true);
+            }
+            await expectLater(
+              runWithOverrides(() => command.createPatch(patcher)),
+              throwsA(
+                isA<UsageException>().having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Shorebird signs their patches'),
+                    contains('--$arg'),
+                  ),
+                ),
+              ),
+            );
+            verifyNever(
+              () => codePushClientWrapper.getApp(appId: any(named: 'appId')),
+            );
+            verifyNever(
+              () => artifactBuilder.securityBuildEnvironment = any(),
+            );
+          });
+        }
+
+        test('refuses a release without a managed key', () async {
+          stubReleaseSigning(const ArtifactSigning(mode: 'customer'));
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(isA<PreconditionFailedExit>()),
+          );
+          verify(
+            () => logger.err(any(that: contains('not a hardened release'))),
+          ).called(1);
+          verifyNever(
+            () => patcher.buildPatchArtifact(
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+        });
+
+        test('refuses an unsigned release', () async {
+          stubReleaseSigning(null);
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(isA<PreconditionFailedExit>()),
+          );
+          verify(
+            () => logger.err(any(that: contains('(signing: none)'))),
+          ).called(1);
+        });
+
+        test('refuses a shorebird.yaml below the hardened floor', () async {
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              baseUrl: 'http://updates.example.com',
+            ),
+          );
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(isA<PreconditionFailedExit>()),
+          );
+          verify(
+            () => logger.err(any(that: contains('must use https'))),
+          ).called(1);
+          verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
+        });
+      });
+
+      group('on a legacy toolchain', () {
+        test('passes no security environment', () async {
+          await runWithOverrides(() => command.createPatch(patcher));
+          verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
         });
       });
 

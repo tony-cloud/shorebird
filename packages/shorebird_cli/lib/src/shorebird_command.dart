@@ -14,6 +14,7 @@ import 'package:shorebird_cli/src/interactive_mode.dart' as interactive_mode;
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_cli_command_runner.dart';
 import 'package:shorebird_cli/src/shorebird_validator.dart';
 import 'package:shorebird_cli/src/third_party/flutter_tools/lib/src/base/process.dart';
@@ -227,6 +228,26 @@ Valid platforms: $validPlatformNames''',
     }
     _assertFileArgExists(publicKeyPath);
     _assertFileArgExists(privateKeyPath);
+  }
+
+  /// The installed toolchain's security floor. Exits with
+  /// [ExitCode.config] when its toolchain security file is present but
+  /// invalid: an unreadable floor is never treated as legacy.
+  ToolchainSecurity loadToolchainSecurityOrExit() {
+    try {
+      return toolchainSecurity;
+    } on ToolchainSecurityException catch (error) {
+      final failure = ValidationFailedException(
+        message: error.message,
+        hint:
+            'Reinstall Shorebird, or restore bin/internal/'
+            '${ToolchainSecurity.fileName} as shipped with the toolchain.',
+      );
+      logger
+        ..err(failure.message)
+        ..info(failure.hint);
+      throw PreconditionFailedExit(failure);
+    }
   }
 
   /// Validates the release-signing arguments: at most one public key source,

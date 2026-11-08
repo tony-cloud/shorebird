@@ -33,6 +33,7 @@ import 'package:shorebird_cli/src/platform.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_chooser.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_command.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
@@ -505,6 +506,7 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
     await patcher.assertPreconditions();
     await patcher.assertArgsAreValid();
     assertSigningArgsValid();
+    _assertHardenedPatchAdmitted();
 
     // A new track is created on first publish, so reject a name that
     // `channels create` and `patches set-track` would also reject.
@@ -524,6 +526,60 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
       throw PreconditionFailedExit(e);
     }
   }
+
+  /// Whether this patch is built by a hardened toolchain, set by
+  /// [_assertHardenedPatchAdmitted].
+  bool _hardenedToolchain = false;
+
+  /// On a hardened toolchain, requires what a hardened release accepts (a
+  /// patch Shorebird signs with the release's managed key, and a
+  /// shorebird.yaml that meets the hardened floor) and passes the profile and
+  /// toolchain ID to every `flutter build`. On a legacy toolchain, does
+  /// nothing.
+  ///
+  // TODO(hardening-p4): compare with the security_profile and toolchain_id
+  // recorded in the release and have the server reject mismatched patches
+  // (docs/HARDENING_CONTRACTS.md §7). Until then the toolchain's floor is the
+  // only profile the CLI knows.
+  void _assertHardenedPatchAdmitted() {
+    final toolchain = loadToolchainSecurityOrExit();
+    if (toolchain.profile != SecurityProfile.hardened) return;
+
+    final keyArgs = _customerSigningArgs.where(results.wasParsed);
+    if (keyArgs.isNotEmpty) {
+      usageException(
+        'This Shorebird toolchain is hardened: hardened releases embed the '
+        'Shorebird-managed key, and Shorebird signs their patches. Remove '
+        '${keyArgs.map((arg) => '--$arg').join(', ')}.',
+      );
+    }
+
+    final problems = hardenedShorebirdYamlProblems(
+      shorebirdEnv.getShorebirdYaml(),
+    );
+    if (problems.isNotEmpty) {
+      final failure = ValidationFailedException(
+        message:
+            'shorebird.yaml does not meet the hardened profile:\n'
+            '${problems.map((problem) => '  - $problem').join('\n')}',
+        hint: 'Fix shorebird.yaml to match the hardened release.',
+      );
+      logger
+        ..err(failure.message)
+        ..info(failure.hint);
+      throw PreconditionFailedExit(failure);
+    }
+
+    _hardenedToolchain = true;
+    artifactBuilder.securityBuildEnvironment = toolchain.buildEnvironment;
+  }
+
+  static final _customerSigningArgs = [
+    CommonArguments.publicKeyArg.name,
+    CommonArguments.publicKeyCmd.name,
+    CommonArguments.privateKeyArg.name,
+    CommonArguments.signCmd.name,
+  ];
 
   /// Determines which release to patch.
   ///
@@ -817,14 +873,29 @@ Building with Flutter $flutterVersionString to determine the release version...
     required ReleaseArtifact releaseArtifact,
   }) {
     final signing = releaseArtifact.signing;
+    if (_hardenedToolchain &&
+        (signing?.mode != ReleaseSigningMode.managed.value ||
+            signing?.publicKeyPem == null)) {
+      // A hardened release always embeds the managed key; anything else was
+      // not built by a hardened toolchain and cannot take this patch.
+      final failure = ValidationFailedException(
+        message:
+            'This Shorebird toolchain is hardened, but release '
+            '${release.version} does not embed a Shorebird-managed key '
+            '(signing: ${signing?.mode ?? 'none'}), so it is not a hardened '
+            'release.',
+        hint:
+            'Patch release ${release.version} with the Shorebird toolchain '
+            'that built it.',
+      );
+      logger
+        ..err(failure.message)
+        ..info(failure.hint);
+      throw PreconditionFailedExit(failure);
+    }
     if (signing?.mode != ReleaseSigningMode.managed.value) return;
 
-    final keyArgs = [
-      CommonArguments.publicKeyArg.name,
-      CommonArguments.publicKeyCmd.name,
-      CommonArguments.privateKeyArg.name,
-      CommonArguments.signCmd.name,
-    ].where(results.wasParsed);
+    final keyArgs = _customerSigningArgs.where(results.wasParsed);
     if (keyArgs.isNotEmpty) {
       usageException(
         'Release ${release.version} is signed with a Shorebird-managed key, '

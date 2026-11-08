@@ -10,9 +10,11 @@ import 'package:shorebird_cli/src/cache.dart';
 import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/json_output.dart';
 import 'package:shorebird_cli/src/platform.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_cli_command_runner.dart';
 import 'package:shorebird_cli/src/user_config.dart';
 import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
+import 'package:yaml/yaml.dart';
 
 /// Exception thrown when the Shorebird cache appears to be corrupted.
 class CacheCorruptedException implements Exception {
@@ -332,7 +334,25 @@ class ShorebirdEnv {
   ShorebirdYaml? getShorebirdYaml() {
     final root = getShorebirdProjectRoot();
     if (root == null) return null;
-    final yaml = getShorebirdYamlFile(cwd: root).readAsStringSync();
+    final file = getShorebirdYamlFile(cwd: root);
+    final yaml = file.readAsStringSync();
+    final reserved = reservedSecurityKeysIn(yaml);
+    if (reserved.isNotEmpty) {
+      final document = loadYamlNode(yaml, sourceUrl: file.uri);
+      final keyNode = document is YamlMap
+          ? document.nodes.keys.whereType<YamlNode>().firstWhere(
+              (key) => key.value == reserved.first,
+              orElse: () => document,
+            )
+          : document;
+      throw ParsedYamlException(
+        'shorebird.yaml must not set ${reserved.join(', ')}. Only '
+        '`shorebird release` decides the security profile; remove '
+        '${reserved.length == 1 ? 'this key' : 'these keys'} from '
+        'shorebird.yaml.',
+        keyNode,
+      );
+    }
     return checkedYamlDecode(yaml, (m) => ShorebirdYaml.fromJson(m!));
   }
 

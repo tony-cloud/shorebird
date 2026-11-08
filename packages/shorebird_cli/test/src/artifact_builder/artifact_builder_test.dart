@@ -28,6 +28,33 @@ import '../mocks.dart';
 
 void main() {
   useTempWorkingDirectory();
+  group('buildEnvironment', () {
+    test('is unchanged for legacy builds', () {
+      expect(buildEnvironment(), isNull);
+      expect(
+        buildEnvironment(base64PublicKey: 'key', ddMaxBytes: 7),
+        {'SHOREBIRD_PUBLIC_KEY': 'key', 'SHOREBIRD_DD_MAX_BYTES': '7'},
+      );
+    });
+
+    test('adds the security variables', () {
+      expect(
+        buildEnvironment(
+          base64PublicKey: 'key',
+          security: const {
+            'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+            'SHOREBIRD_TOOLCHAIN_ID': 'id',
+          },
+        ),
+        {
+          'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+          'SHOREBIRD_TOOLCHAIN_ID': 'id',
+          'SHOREBIRD_PUBLIC_KEY': 'key',
+        },
+      );
+    });
+  });
+
   group(ArtifactBuilder, () {
     late Directory projectRoot;
     late Apple apple;
@@ -500,6 +527,50 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
                 '--target-platform=android-arm64',
               ],
               environment: {'SHOREBIRD_PUBLIC_KEY': base64PublicKey},
+              runInShell: false,
+              onStart: any(named: 'onStart'),
+            ),
+          ).called(1);
+        });
+      });
+
+      group('when securityBuildEnvironment is set', () {
+        final security = {
+          'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+          'SHOREBIRD_TOOLCHAIN_ID': 'sha256:${'0' * 64}',
+        };
+
+        setUp(() {
+          builder.securityBuildEnvironment = security;
+          when(
+            () => shorebirdProcess.stream(
+              'flutter',
+              any(),
+              environment: any(named: 'environment'),
+              runInShell: false,
+              onStart: any(named: 'onStart'),
+            ),
+          ).thenAnswer((_) async => ExitCode.success.code);
+        });
+
+        test('passes it to flutter build with the public key', () async {
+          await runWithOverrides(
+            () => builder.buildAppBundle(
+              flavor: 'flavor',
+              target: 'target',
+              targetPlatforms: [Arch.arm64],
+              base64PublicKey: 'base64PublicKey',
+            ),
+          );
+
+          verify(
+            () => shorebirdProcess.stream(
+              'flutter',
+              any(),
+              environment: {
+                ...security,
+                'SHOREBIRD_PUBLIC_KEY': 'base64PublicKey',
+              },
               runInShell: false,
               onStart: any(named: 'onStart'),
             ),

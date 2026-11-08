@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:checked_yaml/checked_yaml.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
@@ -494,6 +495,47 @@ void main() {
             () => shorebirdEnv.getPubspecYamlFile(cwd: tempDir).path,
           ),
           equals(p.join(tempDir.path, 'pubspec.yaml')),
+        );
+      });
+    });
+
+    group('getShorebirdYaml', () {
+      test('rejects keys only the build may write', () {
+        final tempDir = Directory.systemTemp.createTempSync();
+        File(p.join(tempDir.path, 'shorebird.yaml')).writeAsStringSync('''
+app_id: test-app-id
+security_profile: hardened
+security_development_exceptions: true
+''');
+        expect(
+          () => IOOverrides.runZoned(
+            () => runWithOverrides(() => shorebirdEnv.getShorebirdYaml()),
+            getCurrentDirectory: () => tempDir,
+          ),
+          throwsA(
+            isA<ParsedYamlException>().having(
+              (e) => e.message,
+              'message',
+              startsWith(
+                'shorebird.yaml must not set security_profile, '
+                'security_development_exceptions.',
+              ),
+            ),
+          ),
+        );
+      });
+
+      test('parses a shorebird.yaml without reserved keys', () {
+        final tempDir = Directory.systemTemp.createTempSync();
+        File(
+          p.join(tempDir.path, 'shorebird.yaml'),
+        ).writeAsStringSync('app_id: test-app-id\n');
+        expect(
+          IOOverrides.runZoned(
+            () => runWithOverrides(() => shorebirdEnv.getShorebirdYaml()),
+            getCurrentDirectory: () => tempDir,
+          )?.appId,
+          'test-app-id',
         );
       });
     });

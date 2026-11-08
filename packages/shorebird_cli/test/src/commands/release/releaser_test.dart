@@ -652,6 +652,68 @@ To change the version of this release, change your app's version in your pubspec
         expect(receivedArgs, equals(['--dart-define=FOO=bar']));
       });
 
+      group('when managed signing is required (hardened)', () {
+        setUp(() => releaser.requireManagedSigning = true);
+
+        test('builds with the managed key', () async {
+          when(
+            () => argResults[CommonArguments.patchSigningArg.name],
+          ).thenReturn(true);
+          String? embedded;
+          await runWithOverrides(
+            () => releaser.runReleaseBuild((_, base64PublicKey) async {
+              embedded = base64PublicKey;
+            }),
+          );
+          expect(embedded, managedKeyBase64);
+        });
+
+        test('fails closed without a key', () async {
+          var built = false;
+          await expectLater(
+            runWithOverrides(
+              () => releaser.runReleaseBuild((_, _) async => built = true),
+            ),
+            throwsA(
+              isA<ArtifactBuildException>().having(
+                (e) => e.message,
+                'message',
+                contains('resolved no key'),
+              ),
+            ),
+          );
+          expect(built, isFalse);
+        });
+
+        test('fails closed with a customer key', () async {
+          final publicKeyFile = File(p.join(projectRoot.path, 'public.pem'))
+            ..writeAsStringSync('customer-pem');
+          when(
+            () => argResults[CommonArguments.publicKeyArg.name],
+          ).thenReturn(publicKeyFile.path);
+          when(
+            () => codeSigner.canonicalPublicKeyPem('customer-pem'),
+          ).thenReturn('customer-pem');
+          when(
+            () => codeSigner.base64PublicKeyFromPem('customer-pem'),
+          ).thenReturn('Y3VzdG9tZXI=');
+          var built = false;
+          await expectLater(
+            runWithOverrides(
+              () => releaser.runReleaseBuild((_, _) async => built = true),
+            ),
+            throwsA(
+              isA<ArtifactBuildException>().having(
+                (e) => e.message,
+                'message',
+                contains('resolved a customer key'),
+              ),
+            ),
+          );
+          expect(built, isFalse);
+        });
+      });
+
       test(
         'adds the split-debug-info and obfuscation map args, then verifies '
         'the map the build saved',
