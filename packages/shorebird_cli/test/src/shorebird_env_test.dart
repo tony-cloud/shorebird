@@ -18,6 +18,21 @@ import 'package:test/test.dart';
 import 'helpers.dart';
 import 'mocks.dart';
 
+/// An explicitly configured development environment; the CLI names none.
+const devHostedUrl = 'https://api-dev.operator.example';
+const devAuthServiceUrl = 'https://auth-dev.operator.example';
+const devConsoleUrl = 'https://console-dev.operator.example';
+const devVariables = {
+  'SHOREBIRD_DEV_HOSTED_URL': devHostedUrl,
+  'SHOREBIRD_DEV_AUTH_SERVICE_URL': devAuthServiceUrl,
+  'SHOREBIRD_DEV_CONSOLE_URL': devConsoleUrl,
+};
+const configuredDevEnvironment = (
+  hostedUrl: devHostedUrl,
+  authServiceUrl: devAuthServiceUrl,
+  consoleUrl: devConsoleUrl,
+);
+
 void main() {
   useTempWorkingDirectory();
   group(CacheCorruptedException, () {
@@ -896,8 +911,164 @@ dependencies:
       });
     });
 
+    group('devEnvironment', () {
+      test('names no Shorebird-hosted service by default', () {
+        platform = platform.copyWith(environment: {});
+        expect(runWithOverrides(() => devEnvironment), isNull);
+        expect(
+          runWithOverrides(() => shorebirdEnvironments),
+          equals([productionEnvironment]),
+        );
+      });
+
+      test('is configured explicitly, with derived defaults', () {
+        platform = platform.copyWith(
+          environment: {'SHOREBIRD_DEV_HOSTED_URL': ' https://dev.example '},
+        );
+        expect(
+          runWithOverrides(() => devEnvironment),
+          equals((
+            hostedUrl: 'https://dev.example',
+            authServiceUrl: 'https://dev.example/auth',
+            consoleUrl: 'https://dev.example',
+          )),
+        );
+        platform = platform.copyWith(environment: devVariables);
+        expect(
+          runWithOverrides(() => shorebirdEnvironments),
+          equals([productionEnvironment, configuredDevEnvironment]),
+        );
+      });
+
+      test('--dev without a configured server falls back to no dev host', () {
+        platform = platform.copyWith(environment: {});
+        expect(
+          runScoped(
+            () => runWithOverrides(() => shorebirdEnv.hostedUri),
+            values: {isDevModeRef.overrideWith(() => true)},
+          ),
+          equals(Uri.parse(ShorebirdEnv.defaultHostedUrl)),
+        );
+      });
+    });
+
+    group('artifactOrigins', () {
+      ({ArtifactOriginMode mode, String? mirrorUrl}) originsWith(
+        Map<String, String> environment,
+      ) {
+        platform = platform.copyWith(environment: environment);
+        return runWithOverrides(() => shorebirdEnv.artifactOrigins);
+      }
+
+      Map<String, String> flutterEnvironmentWith(
+        Map<String, String> environment,
+      ) {
+        platform = platform.copyWith(environment: environment);
+        return runWithOverrides(() => shorebirdEnv.flutterArtifactEnvironment);
+      }
+
+      Matcher conflict(String reason) => throwsA(
+        isA<ArtifactOriginConflict>().having(
+          (e) => e.message,
+          'message',
+          contains(reason),
+        ),
+      );
+
+      test('is split by default and overrides nothing but the mode', () {
+        expect(originsWith({}).mode, ArtifactOriginMode.split);
+        expect(
+          flutterEnvironmentWith({
+            'FLUTTER_STORAGE_BASE_URL': 'https://storage.flutter-io.cn',
+            'PUB_HOSTED_URL': 'https://pub.flutter-io.cn',
+            'SHOREBIRD_ARTIFACT_BASE_URL': 'https://store.example',
+          }),
+          equals({'SHOREBIRD_ORIGIN_MODE': 'split'}),
+        );
+      });
+
+      test('keeps the legacy aliases as an all-in-one mirror', () {
+        for (final name in [
+          'SHOREBIRD_DOWNLOAD_URL',
+          'SHOREBIRD_FLUTTER_STORAGE_BASE_URL',
+        ]) {
+          expect(
+            flutterEnvironmentWith({name: 'https://proxy.example/'}),
+            equals({
+              'SHOREBIRD_ORIGIN_MODE': 'legacy-mirror',
+              'FLUTTER_STORAGE_BASE_URL': 'https://proxy.example',
+            }),
+            reason: name,
+          );
+        }
+        expect(
+          originsWith({
+            'FLUTTER_STORAGE_BASE_URL':
+                'http://localhost:8080/download.flutter.io',
+          }),
+          equals((
+            mode: ArtifactOriginMode.legacyMirror,
+            mirrorUrl: 'http://localhost:8080/download.flutter.io',
+          )),
+        );
+        expect(
+          originsWith({'SHOREBIRD_ORIGIN_MODE': 'legacy-mirror'}).mirrorUrl,
+          'http://localhost:8080/download.flutter.io',
+        );
+        expect(
+          originsWith({
+            'SHOREBIRD_DOWNLOAD_URL': 'https://proxy.example',
+            'SHOREBIRD_FLUTTER_STORAGE_BASE_URL': 'https://proxy.example/',
+            'FLUTTER_STORAGE_BASE_URL': 'https://proxy.example',
+          }).mirrorUrl,
+          'https://proxy.example',
+        );
+      });
+
+      test('diagnoses conflicting overrides', () {
+        expect(
+          () => originsWith({
+            'SHOREBIRD_DOWNLOAD_URL': 'https://a.example',
+            'SHOREBIRD_FLUTTER_STORAGE_BASE_URL': 'https://b.example',
+          }),
+          conflict('Conflicting artifact mirror overrides'),
+        );
+        expect(
+          () => originsWith({
+            'SHOREBIRD_ORIGIN_MODE': 'split',
+            'SHOREBIRD_DOWNLOAD_URL': 'https://a.example',
+          }),
+          conflict('SHOREBIRD_ORIGIN_MODE=split conflicts'),
+        );
+        expect(
+          () => originsWith({
+            'SHOREBIRD_DOWNLOAD_URL': 'https://a.example',
+            'FLUTTER_STORAGE_BASE_URL': 'https://storage.googleapis.com',
+          }),
+          conflict('Conflicting artifact origins'),
+        );
+        expect(
+          () => originsWith({'SHOREBIRD_ORIGIN_MODE': 'all'}),
+          conflict('Unknown SHOREBIRD_ORIGIN_MODE=all'),
+        );
+      });
+    });
+
     group('downloadUrl', () {
-      test('defaults to download.shorebird.dev', () {
+      test('prefers SHOREBIRD_MAVEN_BASE_URL', () {
+        platform = platform.copyWith(
+          environment: {
+            'SHOREBIRD_MAVEN_BASE_URL': 'https://maven.example/',
+            'SHOREBIRD_DOWNLOAD_URL': 'https://proxy.example',
+          },
+        );
+        expect(
+          runWithOverrides(() => shorebirdEnv.downloadUrl),
+          equals('https://maven.example'),
+        );
+      });
+
+      test('defaults to the open artifact proxy', () {
         expect(
           runWithOverrides(() => shorebirdEnv.downloadUrl),
           equals('http://localhost:8080/download.flutter.io'),
@@ -1045,6 +1216,7 @@ base_url: https://example.com''');
         );
 
         test('returns the dev server over shorebird.yaml', () {
+          platform = platform.copyWith(environment: devVariables);
           final directory = Directory.systemTemp.createTempSync();
           File(p.join(directory.path, 'shorebird.yaml')).writeAsStringSync('''
 app_id: test-id
@@ -1054,7 +1226,7 @@ base_url: https://example.com''');
               () => runInDevMode(() => shorebirdEnv.hostedUri),
               getCurrentDirectory: () => directory,
             ),
-            equals(Uri.parse('https://api-dev.shorebird.dev')),
+            equals(Uri.parse(devHostedUrl)),
           );
         });
 
@@ -1221,7 +1393,7 @@ base_url: https://yaml.example.com''');
 
       test('follows SHOREBIRD_HOSTED_URL to its auth service', () {
         platform = platform.copyWith(
-          environment: {'SHOREBIRD_HOSTED_URL': devHostedUrl},
+          environment: {...devVariables, 'SHOREBIRD_HOSTED_URL': devHostedUrl},
         );
         expect(
           runWithOverrides(() => shorebirdEnv.authServiceUri),
@@ -1230,7 +1402,7 @@ base_url: https://yaml.example.com''');
       });
 
       test('follows base_url in shorebird.yaml to its auth service', () {
-        platform = platform.copyWith(environment: {});
+        platform = platform.copyWith(environment: devVariables);
         final directory = Directory.systemTemp.createTempSync();
         File(p.join(directory.path, 'shorebird.yaml')).writeAsStringSync('''
 app_id: test-id
@@ -1247,6 +1419,7 @@ base_url: $devHostedUrl''');
       test('ignores an empty AUTH_SERVICE_URL', () {
         platform = platform.copyWith(
           environment: {
+            ...devVariables,
             'SHOREBIRD_HOSTED_URL': devHostedUrl,
             'AUTH_SERVICE_URL': '',
           },
@@ -1284,10 +1457,10 @@ base_url: $devHostedUrl''');
         });
 
         test('returns the dev auth service', () {
-          platform = platform.copyWith(environment: {});
+          platform = platform.copyWith(environment: devVariables);
           expect(
             runInDevMode(() => shorebirdEnv.authServiceUri),
-            equals(Uri.parse('https://auth-dev.shorebird.dev')),
+            equals(Uri.parse(devAuthServiceUrl)),
           );
         });
 
@@ -1354,11 +1527,14 @@ base_url: $devHostedUrl''');
 
       test('matches SHOREBIRD_HOSTED_URL by host', () {
         platform = platform.copyWith(
-          environment: {'SHOREBIRD_HOSTED_URL': '$devHostedUrl/'},
+          environment: {
+            ...devVariables,
+            'SHOREBIRD_HOSTED_URL': '$devHostedUrl/',
+          },
         );
         expect(
           runWithOverrides(() => shorebirdEnv.hostedEnvironment),
-          equals(devEnvironment),
+          equals(configuredDevEnvironment),
         );
       });
 
@@ -1385,7 +1561,9 @@ base_url: $devHostedUrl''');
 
     group('authServiceMismatch', () {
       String? mismatchWith(Map<String, String> environment) {
-        platform = platform.copyWith(environment: environment);
+        platform = platform.copyWith(
+          environment: {...devVariables, ...environment},
+        );
         return runWithOverrides(() => shorebirdEnv.authServiceMismatch);
       }
 
@@ -1414,10 +1592,10 @@ base_url: $devHostedUrl''');
             'AUTH_SERVICE_URL': defaultAuthServiceUrl,
           }),
           equals(
-            'api-dev.shorebird.dev accepts tokens from '
-            'https://auth-dev.shorebird.dev, but AUTH_SERVICE_URL is '
+            'api-dev.operator.example accepts tokens from '
+            '$devAuthServiceUrl, but AUTH_SERVICE_URL is '
             'http://localhost:8080/auth. Unset AUTH_SERVICE_URL (or set it '
-            'to https://auth-dev.shorebird.dev), then run shorebird login.',
+            'to $devAuthServiceUrl), then run shorebird login.',
           ),
         );
       });

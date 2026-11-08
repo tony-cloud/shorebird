@@ -17,6 +17,14 @@ import 'package:test/test.dart';
 import '../helpers.dart';
 import '../mocks.dart';
 
+/// An explicitly configured development environment; the CLI names none.
+const devConsoleUrl = 'https://console-dev.operator.example';
+const devEnvironment = (
+  hostedUrl: 'https://api-dev.operator.example',
+  authServiceUrl: 'https://auth-dev.operator.example',
+  consoleUrl: devConsoleUrl,
+);
+
 void main() {
   useTempWorkingDirectory();
 

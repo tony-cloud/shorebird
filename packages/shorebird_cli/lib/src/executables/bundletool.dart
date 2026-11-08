@@ -19,7 +19,7 @@ class Bundletool {
   static const jar = 'bundletool.jar';
 
   Future<ShorebirdProcessResult> _exec(List<String> command) async {
-    await cache.updateAll();
+    await cache.ensure(jar);
     final bundletool = p.join(cache.getArtifactDirectory(jar).path, jar);
     final javaHome = java.home;
     final javaExecutable = java.executable ?? 'java';

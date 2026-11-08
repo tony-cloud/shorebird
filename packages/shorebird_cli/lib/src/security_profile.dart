@@ -239,6 +239,16 @@ List<String> reservedSecurityKeysIn(String source) {
   ];
 }
 
+/// Why a hardened toolchain refuses the legacy all-in-one artifact mirror.
+const hardenedLegacyMirrorRefusal =
+    'This Shorebird toolchain is hardened: its artifacts resolve only through '
+    'the signed artifact catalog (split origin mode). The legacy all-in-one '
+    'mirror (SHOREBIRD_ORIGIN_MODE set to legacy-mirror, '
+    'SHOREBIRD_DOWNLOAD_URL or SHOREBIRD_FLUTTER_STORAGE_BASE_URL) routes '
+    'them through an unverified proxy instead. Unset those; use '
+    'FLUTTER_STORAGE_BASE_URL for an official mirror and '
+    'SHOREBIRD_ARTIFACT_BASE_URL for the custom artifact store.';
+
 /// The problems that keep [yaml] from configuring a hardened release, as
 /// complete sentences. Empty when [yaml] meets the hardened floor.
 ///

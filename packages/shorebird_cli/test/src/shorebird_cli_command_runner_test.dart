@@ -65,6 +65,9 @@ void main() {
       shorebirdFlutter = MockShorebirdFlutter();
       shorebirdVersion = MockShorebirdVersion();
       when(() => logger.level).thenReturn(Level.info);
+      when(
+        () => shorebirdEnv.artifactOrigins,
+      ).thenReturn((mode: ArtifactOriginMode.split, mirrorUrl: null));
       final logFile = MockFile();
       when(
         () => shorebirdEnv.logsDirectory,
@@ -644,8 +647,51 @@ Engine • revision $shorebirdEngineRevision'''),
       });
     });
 
+    group('artifact origins', () {
+      test(
+        'conflicting overrides are a usage error before any command',
+        () async {
+          when(() => shorebirdEnv.artifactOrigins).thenThrow(
+            const ArtifactOriginConflict('Conflicting artifact origins: test'),
+          );
+          final command = _RecordsDevModeCommand();
+          commandRunner.addCommand(command);
+
+          final result = await runWithOverrides(
+            () => commandRunner.run(['records-dev-mode']),
+          );
+
+          expect(result, equals(ExitCode.usage.code));
+          expect(command.isDevMode, isNull);
+          verify(
+            () =>
+                logger.err(any(that: contains('Conflicting artifact origins'))),
+          ).called(1);
+        },
+      );
+    });
+
     group('--dev', () {
+      test('needs an explicitly configured server', () async {
+        platform = platform.copyWith(environment: {});
+        final command = _RecordsDevModeCommand();
+        commandRunner.addCommand(command);
+
+        final result = await runWithOverrides(
+          () => commandRunner.run(['--dev', 'records-dev-mode']),
+        );
+
+        expect(result, equals(ExitCode.usage.code));
+        expect(command.isDevMode, isNull);
+        verify(
+          () => logger.err(any(that: contains('SHOREBIRD_DEV_HOSTED_URL'))),
+        ).called(1);
+      });
+
       test('selects the dev environment for the command', () async {
+        platform = platform.copyWith(
+          environment: {'SHOREBIRD_DEV_HOSTED_URL': 'https://dev.example'},
+        );
         final command = _RecordsDevModeCommand();
         commandRunner.addCommand(command);
 

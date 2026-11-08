@@ -788,7 +788,7 @@ void main() {
 
             verify(
               () => logger.detail('Failed to update patch, retrying...'),
-            ).called(2);
+            ).called(Cache.maxUpdateAttempts - 1);
           });
         });
 
@@ -892,7 +892,7 @@ void main() {
             // Retried, so the step fails once per attempt.
             verify(
               () => progress.fail('Failed to make patch executable'),
-            ).called(3);
+            ).called(Cache.maxUpdateAttempts);
             // No stamp means the next run downloads the artifact again.
             final patchArtifact = runWithOverrides(
               () => cache.getArtifactDirectory('patch'),
@@ -933,7 +933,7 @@ void main() {
               () => runWithOverrides(() => cache.updateAll(Duration.zero)),
               throwsException,
             );
-            verify(() => progress.fail()).called(3);
+            verify(() => progress.fail()).called(Cache.maxUpdateAttempts);
           });
         });
 
@@ -946,7 +946,9 @@ void main() {
 
           test('fails with the correct message', () async {
             await expectLater(
-              () => runWithOverrides(() => cache.updateAll(Duration.zero)),
+              () => runWithOverrides(
+                () => cache.ensure('bundletool.jar', Duration.zero),
+              ),
               throwsA(
                 isA<CacheUpdateFailure>().having(
                   (e) => e.message,
@@ -959,7 +961,7 @@ void main() {
               ),
             );
 
-            verify(() => progress.fail()).called(3);
+            verify(() => progress.fail()).called(Cache.maxUpdateAttempts);
           });
         });
 
@@ -1019,7 +1021,6 @@ void main() {
 
           final expected = [
             perEngine('patch-darwin-x64.zip'),
-            bundletoolUrl,
             perEngine('aot-tools.dill'),
             perEngine('analyze-snapshot-macos-arm64'),
             perEngine('analyze-snapshot-macos-x64'),
@@ -1058,10 +1059,19 @@ void main() {
             equals(
               [
                 '$perEngine/patch-linux-x64.zip',
-                'https://mirror.example.com/bundletool.jar',
                 '$perEngine/aot-tools.dill',
               ].map(Uri.parse).toList(),
             ),
+          );
+          clearInteractions(httpClient);
+          await runWithOverrides(
+            () => cache.ensure('bundletool.jar', Duration.zero),
+          );
+          expect(
+            verify(
+              () => httpClient.send(captureAny()),
+            ).captured.cast<http.BaseRequest>().map((r) => r.url),
+            equals([Uri.parse('https://mirror.example.com/bundletool.jar')]),
           );
         });
 
@@ -1082,7 +1092,6 @@ void main() {
 
           final expected = [
             perEngine('patch-windows-x64.zip'),
-            bundletoolUrl,
             perEngine('aot-tools.dill'),
           ].map(Uri.parse).toList();
 
@@ -1142,11 +1151,85 @@ void main() {
 
           final expected = [
             perEngine('patch-linux-x64.zip'),
-            bundletoolUrl,
             perEngine('aot-tools.dill'),
           ].map(Uri.parse).toList();
 
+          // A Linux desktop release never downloads bundletool.
           expect(requests, equals(expected));
+        });
+
+        test('downloads bundletool only on demand', () async {
+          setOperatingSystem(NativePlatform.linux);
+          await runWithOverrides(() => cache.updateAll(Duration.zero));
+          clearInteractions(httpClient);
+
+          await expectLater(
+            runWithOverrides(
+              () => cache.ensure('bundletool.jar', Duration.zero),
+            ),
+            completes,
+          );
+
+          final requests = verify(
+            () => httpClient.send(captureAny()),
+          ).captured.cast<http.BaseRequest>().map((r) => r.url).toList();
+          expect(requests, equals([Uri.parse(bundletoolUrl)]));
+        });
+
+        test('ensure rejects an unknown artifact', () {
+          expect(
+            () => runWithOverrides(() => cache.ensure('nope.jar')),
+            throwsArgumentError,
+          );
+        });
+
+        test('does not retry a definitive HTTP answer', () async {
+          when(() => httpClient.send(any())).thenAnswer(
+            (_) async => http.StreamedResponse(
+              const Stream.empty(),
+              HttpStatus.forbidden,
+              reasonPhrase: 'Forbidden',
+            ),
+          );
+          await expectLater(
+            runWithOverrides(() => cache.updateAll(Duration.zero)),
+            throwsA(
+              isA<CacheUpdateFailure>().having(
+                (e) => e.retryable,
+                'retryable',
+                isFalse,
+              ),
+            ),
+          );
+          verify(() => httpClient.send(any())).called(1);
+        });
+
+        test('retries a transient gateway timeout up to the bound', () async {
+          when(() => httpClient.send(any())).thenAnswer(
+            (_) async => http.StreamedResponse(
+              const Stream.empty(),
+              HttpStatus.gatewayTimeout,
+              reasonPhrase: 'Gateway Time-out',
+            ),
+          );
+          await expectLater(
+            runWithOverrides(() => cache.updateAll(Duration.zero)),
+            throwsA(
+              isA<CacheUpdateFailure>().having(
+                (e) => e.retryable,
+                'retryable',
+                isTrue,
+              ),
+            ),
+          );
+          verify(
+            () => httpClient.send(any()),
+          ).called(Cache.maxUpdateAttempts);
+        });
+
+        test('backs off for seconds by default, not milliseconds', () {
+          expect(Cache.defaultRetryDelayFactor, const Duration(seconds: 1));
+          expect(Cache.maxUpdateAttempts, greaterThanOrEqualTo(5));
         });
       });
     });

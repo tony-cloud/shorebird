@@ -619,7 +619,7 @@ dependencyResolutionManagement {
 +       }
 +       maven {
 -           url 'https://storage.googleapis.com/download.flutter.io'
-+           url '${ShorebirdProcess.defaultFlutterStorageBaseUrl}'
++           url '$defaultDownloadUrl'
 +       }
     }
 }

@@ -332,7 +332,7 @@ class Auth {
   /// The path of the credentials file for the auth service at [authUri]: the
   /// default one's is `credentials-v2.json`, and any other's is
   /// `credentials-v2-<host>.json`, with its port when it has one, such as
-  /// `credentials-v2-auth-dev.shorebird.dev.json` or
+  /// `credentials-v2-auth.example.com.json` or
   /// `credentials-v2-localhost_8080.json`.
   String _credentialsFilePathFor(Uri authUri) {
     final key = _authServiceKey(authUri);

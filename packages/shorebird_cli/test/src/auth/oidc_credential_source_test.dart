@@ -32,6 +32,14 @@ class _FakeSupplier implements SubjectTokenSupplier {
   }
 }
 
+/// An explicitly configured development environment; the CLI names none.
+const devConsoleUrl = 'https://console-dev.operator.example';
+const devEnvironment = (
+  hostedUrl: 'https://api-dev.operator.example',
+  authServiceUrl: 'https://auth-dev.operator.example',
+  consoleUrl: devConsoleUrl,
+);
+
 void main() {
   useTempWorkingDirectory();
 
@@ -219,7 +227,7 @@ void main() {
         source.unavailableReason?.hint,
         equals(
           'Set SHOREBIRD_PROJECT_ID to the id of your project shown at '
-          'https://console-dev.shorebird.dev, or set SHOREBIRD_TOKEN to a '
+          'https://console-dev.operator.example, or set SHOREBIRD_TOKEN to a '
           'Shorebird API key.',
         ),
       );
@@ -358,7 +366,7 @@ void main() {
             (e) => e.hint,
             'hint',
             'Check that a Test CI trust rule in project 42 at '
-                'https://console-dev.shorebird.dev matches this job.',
+                'https://console-dev.operator.example matches this job.',
           ),
         ),
       );

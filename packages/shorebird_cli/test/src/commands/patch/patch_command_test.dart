@@ -1079,6 +1079,9 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
               baseUrl: 'https://updates.example.com',
             ),
           );
+          when(
+            () => shorebirdEnv.artifactOrigins,
+          ).thenReturn((mode: ArtifactOriginMode.split, mirrorUrl: null));
           stubReleaseSigning(
             const ArtifactSigning(
               mode: 'managed',
@@ -1086,6 +1089,24 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
               publicKeyPem: 'managed-public-key-pem',
             ),
           );
+        });
+
+        test('refuses the legacy all-in-one artifact mirror', () async {
+          when(() => shorebirdEnv.artifactOrigins).thenReturn((
+            mode: ArtifactOriginMode.legacyMirror,
+            mirrorUrl: 'http://localhost:8080/download.flutter.io',
+          ));
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(
+              isA<UsageException>().having(
+                (e) => e.message,
+                'message',
+                contains('resolve only through the signed artifact catalog'),
+              ),
+            ),
+          );
+          verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
         });
 
         test(

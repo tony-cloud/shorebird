@@ -464,6 +464,19 @@ void main() {
             () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
           ).thenReturn(false);
           when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(hardenedYaml);
+          when(
+            () => shorebirdEnv.artifactOrigins,
+          ).thenReturn((mode: ArtifactOriginMode.split, mirrorUrl: null));
+        });
+
+        test('refuses the legacy all-in-one artifact mirror', () async {
+          when(() => shorebirdEnv.artifactOrigins).thenReturn((
+            mode: ArtifactOriginMode.legacyMirror,
+            mirrorUrl: 'http://localhost:8080/download.flutter.io',
+          ));
+          await expectUsageError(
+            'resolve only through the signed artifact catalog',
+          );
         });
 
         test('refuses a legacy release', () async {

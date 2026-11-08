@@ -554,6 +554,10 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
       );
     }
 
+    if (shorebirdEnv.artifactOrigins.mode == ArtifactOriginMode.legacyMirror) {
+      usageException(hardenedLegacyMirrorRefusal);
+    }
+
     final problems = hardenedShorebirdYamlProblems(
       shorebirdEnv.getShorebirdYaml(),
     );

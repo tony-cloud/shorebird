@@ -21,9 +21,9 @@ import 'mocks.dart';
 void main() {
   useTempWorkingDirectory();
   group('ShorebirdProcess', () {
-    const flutterStorageBaseUrlEnv = {
-      'FLUTTER_STORAGE_BASE_URL': ShorebirdProcess.defaultFlutterStorageBaseUrl,
-    };
+    // The vended Flutter's origin environment comes from
+    // ShorebirdEnv.flutterArtifactEnvironment (tested in shorebird_env_test).
+    const flutterOriginEnv = {'SHOREBIRD_ORIGIN_MODE': 'split'};
 
     late EngineConfig engineConfig;
     late ShorebirdLogger logger;
@@ -64,6 +64,9 @@ void main() {
       when(
         () => shorebirdEnv.downloadUrl,
       ).thenReturn('http://localhost:8080/download.flutter.io');
+      when(
+        () => shorebirdEnv.flutterArtifactEnvironment,
+      ).thenReturn(flutterOriginEnv);
 
       when(() => runProcessResult.stderr).thenReturn('stderr');
       when(() => runProcessResult.stdout).thenReturn('stdout');
@@ -157,19 +160,17 @@ void main() {
               ),
             ),
             ['--version'],
-            environment: flutterStorageBaseUrlEnv,
+            environment: flutterOriginEnv,
             workingDirectory: '~',
           ),
         ).called(1);
       });
 
-      test('can use an open Flutter storage mirror', () async {
-        platform = platform.copyWith(
-          environment: {
-            'SHOREBIRD_FLUTTER_STORAGE_BASE_URL':
-                'https://artifacts.example.com/flutter',
-          },
-        );
+      test('passes the legacy all-in-one mirror to Flutter', () async {
+        when(() => shorebirdEnv.flutterArtifactEnvironment).thenReturn({
+          'SHOREBIRD_ORIGIN_MODE': 'legacy-mirror',
+          'FLUTTER_STORAGE_BASE_URL': 'https://artifacts.example.com/flutter',
+        });
 
         await runWithOverrides(
           () => shorebirdProcess.run('flutter', [
@@ -182,6 +183,7 @@ void main() {
             any(),
             ['--version'],
             environment: {
+              'SHOREBIRD_ORIGIN_MODE': 'legacy-mirror',
               'FLUTTER_STORAGE_BASE_URL':
                   'https://artifacts.example.com/flutter',
             },
@@ -349,7 +351,7 @@ void main() {
               ),
             ),
             ['--version'],
-            environment: flutterStorageBaseUrlEnv,
+            environment: flutterOriginEnv,
             workingDirectory: '~',
           ),
         ).called(1);
@@ -638,7 +640,7 @@ void main() {
               ),
             ),
             ['run'],
-            environment: flutterStorageBaseUrlEnv,
+            environment: flutterOriginEnv,
           ),
         ).called(1);
       });
@@ -672,7 +674,7 @@ void main() {
               ),
             ),
             ['--version'],
-            environment: {'ENV_VAR': 'asdfasdf', ...flutterStorageBaseUrlEnv},
+            environment: {'ENV_VAR': 'asdfasdf', ...flutterOriginEnv},
           ),
         ).called(1);
       });

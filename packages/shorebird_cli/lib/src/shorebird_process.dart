@@ -26,10 +26,6 @@ class ShorebirdProcess {
     ProcessWrapper? processWrapper, // For mocking ShorebirdProcess.
   }) : processWrapper = processWrapper ?? ProcessWrapper();
 
-  /// Default Flutter artifact mirror for the open self-hosted setup.
-  static const defaultFlutterStorageBaseUrl =
-      '${ShorebirdEnv.defaultHostedUrl}/download.flutter.io';
-
   /// The underlying process wrapper.
   final ProcessWrapper processWrapper;
 
@@ -291,13 +287,9 @@ $stderr''');
     if (executable == 'flutter') {
       // If this ever changes we also need to update the `shorebird` shell
       // wrapper which downloads runs Flutter to fetch artifacts the first time.
-      return {
-        'FLUTTER_STORAGE_BASE_URL':
-            platform.environment['SHOREBIRD_DOWNLOAD_URL'] ??
-            platform.environment['SHOREBIRD_FLUTTER_STORAGE_BASE_URL'] ??
-            platform.environment['FLUTTER_STORAGE_BASE_URL'] ??
-            defaultFlutterStorageBaseUrl,
-      };
+      // Scoped origins (split by default), shared with the launchers and the
+      // Dart SDK bootstrap; see ShorebirdEnv.artifactOrigins.
+      return shorebirdEnv.flutterArtifactEnvironment;
     }
 
     return {};

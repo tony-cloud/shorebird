@@ -60,17 +60,8 @@ const defaultFlutterGitUrl = 'https://github.com/tony-cloud/flutter.git';
 const defaultBundletoolUrl =
     'https://github.com/google/bundletool/releases/download/${BundleToolArtifact.version}/bundletool-all-${BundleToolArtifact.version}.jar';
 
-/// The code push server the hidden `--dev` flag selects.
-const devHostedUrl = 'https://api-dev.shorebird.dev';
-
-/// The auth service the hidden `--dev` flag selects.
-const devAuthServiceUrl = 'https://auth-dev.shorebird.dev';
-
 /// The Shorebird web console for the production code push server.
 const defaultConsoleUrl = 'http://localhost:8080';
-
-/// The Shorebird web console the hidden `--dev` flag selects.
-const devConsoleUrl = 'https://console-dev.shorebird.dev';
 
 /// A Shorebird-hosted environment: a code push server, the auth service whose
 /// tokens it accepts, and the web console that manages it.
@@ -92,23 +83,69 @@ const productionEnvironment = (
   consoleUrl: defaultConsoleUrl,
 );
 
-/// The dev environment, which the hidden `--dev` flag selects.
-const devEnvironment = (
-  hostedUrl: devHostedUrl,
-  authServiceUrl: devAuthServiceUrl,
-  consoleUrl: devConsoleUrl,
-);
+/// The environment variable naming the development code push server that the
+/// hidden `--dev` flag selects.
+const devHostedUrlVariable = 'SHOREBIRD_DEV_HOSTED_URL';
 
-/// The Shorebird-hosted environments, matched by the host of their code push
-/// server (see [ShorebirdEnv.hostedEnvironment]).
-const shorebirdEnvironments = [productionEnvironment, devEnvironment];
+/// The development environment the hidden `--dev` flag selects, or null when
+/// [devHostedUrlVariable] is unset.
+///
+/// The CLI names no Shorebird-hosted service itself (hardening plan section
+/// 7.3): a development server, its auth service
+/// (`SHOREBIRD_DEV_AUTH_SERVICE_URL`, default `<server>/auth`) and its console
+/// (`SHOREBIRD_DEV_CONSOLE_URL`, default the server) are explicit opt-ins.
+ShorebirdEnvironment? get devEnvironment {
+  String? variable(String name) {
+    final value = platform.environment[name]?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  final hostedUrl = variable(devHostedUrlVariable);
+  if (hostedUrl == null) return null;
+  return (
+    hostedUrl: hostedUrl,
+    authServiceUrl:
+        variable('SHOREBIRD_DEV_AUTH_SERVICE_URL') ?? '$hostedUrl/auth',
+    consoleUrl: variable('SHOREBIRD_DEV_CONSOLE_URL') ?? hostedUrl,
+  );
+}
+
+/// The known environments, matched by the host of their code push server (see
+/// [ShorebirdEnv.hostedEnvironment]): production, plus the explicitly
+/// configured [devEnvironment].
+List<ShorebirdEnvironment> get shorebirdEnvironments {
+  return [productionEnvironment, ?devEnvironment];
+}
+
+/// How the vended Flutter resolves artifacts (see
+/// [ShorebirdEnv.artifactOrigins]).
+enum ArtifactOriginMode {
+  /// Official-compatible artifacts direct, custom artifacts through the signed
+  /// catalog from the custom artifact store. The default.
+  split,
+
+  /// One all-in-one artifact proxy serves every artifact (compatibility).
+  legacyMirror,
+}
+
+/// Thrown when artifact origin settings contradict each other.
+class ArtifactOriginConflict implements Exception {
+  /// Creates an [ArtifactOriginConflict] explaining [message].
+  const ArtifactOriginConflict(this.message);
+
+  /// What conflicts, and what to set instead.
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 /// A reference to whether the hidden `--dev` global flag was passed.
 final isDevModeRef = create(() => false);
 
-/// Whether the hidden `--dev` global flag was passed: the CLI talks to
-/// [devEnvironment] unless `SHOREBIRD_HOSTED_URL` or `AUTH_SERVICE_URL`
-/// name another server.
+/// Whether the hidden `--dev` global flag was passed: the CLI talks to the
+/// explicitly configured [devEnvironment] unless `SHOREBIRD_HOSTED_URL` or
+/// `AUTH_SERVICE_URL` name another server.
 bool get isDevMode => read(isDevModeRef, orElse: () => false);
 
 /// A reference to a [ShorebirdEnv] instance.
@@ -400,7 +437,7 @@ class ShorebirdEnv {
   /// `AUTH_SERVICE_URL` environment variable when it is set, otherwise the
   /// auth service of the [hostedEnvironment] the CLI talks to (so `--dev`,
   /// or `SHOREBIRD_HOSTED_URL` naming the dev server, selects
-  /// [devAuthServiceUrl]), otherwise [defaultAuthServiceUrl].
+  /// the [devEnvironment]'s), otherwise [defaultAuthServiceUrl].
   Uri get authServiceUri => Uri.parse(
     _environmentOverride('AUTH_SERVICE_URL') ??
         hostedEnvironment?.authServiceUrl ??
@@ -458,25 +495,127 @@ class ShorebirdEnv {
         'set it to ${environment.authServiceUrl}), then run shorebird login.';
   }
 
-  /// The base URL Flutter downloads its artifacts from, passed to Flutter as
-  /// `FLUTTER_STORAGE_BASE_URL`: the `SHOREBIRD_DOWNLOAD_URL`
-  /// environment variable when it is set, otherwise [defaultDownloadUrl].
+  /// The Maven repository the add-to-app (AAR) instructions name for
+  /// `io.flutter` coordinates: `SHOREBIRD_MAVEN_BASE_URL`, else the legacy
+  /// all-in-one mirror `SHOREBIRD_DOWNLOAD_URL`, else [defaultDownloadUrl]
+  /// (the open artifact proxy).
   ///
-  /// Point this at a mirror of [defaultDownloadUrl] (for example an
-  /// Artifactory remote repository) or a local server. A user's own
-  /// `FLUTTER_STORAGE_BASE_URL` is deliberately not used: it usually names a
-  /// mirror of Google's Flutter artifacts, which lacks Shorebird's engine.
-  ///
-  /// The CLI's own per-engine tools come from here too, under
-  /// `shorebird/<engine revision>/`, so a mirror of this one host covers
-  /// every artifact the CLI downloads.
+  /// Gradle stays on this compatibility route until it resolves through the
+  /// signed artifact catalog: official repositories have no coordinate at a
+  /// custom engine revision, and must never satisfy one.
   String get downloadUrl {
-    final override = _environmentOverride('SHOREBIRD_DOWNLOAD_URL');
+    final override =
+        _environmentOverride('SHOREBIRD_MAVEN_BASE_URL') ??
+        _environmentOverride('SHOREBIRD_DOWNLOAD_URL');
     if (override == null) return defaultDownloadUrl;
-    // Flutter appends paths that begin with '/'.
-    return override.endsWith('/')
-        ? override.substring(0, override.length - 1)
-        : override;
+    return _trimTrailingSlashes(override);
+  }
+
+  /// How the vended Flutter resolves artifacts; the same precedence model as
+  /// Flutter's `bin/internal/shorebird_dart_sdk.sh` and
+  /// `flutter_tools/lib/src/shorebird/shorebird_artifact_origins.dart`
+  /// (shorebird-workspace `docs/HARDENING_CONTRACTS.md` section 8).
+  ///
+  /// [ArtifactOriginMode.split] (the default): `FLUTTER_STORAGE_BASE_URL`
+  /// names official-compatible artifacts only, custom artifacts come from
+  /// `SHOREBIRD_ARTIFACT_BASE_URL` through the signed artifact catalog, and
+  /// `PUB_HOSTED_URL` applies to Pub only.
+  /// [ArtifactOriginMode.legacyMirror]: `SHOREBIRD_ORIGIN_MODE=legacy-mirror`,
+  /// or the compatibility aliases `SHOREBIRD_DOWNLOAD_URL` /
+  /// `SHOREBIRD_FLUTTER_STORAGE_BASE_URL` (or `FLUTTER_STORAGE_BASE_URL`
+  /// naming the open artifact proxy), route every artifact through one
+  /// all-in-one artifact proxy, as before.
+  ///
+  /// Throws [ArtifactOriginConflict] when settings contradict each other.
+  ({ArtifactOriginMode mode, String? mirrorUrl}) get artifactOrigins {
+    String? legacy;
+    String? legacyName;
+    for (final name in const [
+      'SHOREBIRD_DOWNLOAD_URL',
+      'SHOREBIRD_FLUTTER_STORAGE_BASE_URL',
+    ]) {
+      final value = _urlOverride(name);
+      if (value == null) continue;
+      if (legacy != null && legacy != value) {
+        throw ArtifactOriginConflict(
+          'Conflicting artifact mirror overrides: $legacyName=$legacy but '
+          '$name=$value. Both name a legacy all-in-one artifact mirror. Set '
+          'one of them, or neither.',
+        );
+      }
+      legacy = value;
+      legacyName = name;
+    }
+    final official = _urlOverride('FLUTTER_STORAGE_BASE_URL');
+    if (legacy == null && official == defaultDownloadUrl) {
+      legacy = official;
+      legacyName = 'FLUTTER_STORAGE_BASE_URL';
+    }
+    final ArtifactOriginMode mode;
+    switch (_environmentOverride('SHOREBIRD_ORIGIN_MODE')) {
+      case null:
+        mode = legacy == null
+            ? ArtifactOriginMode.split
+            : ArtifactOriginMode.legacyMirror;
+      case 'split':
+        if (legacy != null) {
+          throw ArtifactOriginConflict(
+            'SHOREBIRD_ORIGIN_MODE=split conflicts with $legacyName=$legacy, '
+            'a legacy all-in-one mirror. Unset the mirror variable, or set '
+            'SHOREBIRD_ORIGIN_MODE=legacy-mirror.',
+          );
+        }
+        mode = ArtifactOriginMode.split;
+      case 'legacy-mirror':
+        mode = ArtifactOriginMode.legacyMirror;
+        legacy ??= official ?? defaultDownloadUrl;
+      case final other:
+        throw ArtifactOriginConflict(
+          'Unknown SHOREBIRD_ORIGIN_MODE=$other. Use split (default) or '
+          'legacy-mirror.',
+        );
+    }
+    if (mode == ArtifactOriginMode.legacyMirror &&
+        official != null &&
+        official != legacy) {
+      throw ArtifactOriginConflict(
+        'Conflicting artifact origins: FLUTTER_STORAGE_BASE_URL=$official but '
+        'the legacy all-in-one mirror is $legacy. In legacy-mirror mode one '
+        'mirror serves every artifact. Unset FLUTTER_STORAGE_BASE_URL or set '
+        'it to the mirror.',
+      );
+    }
+    return (mode: mode, mirrorUrl: legacy);
+  }
+
+  /// The environment the vended Flutter runs with, so its Dart SDK bootstrap
+  /// and its artifact downloads follow [artifactOrigins]. Nothing else is
+  /// overridden: `FLUTTER_STORAGE_BASE_URL`, `SHOREBIRD_ARTIFACT_BASE_URL`
+  /// and `PUB_HOSTED_URL` keep their own, scoped meaning.
+  Map<String, String> get flutterArtifactEnvironment {
+    final origins = artifactOrigins;
+    return switch (origins.mode) {
+      ArtifactOriginMode.split => const {'SHOREBIRD_ORIGIN_MODE': 'split'},
+      ArtifactOriginMode.legacyMirror => {
+        'SHOREBIRD_ORIGIN_MODE': 'legacy-mirror',
+        'FLUTTER_STORAGE_BASE_URL': origins.mirrorUrl!,
+      },
+    };
+  }
+
+  /// The value of the URL environment variable [name] without trailing
+  /// slashes, or null when it is unset or empty.
+  String? _urlOverride(String name) {
+    final value = _environmentOverride(name);
+    return value == null ? null : _trimTrailingSlashes(value);
+  }
+
+  static String _trimTrailingSlashes(String value) {
+    var trimmed = value;
+    while (trimmed.endsWith('/')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    return trimmed;
   }
 
   /// The git URL of the Shorebird Flutter fork: the
@@ -499,14 +638,16 @@ class ShorebirdEnv {
 
   /// The base URL for the Shorebird code push server that overrides the default
   /// used by [CodePushClient]: the `SHOREBIRD_HOSTED_URL` environment
-  /// variable when it is set, otherwise [devHostedUrl] with `--dev` (see
-  /// [isDevMode]), otherwise the `base_url` in shorebird.yaml. If none is
-  /// provided, [CodePushClient] will use its default.
+  /// variable when it is set, otherwise the [devEnvironment] server with
+  /// `--dev` (see [isDevMode]), otherwise the `base_url` in shorebird.yaml. If
+  /// none is provided, [CodePushClient] will use its default.
   Uri? get hostedUri {
     try {
       final baseUrl =
           _environmentOverride('SHOREBIRD_HOSTED_URL') ??
-          (isDevMode ? devHostedUrl : getShorebirdYaml()?.baseUrl) ??
+          (isDevMode
+              ? devEnvironment?.hostedUrl
+              : getShorebirdYaml()?.baseUrl) ??
           read(
             userConfigRef,
             orElse: () => UserConfig(

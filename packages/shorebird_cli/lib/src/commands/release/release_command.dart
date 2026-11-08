@@ -996,6 +996,10 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       );
     }
 
+    if (shorebirdEnv.artifactOrigins.mode == ArtifactOriginMode.legacyMirror) {
+      usageException(hardenedLegacyMirrorRefusal);
+    }
+
     final problems = hardenedShorebirdYamlProblems(
       shorebirdEnv.getShorebirdYaml(),
     );

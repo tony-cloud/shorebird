@@ -31,10 +31,14 @@ import 'package:shorebird_cli/src/shorebird_process.dart';
 /// {@endtemplate}
 class CacheUpdateFailure implements Exception {
   /// {@macro cache_update_failure}
-  const CacheUpdateFailure(this.message);
+  const CacheUpdateFailure(this.message, {this.retryable = true});
 
   /// The error message.
   final String message;
+
+  /// Whether another attempt could succeed. False for a definitive answer
+  /// such as HTTP 404, so the CLI fails at once instead of backing off.
+  final bool retryable;
 
   @override
   String toString() => 'CacheUpdateFailure: $message';
@@ -93,13 +97,23 @@ class Cache {
   /// Register a new [CachedArtifact] with the cache.
   void registerArtifact(CachedArtifact artifact) => _artifacts.add(artifact);
 
-  /// Update all artifacts in the cache.
+  /// Attempts per artifact download before the CLI gives up.
+  static const maxUpdateAttempts = 5;
+
+  /// The first delay between download attempts, doubled after each one (with
+  /// 25% jitter), so a transient CDN outage such as a 504 gets about
+  /// 1 + 2 + 4 + 8 = 15 seconds to clear, bounded by [maxUpdateAttempts].
+  static const defaultRetryDelayFactor = Duration(seconds: 1);
+
+  /// Update every artifact the CLI needs eagerly, skipping on-demand ones
+  /// (see [CachedArtifact.onDemand] and [ensure]): a Linux desktop release
+  /// never downloads bundletool.
   ///
-  /// [retryDelayFactor] is the delay between retries that doubles after every
-  /// attempt. The default from the retry package is 200ms. This is settable for
+  /// [retryDelayFactor] is the first delay between attempts, which doubles
+  /// after every attempt (see [defaultRetryDelayFactor]). Settable for
   /// testing.
   Future<void> updateAll([
-    Duration retryDelayFactor = const Duration(milliseconds: 200),
+    Duration retryDelayFactor = defaultRetryDelayFactor,
   ]) async {
     // Traced as a whole rather than per-artifact: the individual
     // downloads already show up as `network` spans, and what the summary
@@ -110,22 +124,53 @@ class Cache {
       phase: SetupPhase.shorebirdCache,
       body: () async {
         for (final artifact in _artifacts) {
-          if (!await artifact.isValid()) {
-            await retry(
-              artifact.update,
-              maxAttempts: 3,
-              delayFactor: retryDelayFactor,
-              onRetry: (e) {
-                logger
-                  ..detail('Failed to update ${artifact.fileName}, retrying...')
-                  ..detail(e.toString());
-              },
-            );
-          }
-          _markRevisionUsed(artifact);
+          if (artifact.onDemand) continue;
+          await _ensure(artifact, retryDelayFactor);
         }
       },
     );
+  }
+
+  /// Downloads the on-demand artifact named [fileName] (for example
+  /// `bundletool.jar`) when it is missing or invalid, so only a command that
+  /// runs it pays for the download.
+  Future<void> ensure(
+    String fileName, [
+    Duration retryDelayFactor = defaultRetryDelayFactor,
+  ]) async {
+    final artifacts = _artifacts.where((a) => a.fileName == fileName).toList();
+    if (artifacts.isEmpty) {
+      throw ArgumentError.value(
+        fileName,
+        'fileName',
+        'no such cached artifact',
+      );
+    }
+    await shorebirdTracer.setupSpan(
+      phase: SetupPhase.shorebirdCache,
+      body: () async {
+        for (final artifact in artifacts) {
+          await _ensure(artifact, retryDelayFactor);
+        }
+      },
+    );
+  }
+
+  Future<void> _ensure(CachedArtifact artifact, Duration delayFactor) async {
+    if (!await artifact.isValid()) {
+      await retry(
+        artifact.update,
+        maxAttempts: maxUpdateAttempts,
+        delayFactor: delayFactor,
+        retryIf: (e) => e is! CacheUpdateFailure || e.retryable,
+        onRetry: (e) {
+          logger
+            ..detail('Failed to update ${artifact.fileName}, retrying...')
+            ..detail(e.toString());
+        },
+      );
+    }
+    _markRevisionUsed(artifact);
   }
 
   /// Records the use of [artifact]'s per-engine-revision directory, if it
@@ -443,6 +488,10 @@ abstract class CachedArtifact {
   /// If we fail to fetch it we will exit with an error.
   bool get required => true;
 
+  /// Whether only the commands that use this artifact download it (through
+  /// [Cache.ensure]) rather than every [Cache.updateAll].
+  bool get onDemand => false;
+
   /// The SHA256 checksum of the artifact binary.
   ///
   /// When null, the checksum is not verified and the downloaded artifact
@@ -509,8 +558,15 @@ allowed to access $url.''');
       }
 
       updateProgress.fail();
+      final status = response.statusCode;
       throw CacheUpdateFailure(
-        '''Failed to download $fileName from $url: ${response.statusCode} ${response.reasonPhrase}''',
+        '''Failed to download $fileName from $url: $status ${response.reasonPhrase}''',
+        // Server errors, timeouts and rate limits are transient; any other
+        // status is the server's definitive answer.
+        retryable:
+            status >= 500 ||
+            status == HttpStatus.requestTimeout ||
+            status == HttpStatus.tooManyRequests,
       );
     }
 
@@ -787,6 +843,10 @@ class BundleToolArtifact extends CachedArtifact {
 
   @override
   String get fileName => 'bundletool.jar';
+
+  /// Only Android commands run bundletool; see [Cache.ensure].
+  @override
+  bool get onDemand => true;
 
   @override
   bool get isExecutable => false;

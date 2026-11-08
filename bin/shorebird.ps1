@@ -18,7 +18,6 @@ $flutter = [IO.Path]::Combine($shorebirdCacheDir, "flutter", $flutterVersion, "b
 $shorebirdScript = [IO.Path]::Combine($shorebirdCliDir, "bin", "shorebird.dart")
 $dart = [IO.Path]::Combine($flutterPath, "bin", "cache", "dart-sdk", "bin", "dart.exe")
 $defaultFlutterGitUrl = "https://github.com/tony-cloud/flutter.git"
-$defaultFlutterStorageBaseUrl = "http://localhost:8080/download.flutter.io"
 
 # Executes $command and redirects as much output to $null as possible.
 #
@@ -106,16 +105,6 @@ function Update-Flutter {
     if ([string]::IsNullOrWhiteSpace($flutterGitUrl)) {
         $flutterGitUrl = $defaultFlutterGitUrl
     }
-    $flutterStorageBaseUrl = $env:SHOREBIRD_DOWNLOAD_URL
-    if ([string]::IsNullOrWhiteSpace($flutterStorageBaseUrl)) {
-        $flutterStorageBaseUrl = $env:SHOREBIRD_FLUTTER_STORAGE_BASE_URL
-    }
-    if ([string]::IsNullOrWhiteSpace($flutterStorageBaseUrl)) {
-        $flutterStorageBaseUrl = $env:FLUTTER_STORAGE_BASE_URL
-    }
-    if ([string]::IsNullOrWhiteSpace($flutterStorageBaseUrl)) {
-        $flutterStorageBaseUrl = $defaultFlutterStorageBaseUrl
-    }
 
     if (!(Test-Path $flutterPath)) {
         # Flutter has paths over Windows' 260-character limit. Setting
@@ -136,17 +125,13 @@ function Update-Flutter {
         git -C "$flutterPath" -c advice.detachedHead=false checkout "$flutterVersion"
     }
 
-    # Install Flutter artifacts through the configured open mirror.
-    $hadFlutterStorageBaseUrl = Test-Path Env:\FLUTTER_STORAGE_BASE_URL
-    $previousFlutterStorageBaseUrl = $env:FLUTTER_STORAGE_BASE_URL
-    $env:FLUTTER_STORAGE_BASE_URL = $flutterStorageBaseUrl.TrimEnd('/');
+    # The vended Flutter resolves its own artifact origins with the shared
+    # precedence model (bin\internal\shorebird_dart_sdk.ps1): by default
+    # official artifacts come direct and the custom Dart SDK is verified
+    # against bin\internal\shorebird_dart_sdk.pins. SHOREBIRD_DOWNLOAD_URL and
+    # SHOREBIRD_FLUTTER_STORAGE_BASE_URL still select the legacy all-in-one
+    # mirror there, so no origin is rewritten here.
     & $flutter --version
-    if ($hadFlutterStorageBaseUrl) {
-        $env:FLUTTER_STORAGE_BASE_URL = $previousFlutterStorageBaseUrl
-    }
-    else {
-        Remove-Item Env:\FLUTTER_STORAGE_BASE_URL -ErrorAction SilentlyContinue
-    }
 }
 
 function Update-Shorebird {

@@ -12,7 +12,6 @@ unset CDPATH
 # whether FLUTTER_PATH exists.
 function update_flutter {
   local flutter_git_url="${SHOREBIRD_FLUTTER_GIT_URL:-https://github.com/tony-cloud/flutter.git}"
-  local flutter_storage_base_url="${SHOREBIRD_DOWNLOAD_URL:-${SHOREBIRD_FLUTTER_STORAGE_BASE_URL:-${FLUTTER_STORAGE_BASE_URL:-http://localhost:8080/download.flutter.io}}}"
 
   if [[ -d "$FLUTTER_PATH" ]]; then
     git -C "$FLUTTER_PATH" fetch
@@ -23,8 +22,13 @@ function update_flutter {
   git -C "$FLUTTER_PATH" -c advice.detachedHead=false checkout "$FLUTTER_VERSION"
   SHOREBIRD_ENGINE_VERSION=`cat "$FLUTTER_PATH/bin/internal/engine.version"`
   echo "Shorebird Engine • revision $SHOREBIRD_ENGINE_VERSION"
-  # Install Flutter artifacts through the configured open mirror.
-  FLUTTER_STORAGE_BASE_URL="$flutter_storage_base_url" "$FLUTTER_PATH/bin/flutter" --version
+  # The vended Flutter resolves its own artifact origins with the shared
+  # precedence model (bin/internal/shorebird_dart_sdk.sh): by default official
+  # artifacts come direct and the custom Dart SDK is verified against
+  # bin/internal/shorebird_dart_sdk.pins. SHOREBIRD_DOWNLOAD_URL and
+  # SHOREBIRD_FLUTTER_STORAGE_BASE_URL still select the legacy all-in-one
+  # mirror there, so no origin is rewritten here.
+  "$FLUTTER_PATH/bin/flutter" --version
 }
 
 function pub_get_with_retry {

@@ -64,9 +64,9 @@ class ShorebirdCliCommandRunner extends CompletionCommandRunner<int> {
         negatable: false,
         hide: true,
         help:
-            'Use the Shorebird dev environment ($devHostedUrl and '
-            '$devAuthServiceUrl). SHOREBIRD_HOSTED_URL and AUTH_SERVICE_URL '
-            'still win.',
+            'Use the development server named by $devHostedUrlVariable '
+            '(an explicit opt-in; no Shorebird-hosted service is implied). '
+            'SHOREBIRD_HOSTED_URL and AUTH_SERVICE_URL still win.',
       )
       ..addOption(
         'local-engine-src-path',
@@ -235,6 +235,19 @@ class ShorebirdCliCommandRunner extends CompletionCommandRunner<int> {
 
       final jsonMode = topLevelResults['json'] == true;
       final devMode = topLevelResults['dev'] == true;
+      try {
+        shorebirdEnv.artifactOrigins;
+      } on ArtifactOriginConflict catch (conflict) {
+        usageException(conflict.message);
+      }
+      if (devMode && devEnvironment == null) {
+        usageException(
+          '--dev needs $devHostedUrlVariable: the CLI does not name any '
+          'Shorebird-hosted service itself. Set it to your development code '
+          'push server (and optionally SHOREBIRD_DEV_AUTH_SERVICE_URL and '
+          'SHOREBIRD_DEV_CONSOLE_URL).',
+        );
+      }
 
       // In JSON mode, suppress verbose logging — it writes to stdout and
       // would corrupt the JSON output. Verbose output still goes to the
