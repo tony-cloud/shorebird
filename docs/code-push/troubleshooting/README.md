@@ -4,7 +4,7 @@ The open replacement uses a self-hosted server and a local artifact mirror by
 default. Check these values first when release or patch commands fail:
 
 - `SHOREBIRD_HOSTED_URL`, default `http://localhost:8080`
-- `SHOREBIRD_AUTH_URL`, default `http://localhost:8080/auth`
+- `AUTH_SERVICE_URL`, default `http://localhost:8080/auth`
 - `SHOREBIRD_ARTIFACT_BASE_URL`, default `http://localhost:8080/artifacts`
 - `SHOREBIRD_FLUTTER_STORAGE_BASE_URL`, default `http://localhost:8080/download.flutter.io`
 

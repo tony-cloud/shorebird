@@ -10,5 +10,5 @@ Default local services:
 - Auth: `http://localhost:8080/auth`
 - Console: `http://localhost:8080`
 
-The CLI also accepts `SHOREBIRD_HOSTED_URL`, `SHOREBIRD_AUTH_URL`, and
+The CLI also accepts `SHOREBIRD_HOSTED_URL`, `AUTH_SERVICE_URL`, and
 `SHOREBIRD_TOKEN` overrides for non-local deployments.
