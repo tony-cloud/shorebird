@@ -740,6 +740,59 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
     }
   }
 
+  /// Re-verifies the final distributable of a hardened release
+  /// (docs/HARDENING_CONTRACTS.md §12): `flutter shorebird-verify-artifact`
+  /// checks, with the toolchain's compiled policy in
+  /// [securityBuildEnvironment], that every bundled `shorebird.yaml` carries
+  /// a build manifest that chains to the release root, covers its exact
+  /// bytes and binds every engine module packaged next to it, and that each
+  /// manifest is one of [recordManifests]. Returns the JSON report; throws
+  /// an [ArtifactBuildException] on any mismatch.
+  Future<Map<String, Object?>> verifyHardenedArtifact({
+    required String artifactPath,
+    required String platform,
+    List<String> recordManifests = const [],
+  }) async {
+    final result = await process.run(
+      'flutter',
+      [
+        '--no-version-check',
+        'shorebird-verify-artifact',
+        '--artifact=$artifactPath',
+        '--platform=$platform',
+        for (final manifest in recordManifests) '--record-manifest=$manifest',
+      ],
+      environment: securityBuildEnvironment,
+      runInShell: false,
+    );
+    final output = '${result.stdout}'.trim();
+    if (result.exitCode != ExitCode.success.code) {
+      throw ArtifactBuildException(
+        'The hardened release artifact $artifactPath does not match the '
+        'build manifest it was signed with:\n${'${result.stderr}'.trim()}'
+        '${output.isEmpty ? '' : '\n$output'}',
+        fixRecommendation:
+            'Rebuild without post-processing the bundled shorebird.yaml or '
+            'the engine library (a stripped, substituted or re-packaged '
+            'engine changes its measurement); nothing was uploaded.',
+      );
+    }
+    final Object? report;
+    try {
+      report = jsonDecode(output.split('\n').last);
+    } on FormatException {
+      throw ArtifactBuildException(
+        'The hardened release artifact verifier printed no report.',
+      );
+    }
+    if (report is! Map<String, Object?> || report['verified'] != true) {
+      throw ArtifactBuildException(
+        'The hardened release artifact verifier did not verify $artifactPath.',
+      );
+    }
+    return report;
+  }
+
   /// Creates an AOT snapshot of the given [appDillPath] at [outFilePath] and
   /// returns the resulting file.
   Future<File> buildElfAotSnapshot({

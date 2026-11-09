@@ -3008,6 +3008,89 @@ Reason: Exited with code 70.'''),
       });
     });
 
+    group('verifyHardenedArtifact (P6)', () {
+      const hardenedEnvironment = {
+        'SHOREBIRD_SECURITY_PROFILE': 'hardened',
+        'SHOREBIRD_TOOLCHAIN_ID': 'sha256:1111',
+      };
+
+      void stub(ShorebirdProcessResult result) => when(
+        () => shorebirdProcess.run(
+          'flutter',
+          any(),
+          environment: any(named: 'environment'),
+          runInShell: false,
+        ),
+      ).thenAnswer((_) async => result);
+
+      test('runs the hidden verifier with the hardened build environment and '
+          'returns its report', () async {
+        stub(
+          const ShorebirdProcessResult(
+            exitCode: 0,
+            stdout: 'note\n{"verified":true,"manifests":[],"modules":[]}\n',
+            stderr: '',
+          ),
+        );
+        builder.securityBuildEnvironment = hardenedEnvironment;
+        final report = await runWithOverrides(
+          () => builder.verifyHardenedArtifact(
+            artifactPath: '/out/app.aab',
+            platform: 'android',
+            recordManifests: ['a' * 64],
+          ),
+        );
+        expect(report['verified'], isTrue);
+        verify(
+          () => shorebirdProcess.run(
+            'flutter',
+            [
+              '--no-version-check',
+              'shorebird-verify-artifact',
+              '--artifact=/out/app.aab',
+              '--platform=android',
+              '--record-manifest=${'a' * 64}',
+            ],
+            environment: hardenedEnvironment,
+            runInShell: false,
+          ),
+        ).called(1);
+      });
+
+      test('a refused, silent or unverified report fails the build', () async {
+        builder.securityBuildEnvironment = hardenedEnvironment;
+        for (final result in [
+          const ShorebirdProcessResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'module_mismatch: the packaged engine',
+          ),
+          const ShorebirdProcessResult(
+            exitCode: 0,
+            stdout: 'garbage',
+            stderr: '',
+          ),
+          const ShorebirdProcessResult(
+            exitCode: 0,
+            stdout: '{"verified":false}',
+            stderr: '',
+          ),
+        ]) {
+          stub(result);
+          await expectLater(
+            runWithOverrides(
+              () => builder.verifyHardenedArtifact(
+                artifactPath: '/out/app.aab',
+                platform: 'android',
+              ),
+            ),
+            throwsA(isA<ArtifactBuildException>()),
+            reason: '${result.stdout} ${result.stderr}',
+          );
+        }
+      });
+    });
+
     group('prepareBuildTrace', () {
       test(
         'leaves traceFile null when Flutter pin does not support tracing',

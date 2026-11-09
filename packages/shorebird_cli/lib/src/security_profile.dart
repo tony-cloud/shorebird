@@ -105,6 +105,12 @@ const androidSigningCertEnvironmentVariable =
 /// by (optional; enables repack detection).
 const appleTeamIdsEnvironmentVariable = 'SHOREBIRD_APPLE_TEAM_IDS';
 
+/// Comma-separated SHA-256 digests of the DER leaf certificate(s) that may
+/// Authenticode-sign a hardened Windows release's `flutter_windows.dll`
+/// (optional; enables re-signing detection, docs/HARDENING_CONTRACTS.md §12).
+const windowsSigningCertEnvironmentVariable =
+    'SHOREBIRD_WINDOWS_SIGNING_CERT_SHA256';
+
 /// The path of the lineage's diversification profile (contract v3,
 /// docs/HARDENING_CONTRACTS.md §11.2), which a hardened-diversified release or
 /// patch passes to dart2bytecode as `--bytecode-profile`.
@@ -205,6 +211,25 @@ List<String> hardenedBuildManifestProblems(
     ).hasMatch(cert.replaceAll(':', '').toLowerCase())) {
       problems.add(
         '$androidSigningCertEnvironmentVariable entry $cert is not a SHA-256 '
+        'certificate digest.',
+      );
+    }
+  }
+  final windowsCerts = _list(
+    environment[windowsSigningCertEnvironmentVariable],
+  );
+  if (windowsCerts.isNotEmpty && platform != 'windows') {
+    problems.add(
+      '$windowsSigningCertEnvironmentVariable applies only to Windows '
+      'releases.',
+    );
+  }
+  for (final cert in windowsCerts) {
+    if (!RegExp(
+      r'^[0-9a-f]{64}$',
+    ).hasMatch(cert.replaceAll(':', '').toLowerCase())) {
+      problems.add(
+        '$windowsSigningCertEnvironmentVariable entry $cert is not a SHA-256 '
         'certificate digest.',
       );
     }

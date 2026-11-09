@@ -210,6 +210,13 @@ void main() {
         () => releaser.postReleaseInstructions,
       ).thenReturn(postReleaseInstructions);
       when(() => releaser.releaseType).thenReturn(ReleaseType.android);
+      when(
+        () => artifactBuilder.verifyHardenedArtifact(
+          artifactPath: any(named: 'artifactPath'),
+          platform: any(named: 'platform'),
+          recordManifests: any(named: 'recordManifests'),
+        ),
+      ).thenAnswer((_) async => {'verified': true});
       when(() => releaser.useObfuscation).thenReturn(false);
       when(
         () => releaser.updatedReleaseMetadata(any()),
@@ -407,6 +414,14 @@ void main() {
             () => artifactBuilder.securityBuildEnvironment = any(),
           );
           verifyNever(() => releaser.requireManagedSigning = any());
+          // A legacy release is never re-verified (no manifest to check).
+          verifyNever(
+            () => artifactBuilder.verifyHardenedArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              platform: any(named: 'platform'),
+              recordManifests: any(named: 'recordManifests'),
+            ),
+          );
         });
 
         test('refuses a hardened release', () async {
@@ -843,6 +858,80 @@ void main() {
           expect(record['toolchain_id'], toolchainId);
           expect(record['build_manifests'], hasLength(1));
           expect(metadata.toJson()['security_record'], record);
+        });
+
+        test('re-verifies the distributable against the release record before '
+            'uploading', () async {
+          await runWithOverrides(command.run);
+          verify(
+            () => artifactBuilder.verifyHardenedArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              platform: 'android',
+              recordManifests: ['a' * 64],
+            ),
+          ).called(1);
+        });
+
+        test('maps each release type to the platform it re-verifies', () {
+          expect(
+            {
+              for (final type in ReleaseType.values)
+                type: hardenedArtifactPlatform(type),
+            },
+            {
+              ReleaseType.android: 'android',
+              ReleaseType.ios: 'ios',
+              ReleaseType.iosFramework: 'ios',
+              ReleaseType.macos: 'macos',
+              ReleaseType.windows: 'windows',
+              ReleaseType.linux: 'linux',
+              ReleaseType.aar: null,
+            },
+          );
+        });
+
+        test('an Android archive is not re-verified', () async {
+          when(() => releaser.releaseType).thenReturn(ReleaseType.aar);
+          try {
+            await runWithOverrides(command.run);
+          } on Exception {
+            // Only the re-verification decision is under test.
+          }
+          verifyNever(
+            () => artifactBuilder.verifyHardenedArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              platform: any(named: 'platform'),
+              recordManifests: any(named: 'recordManifests'),
+            ),
+          );
+        });
+
+        test('a distributable that fails re-verification is never '
+            'uploaded', () async {
+          when(
+            () => artifactBuilder.verifyHardenedArtifact(
+              artifactPath: any(named: 'artifactPath'),
+              platform: any(named: 'platform'),
+              recordManifests: any(named: 'recordManifests'),
+            ),
+          ).thenThrow(
+            ArtifactBuildException(
+              'module_mismatch: the packaged android/aarch64 engine module',
+            ),
+          );
+          await expectLater(
+            runWithOverrides(command.run),
+            throwsA(isA<ProcessExit>()),
+          );
+          verify(
+            () => logger.err(any(that: contains('module_mismatch'))),
+          ).called(1);
+          verifyNever(
+            () => releaser.uploadReleaseArtifacts(
+              release: any(named: 'release'),
+              appId: any(named: 'appId'),
+            ),
+          );
         });
 
         test('stops before activation when the build wrote no release '

@@ -641,6 +641,37 @@ base_url: https://example.com
       }
     });
 
+    test(
+      'a Windows Authenticode identity is for Windows releases only (P6)',
+      () {
+        final cert = 'AB:${'CD:' * 30}EF';
+        expect(
+          hardenedBuildManifestProblems({
+            buildManifestSigningKeyEnvironmentVariable: keyPath,
+            releaseTrustEnvironmentVariable: trustPath,
+            windowsSigningCertEnvironmentVariable: '$cert, ${'ab' * 32}',
+          }, platform: 'windows'),
+          isEmpty,
+        );
+        for (final (platform, value) in [
+          ('linux', 'ab' * 32),
+          ('android', 'ab' * 32),
+          ('macos', 'ab' * 32),
+          ('windows', 'abc'),
+        ]) {
+          expect(
+            hardenedBuildManifestProblems({
+              buildManifestSigningKeyEnvironmentVariable: keyPath,
+              releaseTrustEnvironmentVariable: trustPath,
+              windowsSigningCertEnvironmentVariable: value,
+            }, platform: platform),
+            [contains(windowsSigningCertEnvironmentVariable)],
+            reason: '$platform $value',
+          );
+        }
+      },
+    );
+
     test('requires a contract v2 release-trust bundle', () {
       final notTrust = File('${File(keyPath).parent.path}/other.json')
         ..writeAsStringSync('{"schema":"open-shorebird.release-root"}');

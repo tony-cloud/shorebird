@@ -570,6 +570,7 @@ $error''');
       // A hardened build must have written its release record; stop before
       // anything is uploaded if it did not.
       _releaseRecord = _hardenedReleaseRecord();
+      await _verifyHardenedArtifact(releaser, artifact);
       return artifact;
     } on ArtifactBuildException catch (e) {
       logger.err(e.message);
@@ -585,6 +586,46 @@ $error''');
     } on Exception catch (e) {
       logger.err('Failed to build release artifacts: $e');
       throw ProcessExit(ExitCode.software.code);
+    }
+  }
+
+  /// Re-verifies what a hardened release distributes (P6,
+  /// docs/HARDENING_CONTRACTS.md §12) before anything is uploaded: the
+  /// packaged engine modules and bundled `shorebird.yaml` must be exactly
+  /// what the build signed and recorded. Legacy releases are untouched.
+  ///
+  /// An Android archive (`shorebird release aar`) packages no engine library
+  /// (the host app resolves it), so it is not re-verified here.
+  Future<void> _verifyHardenedArtifact(
+    Releaser releaser,
+    FileSystemEntity artifact,
+  ) async {
+    final record = _releaseRecord;
+    if (record == null) return;
+    final platform = hardenedArtifactPlatform(releaser.releaseType);
+    if (platform == null) {
+      logger.warn(
+        'The hardened Android archive packages no engine library, so it is '
+        'not re-verified; the host app build binds it.',
+      );
+      return;
+    }
+    final manifests = [
+      for (final manifest
+          in (record['build_manifests'] as List<Object?>? ?? const []))
+        if (manifest case {'manifest_sha256': final String digest}) digest,
+    ];
+    final progress = logger.progress('Re-verifying the hardened release');
+    try {
+      await artifactBuilder.verifyHardenedArtifact(
+        artifactPath: artifact.path,
+        platform: platform,
+        recordManifests: manifests,
+      );
+      progress.complete();
+    } on ArtifactBuildException {
+      progress.fail();
+      rethrow;
     }
   }
 
@@ -1543,3 +1584,16 @@ ${summary.join('\n')}
     );
   }
 }
+
+/// The platform `flutter shorebird-verify-artifact` re-verifies for a
+/// hardened release of [type], or null for an Android archive, which
+/// packages no engine library (docs/HARDENING_CONTRACTS.md §12).
+@visibleForTesting
+String? hardenedArtifactPlatform(ReleaseType type) => switch (type) {
+  ReleaseType.android => 'android',
+  ReleaseType.ios || ReleaseType.iosFramework => 'ios',
+  ReleaseType.macos => 'macos',
+  ReleaseType.windows => 'windows',
+  ReleaseType.linux => 'linux',
+  ReleaseType.aar => null,
+};
