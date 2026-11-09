@@ -53,6 +53,7 @@ class PatchMetadata {
     this.baseLicenseType,
     this.obfuscationMapHash,
     this.offlineExpiresAt,
+    this.bytecodeProfileId,
   });
 
   /// Reads metadata from the JSON representation used by patch artifacts.
@@ -71,6 +72,7 @@ class PatchMetadata {
     runtimeMode: json['runtime_mode'] as String? ?? runtimeModeNativeAot,
     obfuscationMapHash: json['obfuscation_map_hash'] as String?,
     offlineExpiresAt: _optionalIso8601UtcString(json, 'offline_expires_at'),
+    bytecodeProfileId: _optionalBytecodeProfileId(json),
   );
 
   /// Stable application identifier.
@@ -119,6 +121,12 @@ class PatchMetadata {
   /// removed if no newer patch is available.
   final String? offlineExpiresAt;
 
+  /// The `sha256:` ID of the diversification profile the payload's bytecode
+  /// is encoded with (contract v3, docs/HARDENING_CONTRACTS.md §11.4), or null
+  /// for canonical bytecode. Serialized as `bytecode_profile_id` only when
+  /// set, so canonical envelopes and their AAD are unchanged.
+  final String? bytecodeProfileId;
+
   /// Parsed [offlineExpiresAt], or null when this patch has no offline limit.
   DateTime? get offlineExpiresAtDateTime => offlineExpiresAt == null
       ? null
@@ -166,6 +174,7 @@ class PatchMetadata {
     'runtime_mode': runtimeMode,
     if (obfuscationMapHash != null) 'obfuscation_map_hash': obfuscationMapHash,
     if (offlineExpiresAt != null) 'offline_expires_at': offlineExpiresAt,
+    if (bytecodeProfileId != null) 'bytecode_profile_id': bytecodeProfileId,
   };
 }
 
@@ -580,6 +589,20 @@ String? _optionalIso8601UtcString(Map<String, Object?> json, String key) {
     throw FormatException('Expected non-empty string field "$key".');
   }
   return _normalizeIso8601Utc(value, key);
+}
+
+final _bytecodeProfileIdPattern = RegExp(r'^sha256:[0-9a-f]{64}$');
+
+String? _optionalBytecodeProfileId(Map<String, Object?> json) {
+  if (!json.containsKey('bytecode_profile_id')) return null;
+  final value = json['bytecode_profile_id'];
+  if (value is! String || !_bytecodeProfileIdPattern.hasMatch(value)) {
+    throw const FormatException(
+      'Expected "bytecode_profile_id" to be "sha256:" followed by 64 '
+      'lowercase hex digits.',
+    );
+  }
+  return value;
 }
 
 String _normalizeIso8601Utc(String value, String name) {

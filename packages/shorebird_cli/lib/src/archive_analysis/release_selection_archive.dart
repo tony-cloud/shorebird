@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:open_aot_patch_tools/open_aot_patch_tools.dart';
 import 'package:path/path.dart' as p;
+import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_cli/src/artifact_builder/ios_bytecode_builder.dart';
 import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 import 'package:yaml/yaml.dart';
@@ -112,7 +113,10 @@ class ReleaseSelectionArchive {
         );
       }
       if (profile == 'interpreter-full') {
-        final wrapper = FullReplacementBundle.decode(baseline);
+        final wrapper = FullReplacementBundle.decode(
+          baseline,
+          bytecodeProfileDigest: admittedBytecodeProfile?.digest,
+        );
         if (!wrapper.manifest.isBaseline ||
             wrapper.manifest.hostAbiHex != scope.hostAbiHash) {
           throw const FormatException(

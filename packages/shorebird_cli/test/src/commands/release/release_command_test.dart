@@ -378,21 +378,24 @@ void main() {
         expectNothingBuilt();
       }
 
-      test('defaults to legacy and documents the reserved profile', () {
+      test('defaults to legacy and documents the profiles', () {
         final option = ReleaseCommand().argParser.options['security-profile']!;
         expect(option.defaultsTo, 'legacy');
-        expect(option.help, contains('"hardened-diversified" is reserved'));
-      });
-
-      test('rejects the reserved hardened-diversified profile', () async {
-        requestProfile('hardened-diversified');
-        toolchainFloor = hardenedToolchain;
-        await expectUsageError('is reserved');
+        expect(option.valueHelp, 'legacy|hardened|hardened-diversified');
+        expect(
+          option.help,
+          allOf(
+            contains('hardened-diversified is hardened plus'),
+            contains('SHOREBIRD_DIVERSIFICATION_PROFILE'),
+          ),
+        );
       });
 
       test('rejects an unknown profile', () async {
         requestProfile('strict');
-        await expectUsageError('must be legacy or hardened, not "strict"');
+        await expectUsageError(
+          'must be legacy, hardened or hardened-diversified, not "strict"',
+        );
       });
 
       group('on a legacy toolchain', () {
@@ -412,6 +415,18 @@ void main() {
             () => shorebirdEnv.getShorebirdYaml(),
           ).thenReturn(hardenedYaml);
           await expectRefused('this toolchain was not built hardened');
+        });
+
+        test('refuses a hardened-diversified release', () async {
+          requestProfile('hardened-diversified');
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(hardenedYaml);
+          await expectRefused(
+            '--security-profile=hardened-diversified needs a '
+            'hardened-diversified Shorebird toolchain, but this toolchain '
+            'was not built hardened',
+          );
         });
 
         test('refuses a checked-in security key', () async {
@@ -462,6 +477,278 @@ void main() {
             () => logger.err(any(that: contains('not valid JSON'))),
           ).called(1);
           verifyNever(() => releaser.buildReleaseArtifacts());
+        });
+      });
+
+      group('on a hardened-diversified toolchain', () {
+        const interpreterYaml = ShorebirdYaml(
+          appId: appId,
+          baseUrl: 'https://updates.example.com',
+          aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+          aotPatchBaseFlavorId: 'free',
+          aotPatchBaseLicenseType: 'free',
+          aotPatchKeyId: 'app-owned-provider-key',
+        );
+        late String profilePath;
+        late String profileId;
+
+        ToolchainSecurity diversifiedToolchain({
+          required String id,
+          bool development = false,
+        }) => ToolchainSecurity(
+          profile: SecurityProfile.hardenedDiversified,
+          toolchainId: toolchainId,
+          developmentExceptions: development,
+          releaseRoot: releaseRoot,
+          diversificationProfileId: id,
+        );
+
+        setUp(() {
+          profilePath = writeDiversificationProfile();
+          profileId = BytecodeProfile.load(profilePath).id;
+          toolchainFloor = diversifiedToolchain(id: profileId);
+          requestProfile('hardened-diversified');
+          platformEnvironment = {
+            buildManifestSigningKeyEnvironmentVariable:
+                writeBuildManifestSigningKey(),
+            releaseTrustEnvironmentVariable: writeReleaseTrust(),
+            diversificationProfileEnvironmentVariable: profilePath,
+          };
+          when(
+            () => shorebirdEnv.getFlutterProjectRoot(),
+          ).thenReturn(projectRoot);
+          when(() => releaser.releaseType).thenReturn(ReleaseType.ios);
+          // A contract v3 `flutter build` writes a release-record v3.
+          when(() => releaser.buildReleaseArtifacts()).thenAnswer((_) async {
+            writeReleaseRecord(
+              command.releaseRecordDirectory!,
+              toolchainId,
+              diversificationProfileId: profileId,
+            );
+            return File('');
+          });
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyArg.name),
+          ).thenReturn(false);
+          when(
+            () => argResults.wasParsed(CommonArguments.publicKeyCmd.name),
+          ).thenReturn(false);
+          when(
+            () => shorebirdEnv.getShorebirdYaml(),
+          ).thenReturn(interpreterYaml);
+          when(
+            () => shorebirdEnv.artifactOrigins,
+          ).thenReturn((mode: ArtifactOriginMode.split, mirrorUrl: null));
+        });
+
+        test('admits an iOS interpreter release, passes the diversified '
+            'variables and the profile, and stores the v3 record', () async {
+          await runWithOverrides(command.run);
+          verify(() => releaser.requireManagedSigning = true).called(1);
+          verify(
+            () => artifactBuilder.securityBuildEnvironment = {
+              'SHOREBIRD_SECURITY_PROFILE': 'hardened-diversified',
+              'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+              'SHOREBIRD_RELEASE_ROOT': releaseRoot,
+              'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
+              'SHOREBIRD_DIVERSIFICATION_PROFILE_ID': profileId,
+              'SHOREBIRD_BUILD_MANIFEST_RECORD_DIR':
+                  command.releaseRecordDirectory!.path,
+            },
+          ).called(1);
+          final profile =
+              verify(
+                    () => artifactBuilder.bytecodeProfile = captureAny(),
+                  ).captured.single
+                  as BytecodeProfile;
+          expect(profile.id, profileId);
+          expect(profile.path, p.absolute(profilePath));
+          verify(() => releaser.buildReleaseArtifacts()).called(1);
+          final metadata =
+              verify(
+                    () => releaser.updatedReleaseMetadata(captureAny()),
+                  ).captured.single
+                  as UpdateReleaseMetadata;
+          final record = metadata.securityRecord!;
+          expect(record['contract_version'], 3);
+          expect(record['security_profile'], 'hardened-diversified');
+          expect(record['diversification_profile_id'], profileId);
+          expect(metadata.toJson()['security_record'], record);
+        });
+
+        test('admits an iOS framework interpreter release', () {
+          when(
+            () => releaser.releaseType,
+          ).thenReturn(ReleaseType.iosFramework);
+          runWithOverrides(
+            () => command.assertSecurityProfileAdmitted(releaser),
+          );
+          verify(() => artifactBuilder.bytecodeProfile = any()).called(1);
+        });
+
+        test('admits a macOS full replacement interpreter release', () {
+          when(() => releaser.releaseType).thenReturn(ReleaseType.macos);
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            ShorebirdYaml.fromJson({
+              ...interpreterYaml.toJson(),
+              'aot_patch_full_replacement': true,
+            }),
+          );
+          runWithOverrides(
+            () => command.assertSecurityProfileAdmitted(releaser),
+          );
+          verify(() => artifactBuilder.bytecodeProfile = any()).called(1);
+        });
+
+        test('stops before activation when the build wrote a v2 '
+            'record', () async {
+          when(() => releaser.buildReleaseArtifacts()).thenAnswer((_) async {
+            writeReleaseRecord(command.releaseRecordDirectory!, toolchainId);
+            return File('');
+          });
+          await expectLater(
+            runWithOverrides(command.run),
+            throwsA(
+              isA<PreconditionFailedExit>().having(
+                (e) => e.failure.message,
+                'message',
+                contains('is not a contract v3 release record'),
+              ),
+            ),
+          );
+          verifyNever(
+            () => releaser.uploadReleaseArtifacts(
+              release: any(named: 'release'),
+              appId: any(named: 'appId'),
+            ),
+          );
+        });
+
+        group('refuses a non-interpreter release', () {
+          final cases = <String, void Function()>{
+            'android': () => when(
+              () => releaser.releaseType,
+            ).thenReturn(ReleaseType.android),
+            'linux': () => when(
+              () => releaser.releaseType,
+            ).thenReturn(ReleaseType.linux),
+            'windows': () => when(
+              () => releaser.releaseType,
+            ).thenReturn(ReleaseType.windows),
+            'iOS without aot_patch_runtime_mode': () => when(
+              () => shorebirdEnv.getShorebirdYaml(),
+            ).thenReturn(hardenedYaml),
+            'iOS with aot_patch_runtime_mode: ios-aot-link': () =>
+                when(
+                  () => shorebirdEnv.getShorebirdYaml(),
+                ).thenReturn(
+                  ShorebirdYaml.fromJson({
+                    ...interpreterYaml.toJson(),
+                    'aot_patch_runtime_mode': 'ios-aot-link',
+                  }),
+                ),
+            'iOS overridden to native-aot': () => platformEnvironment = {
+              ...platformEnvironment!,
+              'SHOREBIRD_IOS_PATCH_RUNTIME_MODE': 'native-aot',
+            },
+            'macOS without full replacement': () => when(
+              () => releaser.releaseType,
+            ).thenReturn(ReleaseType.macos),
+          };
+          for (final MapEntry(key: name, value: configure) in cases.entries) {
+            test(name, () async {
+              configure();
+              await expectRefused('needs a bytecode interpreter release');
+            });
+          }
+        });
+
+        test('refuses without SHOREBIRD_DIVERSIFICATION_PROFILE', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable: '',
+          };
+          await expectRefused('Set SHOREBIRD_DIVERSIFICATION_PROFILE');
+        });
+
+        test('refuses a file that is not a profile', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable: (File(
+              p.join(Directory.systemTemp.createTempSync().path, 'p.json'),
+            )..writeAsStringSync('{"schema": 1}')).path,
+          };
+          await expectRefused('is not a diversification profile');
+        });
+
+        test('refuses a profile the toolchain was not built with', () async {
+          toolchainFloor = diversifiedToolchain(id: 'sha256:${'d' * 64}');
+          await expectRefused(
+            'but this toolchain was built with sha256:${'d' * 64}',
+          );
+        });
+
+        test('refuses the DEVELOPMENT-ONLY profile on a production '
+            'toolchain', () async {
+          toolchainFloor = diversifiedToolchain(
+            id: developmentDiversificationProfileId,
+          );
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable:
+                developmentDiversificationProfilePath,
+          };
+          await expectRefused('DEVELOPMENT-ONLY');
+        });
+
+        test('refuses a development toolchain', () async {
+          toolchainFloor = diversifiedToolchain(
+            id: developmentDiversificationProfileId,
+            development: true,
+          );
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable:
+                developmentDiversificationProfilePath,
+          };
+          await expectRefused('development security exceptions');
+        });
+
+        test('still applies every hardened refusal', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            releaseTrustEnvironmentVariable: '',
+          };
+          await expectRefused('cannot sign its build manifest');
+          platformEnvironment = {
+            ...platformEnvironment!,
+            releaseTrustEnvironmentVariable: writeReleaseTrust(),
+          };
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            ShorebirdYaml.fromJson({
+              ...interpreterYaml.toJson(),
+              'base_url': 'http://updates.example.com',
+            }),
+          );
+          await expectRefused('must use https');
+        });
+
+        test('refuses a hardened release', () async {
+          requestProfile('hardened');
+          await expectRefused(
+            'This Shorebird toolchain is hardened-diversified ($toolchainId), '
+            'so it cannot build a hardened release.',
+          );
+        });
+
+        test('refuses a legacy release', () async {
+          requestProfile('legacy');
+          await expectRefused('cannot build a legacy release');
+          verify(
+            () => logger.info(
+              any(that: contains('--security-profile=hardened-diversified')),
+            ),
+          ).called(1);
         });
       });
 
@@ -543,6 +830,8 @@ void main() {
             },
           ).called(1);
           verify(() => releaser.buildReleaseArtifacts()).called(1);
+          // Hardened builds stay canonical: no diversification profile.
+          verifyNever(() => artifactBuilder.bytecodeProfile = any());
           // The release record is stored with the release metadata.
           final metadata =
               verify(
@@ -587,6 +876,14 @@ void main() {
           };
           await expectRefused('cannot sign its build manifest');
           verifyNever(() => releaser.buildReleaseArtifacts());
+        });
+
+        test('refuses a hardened-diversified release', () async {
+          requestProfile('hardened-diversified');
+          await expectRefused(
+            'This Shorebird toolchain is hardened ($toolchainId), so it '
+            'cannot build a hardened-diversified release.',
+          );
         });
 
         test('refuses a release that cannot sign its build manifest', () async {
@@ -2375,16 +2672,24 @@ String writeReleaseTrust() {
       .path;
 }
 
-/// What a contract v2 `flutter build` writes for one build manifest.
-void writeReleaseRecord(Directory directory, String toolchainId) {
+/// What a contract v2 (or, with [diversificationProfileId], v3) `flutter
+/// build` writes for one build manifest.
+void writeReleaseRecord(
+  Directory directory,
+  String toolchainId, {
+  String? diversificationProfileId,
+}) {
   directory.createSync(recursive: true);
   File(
     p.join(directory.path, 'build-manifest-${'a' * 64}.json'),
   ).writeAsStringSync(
     jsonEncode({
       'schema': 'open-shorebird.release-record',
-      'contract_version': 2,
-      'security_profile': 'hardened',
+      'contract_version': diversificationProfileId == null ? 2 : 3,
+      'security_profile': diversificationProfileId == null
+          ? 'hardened'
+          : 'hardened-diversified',
+      'diversification_profile_id': ?diversificationProfileId,
       'toolchain_id': toolchainId,
       'development_exceptions': false,
       'release_root_sha256': 'sha256:${'1' * 64}',

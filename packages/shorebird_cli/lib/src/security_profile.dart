@@ -1,32 +1,46 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:yaml/yaml.dart';
 
-/// The security profiles of contract v1 (docs/HARDENING_CONTRACTS.md §2).
+/// The security profiles (docs/HARDENING_CONTRACTS.md §2 and §11).
 ///
 /// A profile is chosen once, at native-release time, and every patch of that
 /// release inherits it.
 enum SecurityProfile {
   /// Today's behavior, unchanged. The default.
-  legacy,
+  legacy('legacy'),
 
   /// Opt-in: signed patches, strict verification, required response
   /// verification and an HTTPS update origin, enforced by a toolchain that was
   /// built hardened.
-  hardened;
+  hardened('hardened'),
 
-  /// A profile name contract v1 reserves for a later version and rejects.
-  static const reservedDiversified = 'hardened-diversified';
+  /// Contract v3 (P5): [hardened], plus Dart bytecode encoded with the
+  /// release lineage's diversification profile. Bytecode interpreter releases
+  /// only.
+  hardenedDiversified('hardened-diversified');
 
-  /// The profile named [value], or null when [value] is not a v1 profile.
+  const SecurityProfile(this.value);
+
+  /// The profile's name in `toolchain_security.json`, the bundled
+  /// `shorebird.yaml`, `--security-profile` and SHOREBIRD_SECURITY_PROFILE.
+  final String value;
+
+  /// Whether every hardened rule applies ([hardened] and
+  /// [hardenedDiversified]).
+  bool get isHardened => this != SecurityProfile.legacy;
+
+  /// The profile named [value], or null when [value] is not a profile.
   static SecurityProfile? tryParse(String value) => switch (value) {
     'legacy' => SecurityProfile.legacy,
     'hardened' => SecurityProfile.hardened,
+    'hardened-diversified' => SecurityProfile.hardenedDiversified,
     _ => null,
   };
 }
@@ -45,6 +59,7 @@ const reservedSecurityYamlKeys = {
   'toolchain_id',
   'security_development_exceptions',
   'shorebird_build_manifest',
+  'diversification_profile_id',
 };
 
 /// The path of the PKCS#8 PEM Ed25519 key that signs the build manifest of a
@@ -89,6 +104,23 @@ const androidSigningCertEnvironmentVariable =
 /// Comma-separated Apple team identifiers a hardened macOS app must be signed
 /// by (optional; enables repack detection).
 const appleTeamIdsEnvironmentVariable = 'SHOREBIRD_APPLE_TEAM_IDS';
+
+/// The path of the lineage's diversification profile (contract v3,
+/// docs/HARDENING_CONTRACTS.md §11.2), which a hardened-diversified release or
+/// patch passes to dart2bytecode as `--bytecode-profile`.
+const diversificationProfileEnvironmentVariable =
+    'SHOREBIRD_DIVERSIFICATION_PROFILE';
+
+/// The diversification profile ID passed to `flutter build` from
+/// `toolchain_security.json` (contract v3).
+const diversificationProfileIdEnvironmentVariable =
+    'SHOREBIRD_DIVERSIFICATION_PROFILE_ID';
+
+/// The ID of the published DEVELOPMENT-ONLY diversification profile
+/// (`scripts/testdata/diversification/profile.DEVELOPMENT-ONLY.json` in the
+/// workspace). Its seed is public, so only development toolchains accept it.
+const developmentDiversificationProfileId =
+    'sha256:832856d0bed27833434e3f26b65d03cedc313f9850c2577ca7565c4dc644f46d';
 
 const _pkcs8Ed25519Prefix = [
   0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, //
@@ -270,6 +302,7 @@ class ToolchainSecurity {
     required this.developmentExceptions,
     this.releaseRoot,
     this.minDelegationsVersion = 1,
+    this.diversificationProfileId,
   });
 
   /// Reads the floor of the Shorebird install at [shorebirdRoot].
@@ -312,7 +345,11 @@ class ToolchainSecurity {
         'understands ${supportedContractVersions.join(' and ')}.',
       );
     }
-    final keys = version == 1 ? _keys : _keysV2;
+    final keys = switch (version) {
+      1 => _keys,
+      2 => _keysV2,
+      _ => _keysV3,
+    };
     final unknown = decoded.keys.toSet().difference(keys);
     if (unknown.isNotEmpty) fail('unknown keys ${unknown.join(', ')}.');
     final missing = keys.difference(decoded.keys.toSet());
@@ -326,8 +363,8 @@ class ToolchainSecurity {
         : null;
     if (profile == null) {
       fail(
-        'security_profile must be "legacy" or "hardened", '
-        'not ${jsonEncode(profileValue)}.',
+        'security_profile must be "legacy", "hardened" or '
+        '"hardened-diversified", not ${jsonEncode(profileValue)}.',
       );
     }
 
@@ -339,7 +376,7 @@ class ToolchainSecurity {
         'digits, not ${jsonEncode(toolchainId)}.',
       );
     }
-    if (profile == SecurityProfile.hardened && toolchainId == null) {
+    if (profile.isHardened && toolchainId == null) {
       fail('a hardened toolchain requires a toolchain_id.');
     }
 
@@ -350,7 +387,7 @@ class ToolchainSecurity {
 
     String? releaseRoot;
     var minDelegationsVersion = 1;
-    if (version == 2) {
+    if (version >= 2) {
       final root = decoded['release_root'];
       final minimum = decoded['min_delegations_version'];
       if (root != null &&
@@ -364,10 +401,10 @@ class ToolchainSecurity {
       releaseRoot = root as String?;
       minDelegationsVersion = minimum;
     }
-    if (profile == SecurityProfile.hardened) {
+    if (profile.isHardened) {
       // Contract v2 (P4): the build manifest chains to a compiled release
       // root. A v1 hardened engine expects a bare manifest key instead.
-      if (version != 2) {
+      if (version == 1) {
         fail(
           'a hardened toolchain needs contract_version 2 (release root); '
           'rebuild it with shorebird_release_root.',
@@ -380,12 +417,41 @@ class ToolchainSecurity {
       fail('release_root and min_delegations_version are hardened-only.');
     }
 
+    // Contract v3 (P5): exactly the diversified toolchains are v3.
+    String? diversificationProfileId;
+    if (profile == SecurityProfile.hardenedDiversified && version != 3) {
+      fail(
+        'a hardened-diversified toolchain needs contract_version 3 '
+        '(diversification_profile_id).',
+      );
+    }
+    if (version == 3) {
+      if (profile != SecurityProfile.hardenedDiversified) {
+        fail('contract_version 3 is used only by hardened-diversified.');
+      }
+      final id = decoded['diversification_profile_id'];
+      if (id is! String || !isWellFormedToolchainId(id)) {
+        fail(
+          'diversification_profile_id must be "sha256:" followed by 64 '
+          'lowercase hex digits, not ${jsonEncode(id)}.',
+        );
+      }
+      if (id == developmentDiversificationProfileId && !developmentExceptions) {
+        fail(
+          'the DEVELOPMENT-ONLY diversification profile needs '
+          'development_exceptions: true.',
+        );
+      }
+      diversificationProfileId = id;
+    }
+
     return ToolchainSecurity(
       profile: profile,
       toolchainId: toolchainId as String?,
       developmentExceptions: developmentExceptions,
       releaseRoot: releaseRoot,
       minDelegationsVersion: minDelegationsVersion,
+      diversificationProfileId: diversificationProfileId,
     );
   }
 
@@ -405,8 +471,12 @@ class ToolchainSecurity {
   /// The contract version a hardened toolchain file must declare.
   static const contractVersion = 2;
 
-  /// The versions this CLI reads: 1 (legacy only) and 2.
-  static const supportedContractVersions = [1, 2];
+  /// The contract version a hardened-diversified toolchain file must declare.
+  static const diversifiedContractVersion = 3;
+
+  /// The versions this CLI reads: 1 (legacy only), 2 (legacy or hardened)
+  /// and 3 (hardened-diversified only).
+  static const supportedContractVersions = [1, 2, 3];
 
   static const _keys = {
     'schema',
@@ -421,6 +491,8 @@ class ToolchainSecurity {
     'release_root',
     'min_delegations_version',
   };
+
+  static const _keysV3 = {..._keysV2, 'diversification_profile_id'};
 
   /// The toolchain security file of the Shorebird install at [shorebirdRoot].
   static File fileIn(Directory shorebirdRoot) =>
@@ -443,6 +515,11 @@ class ToolchainSecurity {
   /// The compiled delegations version floor.
   final int minDelegationsVersion;
 
+  /// The ID of the diversification profile the engine and dart2bytecode
+  /// encode bytecode with. Set exactly for
+  /// [SecurityProfile.hardenedDiversified].
+  final String? diversificationProfileId;
+
   /// The variables passed to `flutter build` so it writes the bundled
   /// security declaration. Empty for [SecurityProfile.legacy], so legacy
   /// builds see exactly the environment they always did.
@@ -455,6 +532,14 @@ class ToolchainSecurity {
       toolchainIdEnvironmentVariable: toolchainId!,
       releaseRootEnvironmentVariable: releaseRoot!,
       releaseMinDelegationsVersionEnvironmentVariable: '$minDelegationsVersion',
+    },
+    SecurityProfile.hardenedDiversified => {
+      securityProfileEnvironmentVariable:
+          SecurityProfile.hardenedDiversified.value,
+      toolchainIdEnvironmentVariable: toolchainId!,
+      releaseRootEnvironmentVariable: releaseRoot!,
+      releaseMinDelegationsVersionEnvironmentVariable: '$minDelegationsVersion',
+      diversificationProfileIdEnvironmentVariable: diversificationProfileId!,
     },
   };
 }
@@ -553,12 +638,21 @@ class ReleaseRecordException implements Exception {
   String toString() => message;
 }
 
-/// Merges the `release-record.v2` files `flutter build` wrote into
-/// [directory] (one per distinct build manifest) into the one record stored
-/// with the release (docs/HARDENING_CONTRACTS.md §10). Every file must agree
-/// on the toolchain and the release trust; the build manifests are listed
-/// once each, by digest.
-Map<String, Object?> readReleaseRecord(Directory directory) {
+/// Merges the release-record files `flutter build` wrote into [directory]
+/// (one per distinct build manifest) into the one record stored with the
+/// release (docs/HARDENING_CONTRACTS.md §10). Every file must agree on the
+/// toolchain and the release trust; the build manifests are listed once each,
+/// by digest.
+///
+/// A hardened release's records are `release-record.v2` and carry no
+/// `diversification_profile_id`. A hardened-diversified release passes its
+/// [diversificationProfileId]; its records must then be `release-record.v3`
+/// (contract v3, §11.7) for that profile.
+Map<String, Object?> readReleaseRecord(
+  Directory directory, {
+  String? diversificationProfileId,
+}) {
+  final expectedVersion = diversificationProfileId == null ? 2 : 3;
   final files = directory.existsSync()
       ? (directory
             .listSync()
@@ -584,10 +678,25 @@ Map<String, Object?> readReleaseRecord(Directory directory) {
     }
     if (decoded is! Map<String, Object?> ||
         decoded['schema'] != 'open-shorebird.release-record' ||
-        decoded['contract_version'] != 2 ||
+        decoded['contract_version'] != expectedVersion ||
         decoded['build_manifests'] is! List<Object?>) {
       throw ReleaseRecordException(
-        '${file.path} is not a contract v2 release record.',
+        '${file.path} is not a contract v$expectedVersion release record.',
+      );
+    }
+    if (diversificationProfileId == null) {
+      if (decoded.containsKey('diversification_profile_id')) {
+        throw ReleaseRecordException(
+          '${file.path} names a diversification profile, but this release is '
+          'not hardened-diversified.',
+        );
+      }
+    } else if (decoded['security_profile'] !=
+            SecurityProfile.hardenedDiversified.value ||
+        decoded['diversification_profile_id'] != diversificationProfileId) {
+      throw ReleaseRecordException(
+        '${file.path} is not a hardened-diversified record for '
+        'diversification profile $diversificationProfileId.',
       );
     }
     final shared = Map<String, Object?>.of(decoded)..remove('build_manifests');
@@ -595,9 +704,9 @@ Map<String, Object?> readReleaseRecord(Directory directory) {
       merged = shared;
     } else if (jsonEncode(_sorted(merged)) != jsonEncode(_sorted(shared))) {
       throw ReleaseRecordException(
-        'The release records in ${directory.path} disagree on the toolchain '
-        'or the release trust; every build of a release must be signed '
-        'under the same delegations.',
+        'The release records in ${directory.path} disagree on the toolchain, '
+        'the diversification profile or the release trust; every build of a '
+        'release must be signed under the same delegations.',
       );
     }
     for (final manifest in decoded['build_manifests']! as List<Object?>) {
@@ -622,3 +731,238 @@ Object? _sorted(Object? value) => switch (value) {
   final List<Object?> list => [for (final item in list) _sorted(item)],
   _ => value,
 };
+
+/// Thrown when SHOREBIRD_DIVERSIFICATION_PROFILE does not name the profile
+/// the toolchain was built with.
+class BytecodeProfileException implements Exception {
+  /// Creates a [BytecodeProfileException] with a complete-sentence [message].
+  const BytecodeProfileException(this.message);
+
+  /// What is wrong.
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// {@template bytecode_profile}
+/// The diversification profile (contract v3, docs/HARDENING_CONTRACTS.md
+/// §11.2) a hardened-diversified release or patch encodes its Dart bytecode
+/// with.
+/// {@endtemplate}
+class BytecodeProfile {
+  /// {@macro bytecode_profile}
+  const BytecodeProfile({required this.path, required this.id});
+
+  /// Reads and validates the profile file at [path] (§11.2): the profile
+  /// document's constants, a permutation of `0..N-1` with `N` at most 256,
+  /// `Trap` kept at wire byte 0, fewer than 16 other fixed points, a null
+  /// native layout and no duplicate JSON keys. Its ID is `sha256:` over the
+  /// canonical JSON. dart2bytecode and the engine check the opcode table
+  /// itself.
+  factory BytecodeProfile.load(String path) {
+    Never fail(String reason) => throw BytecodeProfileException(
+      '$diversificationProfileEnvironmentVariable names $path, which $reason',
+    );
+    final String source;
+    try {
+      source = File(path).readAsStringSync();
+    } on FileSystemException {
+      fail('cannot be read.');
+    }
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(source);
+      _rejectDuplicateKeys(source);
+    } on FormatException catch (error) {
+      fail('is not valid JSON (${error.message}).');
+    }
+    final problem = diversificationProfileProblem(decoded);
+    if (problem != null) fail('is not a diversification profile: $problem');
+    final digest = sha256.convert(utf8.encode(_canonicalJson(decoded)));
+    return BytecodeProfile(path: p.absolute(path), id: 'sha256:$digest');
+  }
+
+  /// The absolute path of the profile file, passed to dart2bytecode.
+  final String path;
+
+  /// The profile ID: `sha256:` over the profile's canonical JSON.
+  final String id;
+
+  /// The 32 raw digest bytes of [id], as written in `DBP3` headers.
+  List<int> get digest => [
+    for (var i = 'sha256:'.length; i < id.length; i += 2)
+      int.parse(id.substring(i, i + 2), radix: 16),
+  ];
+
+  /// The profile that [environment] names for [toolchain], a
+  /// hardened-diversified toolchain. Throws a [BytecodeProfileException]
+  /// when the variable is unset, the file is not a valid profile, its ID is
+  /// not the one the toolchain was built with, or it is the DEVELOPMENT-ONLY
+  /// profile and the toolchain is not a development toolchain.
+  static BytecodeProfile forToolchain(
+    Map<String, String> environment,
+    ToolchainSecurity toolchain,
+  ) {
+    final path = environment[diversificationProfileEnvironmentVariable] ?? '';
+    if (path.isEmpty) {
+      throw const BytecodeProfileException(
+        'Set $diversificationProfileEnvironmentVariable to the '
+        "release lineage's diversification profile "
+        '(scripts/diversification_profile.py new).',
+      );
+    }
+    final profile = BytecodeProfile.load(path);
+    if (profile.id != toolchain.diversificationProfileId) {
+      throw BytecodeProfileException(
+        '$diversificationProfileEnvironmentVariable names profile '
+        '${profile.id}, but this toolchain was built with '
+        '${toolchain.diversificationProfileId}.',
+      );
+    }
+    if (profile.id == developmentDiversificationProfileId &&
+        !toolchain.developmentExceptions) {
+      throw const BytecodeProfileException(
+        '$diversificationProfileEnvironmentVariable names the '
+        'DEVELOPMENT-ONLY diversification profile, whose seed is public; '
+        'only development toolchains accept it.',
+      );
+    }
+    return profile;
+  }
+}
+
+/// Why [document] is not a contract v3 diversification profile (§11.2), as
+/// a sentence fragment, or null when it is one.
+String? diversificationProfileProblem(Object? document) {
+  bool exactKeys(Map<String, Object?> map, Set<String> keys) =>
+      map.length == keys.length && map.keys.toSet().containsAll(keys);
+
+  if (document is! Map<String, Object?> ||
+      !exactKeys(document, const {
+        'schema',
+        'contract_version',
+        'bytecode',
+        'native_layout',
+      })) {
+    return 'expected exactly schema, contract_version, bytecode and '
+        'native_layout.';
+  }
+  if (document['schema'] != 'open-shorebird.diversification-profile' ||
+      document['contract_version'] != 3) {
+    return 'schema must be open-shorebird.diversification-profile and '
+        'contract_version 3.';
+  }
+  if (document['native_layout'] != null) {
+    return 'native_layout is reserved and must be null.';
+  }
+  final bytecode = document['bytecode'];
+  if (bytecode is! Map<String, Object?> ||
+      !exactKeys(bytecode, const {
+        'scheme',
+        'format_version',
+        'opcode_table_sha256',
+        'wire_opcodes',
+      })) {
+    return 'bytecode must have exactly scheme, format_version, '
+        'opcode_table_sha256 and wire_opcodes.';
+  }
+  if (bytecode['scheme'] != 'opcode-permutation-v1' ||
+      bytecode['format_version'] != 3) {
+    return 'bytecode must use scheme opcode-permutation-v1 and '
+        'format_version 3.';
+  }
+  final table = bytecode['opcode_table_sha256'];
+  if (table is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(table)) {
+    return 'opcode_table_sha256 must be 64 lowercase hex digits.';
+  }
+  final wires = bytecode['wire_opcodes'];
+  if (wires is! List<Object?> ||
+      wires.length < 2 ||
+      wires.any((wire) => wire is! int || wire < 0)) {
+    return 'wire_opcodes must be at least two non-negative integers.';
+  }
+  if (wires.length > 256) {
+    return 'at most 256 opcodes fit in one byte.';
+  }
+  final sorted = wires.cast<int>().toList()..sort();
+  for (var i = 0; i < sorted.length; i++) {
+    if (sorted[i] != i) {
+      return 'wire_opcodes must be a permutation of 0..${wires.length - 1}.';
+    }
+  }
+  if (wires[0] != 0) return 'Trap must keep wire byte 0.';
+  var fixed = 0;
+  for (var i = 1; i < wires.length; i++) {
+    if (wires[i] == i) fixed++;
+  }
+  if (fixed >= _maxFixedPoints) {
+    return 'it has $fixed fixed points; a derived profile has about one '
+        '(at most ${_maxFixedPoints - 1} allowed).';
+  }
+  return null;
+}
+
+/// A derived permutation has about one fixed point besides Trap; this many
+/// means a hand-made or degenerate map.
+const _maxFixedPoints = 16;
+
+/// Sorted keys, no insignificant whitespace (the reference
+/// `canonical_json` of scripts/validate_hardening_contracts.py for the
+/// integer, string and null values a profile holds).
+String _canonicalJson(Object? value) => jsonEncode(_sorted(value));
+
+/// Throws a [FormatException] when a JSON object in [source] (already known
+/// to be valid JSON) repeats a key: `jsonDecode` would keep the last value,
+/// so the ID could describe a map other tools read differently.
+void _rejectDuplicateKeys(String source) {
+  var i = 0;
+  String readString() {
+    final buffer = StringBuffer();
+    i++; // Opening quote.
+    while (source[i] != '"') {
+      if (source[i] == r'\') {
+        buffer.write(source.substring(i, i + 2));
+        i += 2;
+      } else {
+        buffer.write(source[i++]);
+      }
+    }
+    i++; // Closing quote.
+    // Compare decoded keys, so an escaped and a plain spelling collide.
+    return jsonDecode('"$buffer"') as String;
+  }
+
+  final keyStack = <Set<String>?>[];
+  var expectKey = false;
+  while (i < source.length) {
+    final char = source[i];
+    switch (char) {
+      case '{':
+        keyStack.add(<String>{});
+        expectKey = true;
+        i++;
+      case '[':
+        keyStack.add(null);
+        expectKey = false;
+        i++;
+      case '}' || ']':
+        keyStack.removeLast();
+        expectKey = false;
+        i++;
+      case ',':
+        expectKey = keyStack.isNotEmpty && keyStack.last != null;
+        i++;
+      case '"':
+        final value = readString();
+        if (expectKey) {
+          if (!keyStack.last!.add(value)) {
+            throw FormatException('duplicate key "$value"');
+          }
+          expectKey = false;
+        }
+      default:
+        i++;
+    }
+  }
+}

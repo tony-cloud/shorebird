@@ -31,6 +31,7 @@ import 'package:shorebird_cli/src/patch_diff_checker.dart';
 import 'package:shorebird_cli/src/platform.dart' as cli_platform;
 import 'package:shorebird_cli/src/platform/platform.dart';
 import 'package:shorebird_cli/src/release_type.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -204,6 +205,48 @@ void main() {
     group('releaseType', () {
       test('is ReleaseType.ios', () {
         expect(patcher.releaseType, ReleaseType.ios);
+      });
+    });
+
+    group('patchesBytecodeInterpreter (hardened-diversified)', () {
+      bool interpreter(ShorebirdYaml yaml) {
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(yaml);
+        return runWithOverrides(() => patcher.patchesBytecodeInterpreter);
+      }
+
+      const declared = ShorebirdYaml(
+        appId: 'app',
+        aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+      );
+
+      setUp(() => platform = platform.copyWith(environment: {}));
+
+      test('is true for a declared interpreter profile', () {
+        expect(interpreter(declared), isTrue);
+      });
+
+      test('is false when native AOT patches are enabled', () {
+        platform = platform.copyWith(
+          environment: {'SHOREBIRD_IOS_NATIVE_AOT_PATCH': '1'},
+        );
+        expect(interpreter(declared), isFalse);
+      });
+
+      test('is false without the declaration or for another mode', () {
+        expect(interpreter(const ShorebirdYaml(appId: 'app')), isFalse);
+        expect(
+          interpreter(
+            const ShorebirdYaml(
+              appId: 'app',
+              aotPatchRuntimeMode: 'ios-aot-link',
+            ),
+          ),
+          isFalse,
+        );
+        platform = platform.copyWith(
+          environment: {'SHOREBIRD_IOS_PATCH_RUNTIME_MODE': 'native-aot'},
+        );
+        expect(interpreter(declared), isFalse);
       });
     });
 
@@ -1444,6 +1487,43 @@ $body
           );
         });
 
+        test('binds the diversification profile id into the envelope '
+            '(contract v3)', () async {
+          final profileId = 'sha256:${'ab' * 32}';
+          when(
+            () => artifactBuilder.bytecodeProfile,
+          ).thenReturn(BytecodeProfile(path: '/profile.json', id: profileId));
+          await runWithOverrides(
+            () => patcher.createPatchArtifacts(
+              appId: appId,
+              releaseId: releaseId,
+              releaseArtifact: releaseArtifactFile,
+              releaseVersion: '1.2.3+4',
+            ),
+          );
+          final json =
+              jsonDecode(
+                    File(
+                      p.join(
+                        projectRoot.path,
+                        'build',
+                        'ios_interpreter_patch.vmcode',
+                      ),
+                    ).readAsStringSync(),
+                  )
+                  as Map<String, Object?>;
+          expect(
+            (json['metadata']! as Map)['bytecode_profile_id'],
+            profileId,
+          );
+          final encrypted = open_patch.EncryptedPatchArtifact.fromJson(json);
+          expect(encrypted.metadata.bytecodeProfileId, profileId);
+          expect(
+            encrypted.decrypt(open_patch.readKey(keyHex)).payload,
+            equals(patchBytes),
+          );
+        });
+
         test('returns an encrypted full-snapshot bytecode artifact', () async {
           final patchBundle = await runWithOverrides(
             () => patcher.createPatchArtifacts(
@@ -1491,6 +1571,12 @@ $body
           expect(
             encrypted.metadata.offlineExpiresAt,
             '2030-01-01T00:00:00.000Z',
+          );
+          // Canonical bytecode: the envelope carries no profile id.
+          expect(encrypted.metadata.bytecodeProfileId, isNull);
+          expect(
+            encrypted.metadata.toJson().containsKey('bytecode_profile_id'),
+            isFalse,
           );
           expect(
             encrypted.decrypt(open_patch.readKey(keyHex)).payload,

@@ -155,7 +155,10 @@ class IosBytecodeBuilder {
   ) {
     try {
       final bytes = baseline.readAsBytesSync();
-      final bundle = FullReplacementBundle.decode(bytes);
+      final bundle = FullReplacementBundle.decode(
+        bytes,
+        bytecodeProfileDigest: admittedBytecodeProfile?.digest,
+      );
       if (!fullReplacementForManifest(manifest) ||
           !bundle.manifest.isBaseline ||
           bundle.manifest.hostAbiHex != manifest['host_abi'] ||
@@ -249,7 +252,10 @@ class IosBytecodeBuilder {
             );
           }
           final bytes = assets.single.content as List<int>;
-          final bundle = FullReplacementBundle.decode(bytes);
+          final bundle = FullReplacementBundle.decode(
+            bytes,
+            bytecodeProfileDigest: admittedBytecodeProfile?.digest,
+          );
           if (!bundle.manifest.isBaseline ||
               bundle.manifest.hostAbiHex != manifest['host_abi'] ||
               sha256.convert(bytes).toString() !=

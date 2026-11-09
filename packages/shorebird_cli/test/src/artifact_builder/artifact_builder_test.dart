@@ -14,6 +14,7 @@ import 'package:shorebird_cli/src/artifact_manager.dart';
 import 'package:shorebird_cli/src/logging/logging.dart';
 import 'package:shorebird_cli/src/os/operating_system_interface.dart';
 import 'package:shorebird_cli/src/platform/platform.dart';
+import 'package:shorebird_cli/src/security_profile.dart';
 import 'package:shorebird_cli/src/shorebird_android_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_artifacts.dart';
 import 'package:shorebird_cli/src/shorebird_documentation.dart';
@@ -28,6 +29,21 @@ import '../mocks.dart';
 
 void main() {
   useTempWorkingDirectory();
+  test('admittedBytecodeProfile is the scoped builder profile, null outside '
+      'a command', () {
+    expect(admittedBytecodeProfile, isNull);
+    final profile = BytecodeProfile(path: '/p.json', id: 'sha256:${'1' * 64}');
+    final builder = ArtifactBuilder();
+    final scoped = {artifactBuilderRef.overrideWith(() => builder)};
+    expect(runScoped(() => admittedBytecodeProfile, values: scoped), isNull);
+    builder.bytecodeProfile = profile;
+    expect(
+      runScoped(() => admittedBytecodeProfile, values: scoped),
+      same(profile),
+    );
+    expect(profile.digest, List.filled(32, 0x11));
+  });
+
   group('buildEnvironment', () {
     test('is unchanged for legacy builds', () {
       expect(buildEnvironment(), isNull);
@@ -2683,6 +2699,40 @@ FLUTTER_APPLICATION_PATH=${projectRoot.path}
                 '-Ddart.vm.profile=false',
                 '-Ddart.vm.product=true',
                 '--enable-experiment=records',
+                '-o',
+                '/path/to/out.bytecode',
+                '/app/lib/main.dart',
+              ],
+              runInShell: false,
+            ),
+          ).called(1);
+        });
+
+        test('passes --bytecode-profile only for a diversified build '
+            '(contract v3)', () async {
+          final profile = BytecodeProfile(
+            path: '/profiles/diversification-profile.json',
+            id: 'sha256:${'0' * 64}',
+          );
+          builder.bytecodeProfile = profile;
+          await runWithOverrides(
+            () => builder.buildDartBytecodeSnapshot(
+              inputFilePath: '/app/lib/main.dart',
+              outFilePath: '/path/to/out.bytecode',
+              patchBasePath: '/release/baseline.bytecode',
+            ),
+          );
+          verify(
+            () => shorebirdProcess.stream(
+              'dartaotruntime',
+              [
+                'dart2bytecode.dart.snapshot',
+                '--platform=platform_strong.dill',
+                '--target=flutter',
+                '--bytecode-profile=/profiles/diversification-profile.json',
+                '--patch-base=/release/baseline.bytecode',
+                '-Ddart.vm.profile=false',
+                '-Ddart.vm.product=true',
                 '-o',
                 '/path/to/out.bytecode',
                 '/app/lib/main.dart',

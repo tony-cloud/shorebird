@@ -227,6 +227,35 @@ void main() {
       },
     );
 
+    test('patches the bytecode interpreter only for full replacement '
+        '(hardened-diversified, contract v3)', () {
+      bool interpreter(ShorebirdYaml yaml) {
+        when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(yaml);
+        return runWithOverrides(() => patcher.patchesBytecodeInterpreter);
+      }
+
+      expect(interpreter(const ShorebirdYaml(appId: 'app')), isFalse);
+      expect(
+        interpreter(
+          const ShorebirdYaml(
+            appId: 'app',
+            aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+          ),
+        ),
+        isFalse,
+      );
+      expect(
+        interpreter(
+          const ShorebirdYaml(
+            appId: 'app',
+            aotPatchRuntimeMode: 'dart-bytecode-interpreter',
+            aotPatchFullReplacement: true,
+          ),
+        ),
+        isTrue,
+      );
+    });
+
     group('minimumFlutterVersion', () {
       test('is minimumSupportedMacosFlutterVersion', () {
         expect(

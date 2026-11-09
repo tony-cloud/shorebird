@@ -289,3 +289,29 @@ class TestDesktopAbi extends LocalAbi {
   @override
   final Abi current;
 }
+
+/// The shared DEVELOPMENT-ONLY diversification profile (contract v3), copied
+/// from the workspace's scripts/testdata/diversification.
+String get developmentDiversificationProfilePath => p.join(
+  fixturesDirectory,
+  'diversification',
+  'profile.DEVELOPMENT-ONLY.json',
+);
+
+/// A valid production diversification profile in a temp directory: the
+/// development permutation with two non-Trap entries swapped.
+String writeDiversificationProfile() {
+  final profile =
+      jsonDecode(File(developmentDiversificationProfilePath).readAsStringSync())
+          as Map<String, Object?>;
+  final wires =
+      (profile['bytecode']! as Map<String, Object?>)['wire_opcodes']!
+          as List<Object?>;
+  final first = wires[1];
+  wires[1] = wires[2];
+  wires[2] = first;
+  final dir = Directory.systemTemp.createTempSync('diversification');
+  return (File(
+    p.join(dir.path, 'diversification-profile.json'),
+  )..writeAsStringSync(jsonEncode(profile))).path;
+}

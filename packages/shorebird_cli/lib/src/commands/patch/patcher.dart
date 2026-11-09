@@ -145,6 +145,11 @@ More info: ${troubleshootingUrl.toLink()}.
   /// patch command rejects a missing `--release-version` before building.
   bool get requiresReleaseVersionArg => false;
 
+  /// Whether this patcher builds a Dart bytecode interpreter patch, the only
+  /// kind a hardened-diversified toolchain can build (contract v3,
+  /// docs/HARDENING_CONTRACTS.md §11.7).
+  bool get patchesBytecodeInterpreter => false;
+
   /// A validated profile-specific comparison of generated build artifacts.
   ArchiveDiffer? get archiveDifferOverride => null;
 

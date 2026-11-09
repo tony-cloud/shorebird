@@ -1162,6 +1162,8 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
               () =>
                   patcher.releaseManagedPublicKeyPem = 'managed-public-key-pem',
             ).called(1);
+            // Hardened patches stay canonical: no diversification profile.
+            verifyNever(() => artifactBuilder.bytecodeProfile = any());
           },
         );
 
@@ -1259,6 +1261,161 @@ To have signatures checked, remove `patch_verification` from shorebird.yaml (or 
             () => logger.err(any(that: contains('must use https'))),
           ).called(1);
           verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
+        });
+      });
+
+      group('on a hardened-diversified toolchain', () {
+        final toolchainId = 'sha256:${'b' * 64}';
+        late String profilePath;
+        late String profileId;
+
+        ToolchainSecurity diversifiedToolchain({
+          required String id,
+          bool development = false,
+        }) => ToolchainSecurity(
+          profile: SecurityProfile.hardenedDiversified,
+          toolchainId: toolchainId,
+          developmentExceptions: development,
+          releaseRoot: releaseRoot,
+          diversificationProfileId: id,
+        );
+
+        Future<void> expectRefused(String message) async {
+          await expectLater(
+            runWithOverrides(() => command.createPatch(patcher)),
+            throwsA(isA<PreconditionFailedExit>()),
+          );
+          verify(() => logger.err(any(that: contains(message)))).called(1);
+          verifyNever(() => artifactBuilder.securityBuildEnvironment = any());
+          verifyNever(() => artifactBuilder.bytecodeProfile = any());
+          verifyNever(
+            () => patcher.buildPatchArtifact(
+              releaseVersion: any(named: 'releaseVersion'),
+            ),
+          );
+        }
+
+        setUp(() {
+          profilePath = writeDiversificationProfile();
+          profileId = BytecodeProfile.load(profilePath).id;
+          toolchainFloor = diversifiedToolchain(id: profileId);
+          platformEnvironment = {
+            buildManifestSigningKeyEnvironmentVariable:
+                writeBuildManifestSigningKey(),
+            releaseTrustEnvironmentVariable: writeReleaseTrust(),
+            diversificationProfileEnvironmentVariable: profilePath,
+          };
+          when(() => shorebirdEnv.getShorebirdYaml()).thenReturn(
+            const ShorebirdYaml(
+              appId: appId,
+              baseUrl: 'https://updates.example.com',
+            ),
+          );
+          when(
+            () => shorebirdEnv.artifactOrigins,
+          ).thenReturn((mode: ArtifactOriginMode.split, mirrorUrl: null));
+          // The interpreter rule itself is IosInterpreterPatcherMixin's
+          // (ios_patcher_test, macos_patcher_test); the patch flow here is
+          // otherwise the managed Android one.
+          when(() => patcher.patchesBytecodeInterpreter).thenReturn(true);
+          when(
+            () => codePushClientWrapper.getReleaseArtifact(
+              appId: any(named: 'appId'),
+              releaseId: any(named: 'releaseId'),
+              arch: 'aab',
+              platform: ReleasePlatform.android,
+            ),
+          ).thenAnswer(
+            (_) async => ReleaseArtifact(
+              id: aabArtifact.id,
+              releaseId: aabArtifact.releaseId,
+              arch: aabArtifact.arch,
+              platform: aabArtifact.platform,
+              hash: aabArtifact.hash,
+              size: aabArtifact.size,
+              url: aabArtifact.url,
+              canSideload: aabArtifact.canSideload,
+              signing: const ArtifactSigning(
+                mode: 'managed',
+                keyId: 7,
+                publicKeyPem: 'managed-public-key-pem',
+              ),
+            ),
+          );
+        });
+
+        test('passes the diversified variables and the profile', () async {
+          await runWithOverrides(() => command.createPatch(patcher));
+          verify(
+            () => artifactBuilder.securityBuildEnvironment = {
+              'SHOREBIRD_SECURITY_PROFILE': 'hardened-diversified',
+              'SHOREBIRD_TOOLCHAIN_ID': toolchainId,
+              'SHOREBIRD_RELEASE_ROOT': releaseRoot,
+              'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
+              'SHOREBIRD_DIVERSIFICATION_PROFILE_ID': profileId,
+            },
+          ).called(1);
+          final profile =
+              verify(
+                    () => artifactBuilder.bytecodeProfile = captureAny(),
+                  ).captured.single
+                  as BytecodeProfile;
+          expect(profile.id, profileId);
+          expect(profile.path, p.absolute(profilePath));
+        });
+
+        test('a development toolchain patches with the DEVELOPMENT-ONLY '
+            'profile', () async {
+          toolchainFloor = diversifiedToolchain(
+            id: developmentDiversificationProfileId,
+            development: true,
+          );
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable:
+                developmentDiversificationProfilePath,
+          };
+          await runWithOverrides(() => command.createPatch(patcher));
+          verify(() => artifactBuilder.bytecodeProfile = any()).called(1);
+        });
+
+        test('refuses a non-interpreter patch', () async {
+          when(() => patcher.patchesBytecodeInterpreter).thenReturn(false);
+          await expectRefused('can only patch bytecode interpreter releases');
+        });
+
+        test('refuses without SHOREBIRD_DIVERSIFICATION_PROFILE', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable: '',
+          };
+          await expectRefused('Set SHOREBIRD_DIVERSIFICATION_PROFILE');
+        });
+
+        test('refuses a profile the toolchain was not built with', () async {
+          toolchainFloor = diversifiedToolchain(id: 'sha256:${'d' * 64}');
+          await expectRefused('but this toolchain was built with');
+        });
+
+        test('refuses the DEVELOPMENT-ONLY profile on a production '
+            'toolchain', () async {
+          toolchainFloor = diversifiedToolchain(
+            id: developmentDiversificationProfileId,
+          );
+          platformEnvironment = {
+            ...platformEnvironment!,
+            diversificationProfileEnvironmentVariable:
+                developmentDiversificationProfilePath,
+          };
+          await expectRefused('DEVELOPMENT-ONLY');
+        });
+
+        test('still applies the hardened refusals', () async {
+          platformEnvironment = {
+            ...platformEnvironment!,
+            buildManifestSigningKeyEnvironmentVariable: '',
+          };
+          await expectRefused('cannot sign its build manifest');
         });
       });
 

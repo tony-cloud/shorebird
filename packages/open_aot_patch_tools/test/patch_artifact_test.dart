@@ -79,6 +79,7 @@ void main() {
     String? offlineExpiresAt,
     String targetOs = 'windows',
     String runtimeMode = runtimeModeNativeAot,
+    String? bytecodeProfileId,
   }) => PatchMetadata(
     appId: 'app.test',
     appBuildId: '1.0.0+1',
@@ -94,7 +95,88 @@ void main() {
     runtimeMode: runtimeMode,
     obfuscationMapHash: 'obfuscated',
     offlineExpiresAt: offlineExpiresAt,
+    bytecodeProfileId: bytecodeProfileId,
   );
+
+  group('bytecode_profile_id (contract v3)', () {
+    final profileId = 'sha256:${'ab' * 32}';
+
+    EncryptedPatchArtifact encrypt(PatchMetadata metadata) => encryptArtifact(
+      artifact: linkArtifacts(
+        baseSnapshot: const [],
+        patchSnapshot: utf8.encode('bytecode'),
+        metadata: metadata,
+        forceFullSnapshot: true,
+      ),
+      keyId: 'test-key',
+      key: key,
+      nonce: nonce,
+    );
+
+    test('is omitted from canonical envelopes and their AAD', () {
+      final canonical = metadata(
+        runtimeMode: runtimeModeDartBytecodeInterpreter,
+      );
+      expect(canonical.toJson().containsKey('bytecode_profile_id'), isFalse);
+      final encrypted = encrypt(canonical);
+      final json = encrypted.toJson();
+      expect(
+        (json['metadata']! as Map).containsKey('bytecode_profile_id'),
+        isFalse,
+      );
+      expect(
+        (json['encryption']! as Map)['aad_sha256'],
+        sha256Hex(utf8.encode(canonicalJson(canonical.toJson()))),
+      );
+    });
+
+    test('is written, round-trips and is authenticated when set', () {
+      final profiled = metadata(
+        runtimeMode: runtimeModeDartBytecodeInterpreter,
+        bytecodeProfileId: profileId,
+      );
+      final encrypted = encrypt(profiled);
+      final json = jsonDecode(jsonEncode(encrypted.toJson())) as Map;
+      expect((json['metadata'] as Map)['bytecode_profile_id'], profileId);
+      final decoded = EncryptedPatchArtifact.fromJson(json.cast());
+      expect(decoded.metadata.bytecodeProfileId, profileId);
+      expect(
+        utf8.decode(decoded.decrypt(key).reconstruct(const [])),
+        'bytecode',
+      );
+
+      // Removing or changing it changes the AAD, so decryption fails.
+      for (final change in <void Function(Map<String, Object?>)>[
+        (m) => m.remove('bytecode_profile_id'),
+        (m) => m['bytecode_profile_id'] = 'sha256:${'cd' * 32}',
+      ]) {
+        final tampered = jsonDecode(jsonEncode(encrypted.toJson())) as Map;
+        change((tampered['metadata'] as Map).cast());
+        expect(
+          () => EncryptedPatchArtifact.fromJson(tampered.cast()).decrypt(key),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('rejects a malformed id', () {
+      for (final value in <Object?>[
+        null,
+        '',
+        'sha256:${'AB' * 32}',
+        'sha256:${'ab' * 31}',
+        'ab' * 32,
+        7,
+      ]) {
+        final json = metadata().toJson()..['bytecode_profile_id'] = value;
+        expect(
+          () => PatchMetadata.fromJson(json),
+          throwsFormatException,
+          reason: '$value',
+        );
+      }
+    });
+  });
 
   test('encrypts and decrypts flavor-aware patch payloads', () {
     final base = utf8.encode('free');

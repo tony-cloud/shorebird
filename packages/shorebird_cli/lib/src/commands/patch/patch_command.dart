@@ -506,7 +506,7 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
     await patcher.assertPreconditions();
     await patcher.assertArgsAreValid();
     assertSigningArgsValid();
-    _assertHardenedPatchAdmitted(patcher.releaseType.releasePlatform.name);
+    _assertHardenedPatchAdmitted(patcher);
 
     // A new track is created on first publish, so reject a name that
     // `channels create` and `patches set-track` would also reject.
@@ -537,13 +537,19 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
   /// toolchain ID to every `flutter build`. On a legacy toolchain, does
   /// nothing.
   ///
+  /// On a hardened-diversified toolchain (contract v3) the patch must also be
+  /// a bytecode interpreter patch and SHOREBIRD_DIVERSIFICATION_PROFILE must
+  /// name the profile the toolchain was built with, which then encodes the
+  /// patch's bytecode and is bound into its envelope.
+  ///
   // TODO(hardening-p4b): compare with the security_profile, toolchain_id and
   // release root recorded in the release (`security_record`) and have the
   // server reject mismatched patches (docs/HARDENING_CONTRACTS.md §10.9).
   // Until then the toolchain's floor is the only profile the CLI knows.
-  void _assertHardenedPatchAdmitted(String releasePlatform) {
+  void _assertHardenedPatchAdmitted(Patcher patcher) {
+    final releasePlatform = patcher.releaseType.releasePlatform.name;
     final toolchain = loadToolchainSecurityOrExit();
-    if (toolchain.profile != SecurityProfile.hardened) return;
+    if (!toolchain.profile.isHardened) return;
 
     final keyArgs = _customerSigningArgs.where(results.wasParsed);
     if (keyArgs.isNotEmpty) {
@@ -600,8 +606,47 @@ NOTE: this is ${styleBold.wrap('not')} recommended. Asset changes cannot be incl
       throw PreconditionFailedExit(failure);
     }
 
+    BytecodeProfile? bytecodeProfile;
+    if (toolchain.profile == SecurityProfile.hardenedDiversified) {
+      Never refuse(String message, {required String hint}) {
+        final failure = ValidationFailedException(message: message, hint: hint);
+        logger
+          ..err(failure.message)
+          ..info(failure.hint);
+        throw PreconditionFailedExit(failure);
+      }
+
+      if (!patcher.patchesBytecodeInterpreter) {
+        refuse(
+          'This Shorebird toolchain is hardened-diversified, which diversifies '
+          'Dart bytecode, so it can only patch bytecode interpreter releases; '
+          '${patcher.releaseType.releasePlatform.displayName} with this '
+          'configuration is not one.',
+          hint:
+              'Patch an iOS (or macOS full replacement) interpreter release '
+              'with aot_patch_runtime_mode: dart-bytecode-interpreter.',
+        );
+      }
+      try {
+        bytecodeProfile = BytecodeProfile.forToolchain(
+          platform.environment,
+          toolchain,
+        );
+      } on BytecodeProfileException catch (error) {
+        refuse(
+          error.message,
+          hint:
+              'Use the diversification profile of the release '
+              '(${toolchain.diversificationProfileId}).',
+        );
+      }
+    }
+
     _hardenedToolchain = true;
     artifactBuilder.securityBuildEnvironment = toolchain.buildEnvironment;
+    if (bytecodeProfile != null) {
+      artifactBuilder.bytecodeProfile = bytecodeProfile;
+    }
   }
 
   static final _customerSigningArgs = [

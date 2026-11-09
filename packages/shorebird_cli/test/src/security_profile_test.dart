@@ -20,6 +20,9 @@ void main() {
   // A release-root pin (base64 of a canonical release-root payload).
   const releaseRoot = 'eyJjb250cmFjdF92ZXJzaW9uIjoyfQ==';
 
+  // A production diversification profile ID (contract v3).
+  final profileId = 'sha256:${'d' * 64}';
+
   Map<String, Object?> floor({
     String profile = 'hardened',
     Object? toolchainId = '',
@@ -31,11 +34,15 @@ void main() {
     'security_profile': profile,
     'toolchain_id': toolchainId == '' ? hardenedId : toolchainId,
     'development_exceptions': developmentExceptions,
-    if (version == 2) ...{
-      'release_root': profile == 'hardened' ? releaseRoot : null,
+    if (version >= 2) ...{
+      'release_root': profile.startsWith('hardened') ? releaseRoot : null,
       'min_delegations_version': 1,
     },
+    if (version == 3) 'diversification_profile_id': profileId,
   };
+
+  Map<String, Object?> diversifiedFloor() =>
+      floor(profile: 'hardened-diversified', version: 3);
 
   Matcher throwsInvalid(String reason) => throwsA(
     isA<ToolchainSecurityException>().having(
@@ -46,11 +53,21 @@ void main() {
   );
 
   group(SecurityProfile, () {
-    test('parses only the v1 profiles', () {
+    test('parses the contract v3 profiles', () {
       expect(SecurityProfile.tryParse('legacy'), SecurityProfile.legacy);
       expect(SecurityProfile.tryParse('hardened'), SecurityProfile.hardened);
-      expect(SecurityProfile.tryParse('hardened-diversified'), isNull);
+      expect(
+        SecurityProfile.tryParse('hardened-diversified'),
+        SecurityProfile.hardenedDiversified,
+      );
       expect(SecurityProfile.tryParse('Hardened'), isNull);
+      expect(SecurityProfile.tryParse('hardenedDiversified'), isNull);
+      for (final profile in SecurityProfile.values) {
+        expect(SecurityProfile.tryParse(profile.value), profile);
+      }
+      expect(SecurityProfile.legacy.isHardened, isFalse);
+      expect(SecurityProfile.hardened.isHardened, isTrue);
+      expect(SecurityProfile.hardenedDiversified.isHardened, isTrue);
     });
   });
 
@@ -68,6 +85,126 @@ void main() {
           'SHOREBIRD_RELEASE_ROOT': releaseRoot,
           'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
         });
+      });
+
+      test('reads a contract v3 hardened-diversified toolchain', () {
+        final security = ToolchainSecurity.parse(
+          jsonEncode(diversifiedFloor()),
+        );
+        expect(security.profile, SecurityProfile.hardenedDiversified);
+        expect(security.diversificationProfileId, profileId);
+        expect(security.releaseRoot, releaseRoot);
+        expect(security.buildEnvironment, {
+          'SHOREBIRD_SECURITY_PROFILE': 'hardened-diversified',
+          'SHOREBIRD_TOOLCHAIN_ID': hardenedId,
+          'SHOREBIRD_RELEASE_ROOT': releaseRoot,
+          'SHOREBIRD_RELEASE_MIN_DELEGATIONS_VERSION': '1',
+          'SHOREBIRD_DIVERSIFICATION_PROFILE_ID': profileId,
+        });
+      });
+
+      test('hardened and legacy toolchains carry no diversification '
+          'profile', () {
+        for (final document in [
+          floor(),
+          floor(profile: 'legacy', toolchainId: null),
+          floor(profile: 'legacy', toolchainId: null, version: 1),
+        ]) {
+          final security = ToolchainSecurity.parse(jsonEncode(document));
+          expect(security.diversificationProfileId, isNull);
+          expect(
+            security.buildEnvironment.containsKey(
+              'SHOREBIRD_DIVERSIFICATION_PROFILE_ID',
+            ),
+            isFalse,
+          );
+        }
+      });
+
+      group('refuses a contract v3 file', () {
+        final cases = <String, (Map<String, Object?>, String)>{
+          'v1 with diversification_profile_id': (
+            {
+              ...floor(profile: 'legacy', toolchainId: null, version: 1),
+              'diversification_profile_id': 'sha256:${'d' * 64}',
+            },
+            'unknown keys diversification_profile_id',
+          ),
+          'v2 with diversification_profile_id': (
+            {...floor(), 'diversification_profile_id': 'sha256:${'d' * 64}'},
+            'unknown keys diversification_profile_id',
+          ),
+          'v2 hardened-diversified': (
+            floor(profile: 'hardened-diversified'),
+            'needs contract_version 3',
+          ),
+          'v3 without diversification_profile_id': (
+            diversifiedFloor()..remove('diversification_profile_id'),
+            'missing keys diversification_profile_id',
+          ),
+          'v3 hardened': (
+            {...diversifiedFloor(), 'security_profile': 'hardened'},
+            'contract_version 3 is used only by hardened-diversified',
+          ),
+          'v3 legacy': (
+            {
+              ...diversifiedFloor(),
+              'security_profile': 'legacy',
+              'release_root': null,
+            },
+            'contract_version 3 is used only by hardened-diversified',
+          ),
+          'v3 with a null profile id': (
+            {...diversifiedFloor(), 'diversification_profile_id': null},
+            'diversification_profile_id must be',
+          ),
+          'v3 with a malformed profile id': (
+            {
+              ...diversifiedFloor(),
+              'diversification_profile_id': 'sha256:${'D' * 64}',
+            },
+            'diversification_profile_id must be',
+          ),
+          'v3 without a release root': (
+            {...diversifiedFloor(), 'release_root': null},
+            'needs a release_root',
+          ),
+          'v3 without a toolchain_id': (
+            {...diversifiedFloor(), 'toolchain_id': null},
+            'requires a toolchain_id',
+          ),
+          'v3 production with the DEVELOPMENT-ONLY profile': (
+            {
+              ...diversifiedFloor(),
+              'diversification_profile_id': developmentDiversificationProfileId,
+            },
+            'DEVELOPMENT-ONLY',
+          ),
+        };
+        for (final MapEntry(key: name, value: (document, message))
+            in cases.entries) {
+          test(name, () {
+            expect(
+              () => ToolchainSecurity.parse(jsonEncode(document)),
+              throwsInvalid(message),
+            );
+          });
+        }
+      });
+
+      test('a development v3 toolchain may use the DEVELOPMENT-ONLY '
+          'profile', () {
+        final security = ToolchainSecurity.parse(
+          jsonEncode({
+            ...diversifiedFloor(),
+            'development_exceptions': true,
+            'diversification_profile_id': developmentDiversificationProfileId,
+          }),
+        );
+        expect(
+          security.diversificationProfileId,
+          developmentDiversificationProfileId,
+        );
       });
 
       test('passes a raised delegations floor to flutter build', () {
@@ -217,7 +354,7 @@ void main() {
         );
       });
 
-      for (final version in [0, 3, '1', 1.5]) {
+      for (final version in [0, 4, '1', 1.5]) {
         test('rejects contract_version ${jsonEncode(version)}', () {
           expect(
             () => ToolchainSecurity.parse(
@@ -228,7 +365,7 @@ void main() {
         });
       }
 
-      for (final profile in ['hardened-diversified', 'strict', '']) {
+      for (final profile in ['strict', 'hardenedDiversified', '']) {
         test('rejects security_profile "$profile"', () {
           expect(
             () => ToolchainSecurity.parse(jsonEncode(floor(profile: profile))),
@@ -566,15 +703,32 @@ base_url: https://example.com
         ['shorebird_build_manifest'],
       );
     });
+
+    test('reserves diversification_profile_id in checked-in '
+        'shorebird.yaml', () {
+      expect(
+        reservedSecurityKeysIn(
+          'app_id: a\ndiversification_profile_id: sha256:x\n',
+        ),
+        ['diversification_profile_id'],
+      );
+    });
   });
 
   group('readReleaseRecord', () {
     late Directory directory;
 
-    Map<String, Object?> record(String digest, {int delegations = 1}) => {
+    Map<String, Object?> record(
+      String digest, {
+      int delegations = 1,
+      String? diversificationProfileId,
+    }) => {
       'schema': 'open-shorebird.release-record',
-      'contract_version': 2,
-      'security_profile': 'hardened',
+      'contract_version': diversificationProfileId == null ? 2 : 3,
+      'security_profile': diversificationProfileId == null
+          ? 'hardened'
+          : 'hardened-diversified',
+      'diversification_profile_id': ?diversificationProfileId,
       'toolchain_id': hardenedId,
       'development_exceptions': false,
       'release_root_sha256': 'sha256:${'1' * 64}',
@@ -636,6 +790,337 @@ base_url: https://example.com
         () => readReleaseRecord(directory),
         throwsA(isA<ReleaseRecordException>()),
       );
+    });
+
+    group('hardened-diversified (release-record v3)', () {
+      test('merges v3 records for the expected profile', () {
+        write('a.json', record('a' * 64, diversificationProfileId: profileId));
+        write('b.json', record('b' * 64, diversificationProfileId: profileId));
+        final merged = readReleaseRecord(
+          directory,
+          diversificationProfileId: profileId,
+        );
+        expect(merged['contract_version'], 3);
+        expect(merged['security_profile'], 'hardened-diversified');
+        expect(merged['diversification_profile_id'], profileId);
+        expect(merged['build_manifests'], hasLength(2));
+      });
+
+      final otherId = 'sha256:${'e' * 64}';
+      final refused = <String, (Map<String, Object?>, String?)>{
+        'a v2 record for a diversified release': (record('a' * 64), profileId),
+        'a v3 record for another profile': (
+          record('a' * 64, diversificationProfileId: otherId),
+          profileId,
+        ),
+        'a v3 record without the profile id': (
+          record('a' * 64, diversificationProfileId: profileId)
+            ..remove('diversification_profile_id'),
+          profileId,
+        ),
+        'a v3 record that claims hardened': (
+          {
+            ...record('a' * 64, diversificationProfileId: profileId),
+            'security_profile': 'hardened',
+          },
+          profileId,
+        ),
+        'a v3 record for a hardened release': (
+          record('a' * 64, diversificationProfileId: profileId),
+          null,
+        ),
+        'a v2 record naming a profile for a hardened release': (
+          {...record('a' * 64), 'diversification_profile_id': profileId},
+          null,
+        ),
+      };
+      for (final MapEntry(key: name, value: (document, expected))
+          in refused.entries) {
+        test('refuses $name', () {
+          write('a.json', document);
+          expect(
+            () => readReleaseRecord(
+              directory,
+              diversificationProfileId: expected,
+            ),
+            throwsA(isA<ReleaseRecordException>()),
+          );
+        });
+      }
+
+      test('refuses records that disagree on the profile', () {
+        // Both name the expected profile in the shared fields checked per
+        // file, so only the merge can catch a difference elsewhere.
+        write('a.json', record('a' * 64, diversificationProfileId: profileId));
+        write('b.json', {
+          ...record('b' * 64, diversificationProfileId: profileId),
+          'toolchain_id': 'sha256:${'f' * 64}',
+        });
+        expect(
+          () => readReleaseRecord(
+            directory,
+            diversificationProfileId: profileId,
+          ),
+          throwsA(
+            isA<ReleaseRecordException>().having(
+              (e) => e.message,
+              'message',
+              contains('disagree'),
+            ),
+          ),
+        );
+      });
+    });
+  });
+
+  group(BytecodeProfile, () {
+    final developmentFixture = developmentDiversificationProfilePath;
+
+    Map<String, Object?> developmentProfile() =>
+        jsonDecode(File(developmentFixture).readAsStringSync())
+            as Map<String, Object?>;
+
+    String write(Object? document, {String name = 'profile.json'}) {
+      final file = File(p.join(Directory.current.path, name))
+        ..writeAsStringSync(
+          document is String ? document : jsonEncode(document),
+        );
+      return file.path;
+    }
+
+    // A valid production-like profile: the development permutation with
+    // two non-Trap entries swapped.
+    Map<String, Object?> productionProfile() {
+      final profile = developmentProfile();
+      final wires =
+          (profile['bytecode']! as Map<String, Object?>)['wire_opcodes']!
+              as List<Object?>;
+      final first = wires[1];
+      wires[1] = wires[2];
+      wires[2] = first;
+      return profile;
+    }
+
+    ToolchainSecurity toolchainFor(String id, {bool development = false}) =>
+        ToolchainSecurity(
+          profile: SecurityProfile.hardenedDiversified,
+          toolchainId: hardenedId,
+          developmentExceptions: development,
+          releaseRoot: releaseRoot,
+          diversificationProfileId: id,
+        );
+
+    test('computes the reference profile id of the shared fixture', () {
+      // scripts/diversification_profile.py id
+      // scripts/testdata/diversification/profile.DEVELOPMENT-ONLY.json
+      final profile = BytecodeProfile.load(developmentFixture);
+      expect(profile.id, developmentDiversificationProfileId);
+      expect(profile.path, p.absolute(developmentFixture));
+      expect(profile.digest, hasLength(32));
+      expect(
+        profile.digest.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+        developmentDiversificationProfileId.substring('sha256:'.length),
+      );
+    });
+
+    test('the id does not depend on formatting or key order', () {
+      final compact = write(
+        jsonEncode(developmentProfile()),
+        name: 'compact.json',
+      );
+      expect(
+        BytecodeProfile.load(compact).id,
+        developmentDiversificationProfileId,
+      );
+    });
+
+    group('refuses', () {
+      Map<String, Object?> changed(void Function(Map<String, Object?>) change) {
+        final profile = productionProfile();
+        change(profile);
+        return profile;
+      }
+
+      Map<String, Object?> bytecode(Map<String, Object?> profile) =>
+          profile['bytecode']! as Map<String, Object?>;
+
+      List<Object?> wires(Map<String, Object?> profile) =>
+          bytecode(profile)['wire_opcodes']! as List<Object?>;
+
+      final cases = <String, Object?>{
+        'a non-object': <Object>[],
+        'another schema': changed((d) => d['schema'] = 'x'),
+        'another contract version': changed((d) => d['contract_version'] = 2),
+        'a non-null native layout': changed((d) => d['native_layout'] = {}),
+        'a missing native layout': changed((d) => d.remove('native_layout')),
+        'an unknown key': changed((d) => d['extra'] = 1),
+        'another scheme': changed((d) => bytecode(d)['scheme'] = 'x'),
+        'another format version': changed(
+          (d) => bytecode(d)['format_version'] = 2,
+        ),
+        'a malformed opcode table hash': changed(
+          (d) => bytecode(d)['opcode_table_sha256'] = 'A' * 64,
+        ),
+        'an unknown bytecode key': changed((d) => bytecode(d)['extra'] = 1),
+        'a non-permutation': changed((d) => wires(d)[1] = wires(d)[2]),
+        'an out-of-range wire byte': changed(
+          (d) => wires(d)[1] = wires(d).length,
+        ),
+        'a negative wire byte': changed((d) => wires(d)[1] = -1),
+        'a non-integer wire byte': changed((d) => wires(d)[1] = 1.5),
+        'a single opcode': changed(
+          (d) => bytecode(d)['wire_opcodes'] = <int>[0],
+        ),
+        'more than 256 opcodes': changed(
+          (d) => bytecode(d)['wire_opcodes'] = [
+            for (var i = 0; i < 257; i++) (i + 1) % 257,
+          ],
+        ),
+        'Trap moved off wire byte 0': changed((d) {
+          final list = wires(d);
+          final one = list[1];
+          list[1] = list[0];
+          list[0] = one;
+        }),
+        '16 fixed points besides Trap': changed((d) {
+          final list = wires(d);
+          for (var semantic = 1; semantic <= 16; semantic++) {
+            final at = list.indexOf(semantic);
+            list[at] = list[semantic];
+            list[semantic] = semantic;
+          }
+        }),
+      };
+      for (final MapEntry(key: name, value: document) in cases.entries) {
+        test(name, () {
+          final path = write(document);
+          expect(
+            () => BytecodeProfile.load(path),
+            throwsA(
+              isA<BytecodeProfileException>().having(
+                (e) => e.message,
+                'message',
+                contains('is not a diversification profile'),
+              ),
+            ),
+          );
+        });
+      }
+
+      test('a missing file', () {
+        expect(
+          () => BytecodeProfile.load(p.join(Directory.current.path, 'none')),
+          throwsA(
+            isA<BytecodeProfileException>().having(
+              (e) => e.message,
+              'message',
+              contains('cannot be read'),
+            ),
+          ),
+        );
+      });
+
+      test('malformed JSON and duplicate keys', () {
+        final source = jsonEncode(productionProfile());
+        for (final bad in [
+          '{',
+          source.replaceFirst('{', '{"native_layout":null,'),
+          source.replaceFirst(
+            '"scheme"',
+            r'"sch\u0065me":"opcode-permutation-v1","scheme"',
+          ),
+        ]) {
+          expect(
+            () => BytecodeProfile.load(write(bad)),
+            throwsA(
+              isA<BytecodeProfileException>().having(
+                (e) => e.message,
+                'message',
+                contains('is not valid JSON'),
+              ),
+            ),
+            reason: bad.length > 60 ? bad.substring(0, 60) : bad,
+          );
+        }
+      });
+    });
+
+    group('forToolchain', () {
+      test('admits the profile the toolchain was built with', () {
+        final path = write(productionProfile());
+        final id = BytecodeProfile.load(path).id;
+        final profile = BytecodeProfile.forToolchain({
+          diversificationProfileEnvironmentVariable: path,
+        }, toolchainFor(id));
+        expect(profile.id, id);
+        expect(profile.path, path);
+      });
+
+      test('refuses an unset variable', () {
+        for (final environment in [
+          <String, String>{},
+          {diversificationProfileEnvironmentVariable: ''},
+        ]) {
+          expect(
+            () => BytecodeProfile.forToolchain(
+              environment,
+              toolchainFor(profileId),
+            ),
+            throwsA(
+              isA<BytecodeProfileException>().having(
+                (e) => e.message,
+                'message',
+                contains('Set SHOREBIRD_DIVERSIFICATION_PROFILE'),
+              ),
+            ),
+          );
+        }
+      });
+
+      test('refuses a profile the toolchain was not built with', () {
+        final path = write(productionProfile());
+        expect(
+          () => BytecodeProfile.forToolchain({
+            diversificationProfileEnvironmentVariable: path,
+          }, toolchainFor(profileId)),
+          throwsA(
+            isA<BytecodeProfileException>().having(
+              (e) => e.message,
+              'message',
+              contains('but this toolchain was built with $profileId'),
+            ),
+          ),
+        );
+      });
+
+      test('the DEVELOPMENT-ONLY profile needs a development toolchain', () {
+        final environment = {
+          diversificationProfileEnvironmentVariable: developmentFixture,
+        };
+        expect(
+          () => BytecodeProfile.forToolchain(
+            environment,
+            toolchainFor(developmentDiversificationProfileId),
+          ),
+          throwsA(
+            isA<BytecodeProfileException>().having(
+              (e) => e.message,
+              'message',
+              contains('DEVELOPMENT-ONLY'),
+            ),
+          ),
+        );
+        expect(
+          BytecodeProfile.forToolchain(
+            environment,
+            toolchainFor(
+              developmentDiversificationProfileId,
+              development: true,
+            ),
+          ).id,
+          developmentDiversificationProfileId,
+        );
+      });
     });
   });
 }

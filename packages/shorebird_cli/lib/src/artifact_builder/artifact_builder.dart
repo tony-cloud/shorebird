@@ -63,6 +63,12 @@ final artifactBuilderRef = create(ArtifactBuilder.new);
 /// The [ArtifactBuilder] instance available in the current zone.
 ArtifactBuilder get artifactBuilder => read(artifactBuilderRef);
 
+/// The diversification profile admitted for the current release or patch
+/// ([ArtifactBuilder.bytecodeProfile]), or null for a canonical build or
+/// outside a command.
+BytecodeProfile? get admittedBytecodeProfile =>
+    read(artifactBuilderRef, orElse: ArtifactBuilder.new).bytecodeProfile;
+
 /// Builds the environment map for Flutter build subprocesses.
 ///
 /// Merges the public key (if present) with any additional environment
@@ -101,6 +107,12 @@ class ArtifactBuilder {
   /// `shorebird release` and `shorebird patch` once the profile is admitted.
   /// Empty (legacy) unless the release is hardened.
   Map<String, String> securityBuildEnvironment = const {};
+
+  /// The diversification profile of a hardened-diversified release or patch
+  /// (contract v3), set once the profile is admitted. Every dart2bytecode
+  /// invocation then gets `--bytecode-profile`, and bytecode components must
+  /// be `DBP3` for it. Null (canonical) otherwise.
+  BytecodeProfile? bytecodeProfile;
 
   /// A general recommendation when building artifacts fails.
   static String runVanillaFlutterBuildRecommendation(String buildCommand) =>
@@ -882,6 +894,8 @@ Either run `flutter pub get` manually, or follow the steps in ${cannotRunInVSCod
         artifact: ShorebirdArtifact.flutterProductPlatformDill,
       )}',
       '--target=flutter',
+      if (bytecodeProfile case final profile?)
+        '--bytecode-profile=${profile.path}',
       if (structuralUpdates) '--shorebird-structural-patching',
       if (fullReplacement) ...[
         '--shorebird-full-replacement',

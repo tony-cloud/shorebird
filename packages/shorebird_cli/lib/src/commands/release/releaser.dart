@@ -297,6 +297,7 @@ To change the version of this release, change your app's version in your pubspec
       if (targetOS == 'macos') {
         final bundled = open_patch.FullReplacementBundle.decode(
           baseline.readAsBytesSync(),
+          bytecodeProfileDigest: admittedBytecodeProfile?.digest,
         );
         if (!bundled.manifest.isBaseline ||
             bundled.manifest.hostAbiHex != replacementHost!.hostAbi) {

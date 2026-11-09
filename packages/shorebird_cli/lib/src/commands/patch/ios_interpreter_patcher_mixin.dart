@@ -86,6 +86,18 @@ mixin IosInterpreterPatcherMixin on Patcher {
         open_patch.runtimeModeDartBytecodeInterpreter;
   }
 
+  /// iOS with the interpreter runtime declared in shorebird.yaml (and not
+  /// overridden to another mode), or macOS full replacement.
+  @override
+  bool get patchesBytecodeInterpreter {
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    return yaml?.aotPatchRuntimeMode ==
+            open_patch.runtimeModeDartBytecodeInterpreter &&
+        iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter &&
+        (releaseType != ReleaseType.macos ||
+            (yaml?.aotPatchFullReplacement ?? false));
+  }
+
   /// Whether native executable patches were explicitly enabled for development.
   bool get allowsNativeIosAotPatch {
     final value = platform.environment['SHOREBIRD_IOS_NATIVE_AOT_PATCH'];
@@ -167,6 +179,7 @@ $_interpreterPlatform interpreter patch bytecode does not exist: ${bytecodeFile.
       );
       open_patch.FullReplacementBundle.decode(
         patchSnapshot,
+        bytecodeProfileDigest: admittedBytecodeProfile?.digest,
       ).validateUpdateAgainst(released);
     } else if (patchSnapshot.length >= 8 &&
         utf8.decode(patchSnapshot.take(7).toList(), allowMalformed: true) ==
@@ -274,6 +287,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       runtimeMode: open_patch.runtimeModeDartBytecodeInterpreter,
       obfuscationMapHash: _emptyToNull(obfuscationMapHash),
       offlineExpiresAt: offlineExpiresAt,
+      bytecodeProfileId: admittedBytecodeProfile?.id,
     );
     final artifact = open_patch.linkArtifacts(
       baseSnapshot: const [],
@@ -355,6 +369,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       final published =
           open_patch.FullReplacementBundle.decode(
             patchFile.readAsBytesSync(),
+            bytecodeProfileDigest: admittedBytecodeProfile?.digest,
           )..validateUpdateAgainst(
             IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest),
           );
@@ -459,6 +474,7 @@ $_interpreterPlatform interpreter patch payload must be Dart bytecode data, not 
       if (replacementHost != null) {
         open_patch.FullReplacementBundle.decode(
           _projectRelativeFile(configuredBytecodePath).readAsBytesSync(),
+          bytecodeProfileDigest: admittedBytecodeProfile?.digest,
         ).validateUpdateAgainst(
           IosBytecodeBuilder.fullReplacementBaseline(baseline, manifest),
         );

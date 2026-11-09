@@ -199,8 +199,8 @@ of the iOS app that is using this module. (aar and ios-framework only)''',
       )
       ..addOption(
         securityProfileOption,
-        defaultsTo: SecurityProfile.legacy.name,
-        valueHelp: 'legacy|hardened',
+        defaultsTo: SecurityProfile.legacy.value,
+        valueHelp: 'legacy|hardened|hardened-diversified',
         help:
             'The security profile of this release, fixed for all of its '
             'patches.\n'
@@ -209,8 +209,13 @@ of the iOS app that is using this module. (aar and ios-framework only)''',
             'Shorebird-managed patch signing key (no --public-key-path, '
             '--public-key-cmd or --no-patch-signing), and an https base_url '
             'in shorebird.yaml.\n'
-            '"${SecurityProfile.reservedDiversified}" is reserved and not yet '
-            'supported.',
+            'hardened-diversified is hardened plus Dart bytecode encoded with '
+            "the release lineage's diversification profile: it requires a "
+            'hardened-diversified toolchain, '
+            '$diversificationProfileEnvironmentVariable naming the profile it '
+            'was built with, and a bytecode interpreter release (iOS, or macOS '
+            'full replacement, with aot_patch_runtime_mode: '
+            'dart-bytecode-interpreter).',
       );
   }
 
@@ -878,17 +883,12 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
   SecurityProfile get requestedSecurityProfile {
     final value =
         results[securityProfileOption] as String? ??
-        SecurityProfile.legacy.name;
-    if (value == SecurityProfile.reservedDiversified) {
-      usageException(
-        '--$securityProfileOption=$value is reserved for a later version of '
-        'the security contract and is not supported. Use legacy or hardened.',
-      );
-    }
+        SecurityProfile.legacy.value;
     final profile = SecurityProfile.tryParse(value);
     if (profile == null) {
       usageException(
-        '--$securityProfileOption must be legacy or hardened, not "$value".',
+        '--$securityProfileOption must be legacy, hardened or '
+        'hardened-diversified, not "$value".',
       );
     }
     return profile;
@@ -931,26 +931,25 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       );
     }
     if (requested != toolchain.profile) {
-      switch (requested) {
-        case SecurityProfile.hardened:
-          _refuseRelease(
-            '--$securityProfileOption=hardened needs a hardened Shorebird '
-            'toolchain, but this toolchain was not built hardened.',
-            hint:
-                'Release without --$securityProfileOption (legacy), or '
-                'install a Shorebird toolchain built with the hardened '
-                'profile.',
-          );
-        case SecurityProfile.legacy:
-          _refuseRelease(
-            'This Shorebird toolchain is hardened '
-            '(${toolchain.toolchainId}), so it cannot build a legacy '
-            'release.',
-            hint:
-                'Pass --$securityProfileOption=hardened, or use a legacy '
-                'Shorebird toolchain.',
-          );
+      if (toolchain.profile == SecurityProfile.legacy) {
+        _refuseRelease(
+          '--$securityProfileOption=${requested.value} needs a '
+          '${requested.value} Shorebird toolchain, but this toolchain was '
+          'not built hardened.',
+          hint:
+              'Release without --$securityProfileOption (legacy), or '
+              'install a Shorebird toolchain built with the '
+              '${requested.value} profile.',
+        );
       }
+      _refuseRelease(
+        'This Shorebird toolchain is ${toolchain.profile.value} '
+        '(${toolchain.toolchainId}), so it cannot build a ${requested.value} '
+        'release.',
+        hint:
+            'Pass --$securityProfileOption=${toolchain.profile.value}, or use '
+            'a ${requested.value} Shorebird toolchain.',
+      );
     }
 
     if (shorebirdEnv.getShorebirdProjectRoot() case final root?) {
@@ -996,7 +995,7 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
     if (flutterVersion != 'latest' &&
         flutterVersion != shorebirdEnv.flutterRevision) {
       usageException(
-        '--$securityProfileOption=hardened builds with the installed '
+        '--$securityProfileOption=${requested.value} builds with the installed '
         "toolchain's own Flutter (${shorebirdEnv.flutterRevision}), because "
         'its toolchain_id describes only that toolchain. Remove '
         '--flutter-version=$flutterVersion.',
@@ -1034,6 +1033,39 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       );
     }
 
+    // Contract v3 (P5): bytecode encoded with the lineage's profile exists
+    // only for interpreter releases, and the profile must be the one the
+    // toolchain was built with.
+    BytecodeProfile? bytecodeProfile;
+    if (requested == SecurityProfile.hardenedDiversified) {
+      if (!_releasesBytecodeInterpreter(releaser)) {
+        _refuseRelease(
+          '--$securityProfileOption=hardened-diversified diversifies Dart '
+          'bytecode, so it needs a bytecode interpreter release; '
+          '${releaser.releaseType.releasePlatform.displayName} with this '
+          'configuration is not one.',
+          hint:
+              'Release iOS (or macOS with aot_patch_full_replacement) with '
+              'aot_patch_runtime_mode: dart-bytecode-interpreter, or use '
+              '--$securityProfileOption=hardened on a hardened toolchain.',
+        );
+      }
+      try {
+        bytecodeProfile = BytecodeProfile.forToolchain(
+          platform.environment,
+          toolchain,
+        );
+      } on BytecodeProfileException catch (error) {
+        _refuseRelease(
+          error.message,
+          hint:
+              'Set $diversificationProfileEnvironmentVariable to the '
+              "diversification-profile.json of this release's lineage "
+              '(${toolchain.diversificationProfileId}).',
+        );
+      }
+    }
+
     releaser.requireManagedSigning = true;
     final recordDirectory = Directory(
       p.join(
@@ -1052,7 +1084,32 @@ For more information see: ${supportedFlutterVersionsUrl.toLink()}''');
       ...toolchain.buildEnvironment,
       buildManifestRecordDirEnvironmentVariable: recordDirectory.path,
     };
+    if (bytecodeProfile != null) {
+      artifactBuilder.bytecodeProfile = bytecodeProfile;
+      _diversificationProfileId = bytecodeProfile.id;
+    }
   }
+
+  /// Whether [releaser] builds a Dart bytecode interpreter release: iOS with
+  /// the interpreter runtime declared in shorebird.yaml (and not overridden
+  /// to another mode), or macOS full replacement.
+  bool _releasesBytecodeInterpreter(Releaser releaser) {
+    final yaml = shorebirdEnv.getShorebirdYaml();
+    if (yaml?.aotPatchRuntimeMode !=
+        open_patch.runtimeModeDartBytecodeInterpreter) {
+      return false;
+    }
+    return switch (releaser.releaseType) {
+      ReleaseType.ios || ReleaseType.iosFramework =>
+        _iosPatchRuntimeMode == open_patch.runtimeModeDartBytecodeInterpreter,
+      ReleaseType.macos => yaml?.aotPatchFullReplacement ?? false,
+      _ => false,
+    };
+  }
+
+  /// The diversification profile ID of a hardened-diversified release, which
+  /// its release records must carry; null otherwise.
+  String? _diversificationProfileId;
 
   /// Where a hardened release's builds write their release records; null for
   /// legacy releases.
@@ -1453,7 +1510,10 @@ ${summary.join('\n')}
     final directory = releaseRecordDirectory;
     if (directory == null) return null;
     try {
-      return readReleaseRecord(directory);
+      return readReleaseRecord(
+        directory,
+        diversificationProfileId: _diversificationProfileId,
+      );
     } on ReleaseRecordException catch (error) {
       _refuseRelease(
         error.message,

@@ -114,7 +114,8 @@ class UpdateReleaseMetadata extends Equatable {
   /// server consumes the blob as-is.
   final Json? buildTraceSummary;
 
-  /// The hardened release record (`release-record.v2`,
+  /// The hardened release record (`release-record.v2`, or v3 for
+  /// hardened-diversified;
   /// docs/HARDENING_CONTRACTS.md §10): profile, toolchain, release-root and
   /// delegations digests, and the digest of every signed build manifest.
   ///

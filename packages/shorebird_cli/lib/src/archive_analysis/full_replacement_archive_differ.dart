@@ -7,6 +7,7 @@ import 'package:shorebird_cli/src/archive_analysis/apple_archive_differ.dart';
 import 'package:shorebird_cli/src/archive_analysis/apple_zip_validator.dart';
 import 'package:shorebird_cli/src/archive_analysis/file_set_diff.dart';
 import 'package:shorebird_cli/src/archive_analysis/shorebird_native_assets_descriptor.dart';
+import 'package:shorebird_cli/src/artifact_builder/artifact_builder.dart';
 import 'package:shorebird_code_push_protocol/shorebird_code_push_protocol.dart';
 import 'package:yaml/yaml.dart';
 
@@ -205,7 +206,10 @@ class FullReplacementArchiveDiffer extends AppleArchiveDiffer {
             'Replacement baseline asset hash mismatch.',
           );
         }
-        final baseline = FullReplacementBundle.decode(bytes).manifest;
+        final baseline = FullReplacementBundle.decode(
+          bytes,
+          bytecodeProfileDigest: admittedBytecodeProfile?.digest,
+        ).manifest;
         if (!baseline.isBaseline || baseline.hostAbiHex != host) {
           throw const FormatException(
             'Replacement asset must be a baseline bound to its compiled host.',

@@ -134,6 +134,90 @@ void main() {
       });
     }
 
+    group('DBP3 profiled component (contract v3)', () {
+      final digest = List.generate(32, (i) => 0xa0 + i % 16);
+      List<int> profiled({List<int>? withDigest, int version = 3}) => [
+        0x33, 0x50, 0x42, 0x44, // UInt32 LE 0x44425033 'DBP3'
+        version, 0, 0, 0,
+        ...withDigest ?? digest,
+        7, 8, 9,
+      ];
+
+      test('is accepted with the expected digest', () {
+        final bundle = FullReplacementBundle.decode(
+          _wire(component: profiled()),
+          bytecodeProfileDigest: digest,
+        );
+        expect(bundle.component, profiled());
+        expect(bundle.bytecodeProfileDigest, digest);
+        expect(bundle.asBaseline().bytecodeProfileDigest, digest);
+        expect(
+          FullReplacementBundle.decode(
+            bundle.encode(),
+            bytecodeProfileDigest: digest,
+          ).encode(),
+          bundle.encode(),
+        );
+      });
+
+      test('is refused by a canonical build', () {
+        expect(
+          () => FullReplacementBundle.decode(_wire(component: profiled())),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('DBP3'),
+            ),
+          ),
+        );
+      });
+
+      test('a DBC3 component is refused by a diversified build', () {
+        expect(
+          () => FullReplacementBundle.decode(
+            _wire(),
+            bytecodeProfileDigest: digest,
+          ),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('DBC3'),
+            ),
+          ),
+        );
+      });
+
+      final refused = <String, List<int>>{
+        'a different digest': profiled(withDigest: List.filled(32, 1)),
+        'another format version': profiled(version: 4),
+        'a truncated header': profiled().sublist(0, 39),
+        'another magic': [0x33, 0x50, 0x42, 0x45, ...profiled().skip(4)],
+      };
+      for (final MapEntry(key: name, value: component) in refused.entries) {
+        test('refuses $name', () {
+          expect(
+            () => FullReplacementBundle.decode(
+              _wire(component: component),
+              bytecodeProfileDigest: digest,
+            ),
+            throwsFormatException,
+          );
+        });
+      }
+
+      test('refuses an expected digest that is not 32 bytes', () {
+        expect(
+          () => FullReplacementBundle.decode(
+            _wire(component: profiled()),
+            bytecodeProfileDigest: digest.sublist(1),
+          ),
+          throwsFormatException,
+        );
+      });
+    });
+
     test('owns immutable copies of all validated data', () {
       final bytes = _wire();
       final bundle = FullReplacementBundle.decode(bytes);

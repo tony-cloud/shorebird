@@ -18,6 +18,12 @@ const fullReplacementMaxUris = 65536;
 const _magic = [83, 66, 82, 80, 76, 67, 69, 0];
 // UInt32 0x44424333 ('DBC3') in the component's little-endian format.
 const _componentMagic = [0x33, 0x43, 0x42, 0x44];
+// UInt32 0x44425033 ('DBP3'): a component encoded with a diversification
+// profile (contract v3, docs/HARDENING_CONTRACTS.md §11.3). The magic is
+// followed by format version 3 (UInt32) and the 32-byte profile digest.
+const _profiledComponentMagic = [0x33, 0x50, 0x42, 0x44];
+const _profiledComponentVersion = [3, 0, 0, 0];
+const _profiledComponentHeaderSize = 4 + 4 + 32;
 const _headerSize = 24;
 
 /// A complete mutable-library domain, using the SDK replacement v1 format.
@@ -178,23 +184,39 @@ class FullReplacementManifest {
   }
 }
 
-/// A validated SDK full replacement wrapper and its DBC3 component.
+/// A validated SDK full replacement wrapper and its bytecode component.
+///
+/// The component is canonical `DBC3`, or `DBP3` encoded with the
+/// diversification profile whose 32-byte digest is [bytecodeProfileDigest]
+/// (contract v3). Each is accepted only when expected: a `DBP3` component
+/// without an expected digest, a `DBC3` component with one, and a different
+/// digest are refused.
 ///
 /// Validation checks format and digest consistency. It does not authenticate
-/// the publisher or verify bytecode semantics beyond the DBC3 magic.
+/// the publisher or verify bytecode semantics beyond the component header.
 class FullReplacementBundle {
   /// Creates a wrapper after validating the component and its digest.
   FullReplacementBundle({
     required this.manifest,
     required List<int> component,
-  }) : component = _component(component) {
+    List<int>? bytecodeProfileDigest,
+  }) : bytecodeProfileDigest = bytecodeProfileDigest == null
+           ? null
+           : _digest(bytecodeProfileDigest),
+       component = _component(component, bytecodeProfileDigest) {
     if (!_equal(sha256.convert(this.component).bytes, manifest.currentDigest)) {
       throw const FormatException('Replacement component digest mismatch.');
     }
   }
 
   /// Strictly decodes a replacement v1 wrapper, rejecting trailing bytes.
-  factory FullReplacementBundle.decode(List<int> bytes) {
+  ///
+  /// [bytecodeProfileDigest] is the digest of the build's diversification
+  /// profile, or null for a canonical build.
+  factory FullReplacementBundle.decode(
+    List<int> bytes, {
+    List<int>? bytecodeProfileDigest,
+  }) {
     if (bytes.length >
         _headerSize +
             fullReplacementMaxManifest +
@@ -221,14 +243,20 @@ class FullReplacementBundle {
     return FullReplacementBundle(
       manifest: manifest,
       component: reader.take(componentLength),
+      bytecodeProfileDigest: bytecodeProfileDigest,
     );
   }
 
   /// The immutable validated manifest.
   final FullReplacementManifest manifest;
 
-  /// The immutable DBC3 component whose hash equals the current digest.
+  /// The immutable DBC3 or DBP3 component whose hash equals the current
+  /// digest.
   final Uint8List component;
+
+  /// The diversification profile digest the [component] is encoded with, or
+  /// null for a canonical DBC3 component.
+  final Uint8List? bytecodeProfileDigest;
 
   /// Encodes exactly the SDK replacement v1 binary format.
   Uint8List encode() {
@@ -259,6 +287,7 @@ class FullReplacementBundle {
       removedUris: const [],
     ),
     component: component,
+    bytecodeProfileDigest: bytecodeProfileDigest,
   );
 
   /// Binds this update to an original released baseline wrapper.
@@ -289,12 +318,41 @@ Uint8List _digest(List<int> bytes) {
   return _copyBytes(bytes).asUnmodifiableView();
 }
 
-Uint8List _component(List<int> bytes) {
+Uint8List _component(List<int> bytes, List<int>? profileDigest) {
   if (bytes.length < 4 || bytes.length > fullReplacementMaxComponent) {
     throw const FormatException('Invalid replacement component length.');
   }
-  if (!_equal(bytes.sublist(0, 4), _componentMagic)) {
-    throw const FormatException('Invalid replacement DBC3 component magic.');
+  final magic = bytes.sublist(0, 4);
+  if (profileDigest == null) {
+    if (_equal(magic, _profiledComponentMagic)) {
+      throw const FormatException(
+        'Replacement component is DBP3 (diversified), but this build is '
+        'canonical.',
+      );
+    }
+    if (!_equal(magic, _componentMagic)) {
+      throw const FormatException('Invalid replacement DBC3 component magic.');
+    }
+  } else {
+    if (_equal(magic, _componentMagic)) {
+      throw const FormatException(
+        'Replacement component is DBC3 (canonical), but this build is '
+        'diversified.',
+      );
+    }
+    if (!_equal(magic, _profiledComponentMagic) ||
+        bytes.length < _profiledComponentHeaderSize ||
+        !_equal(bytes.sublist(4, 8), _profiledComponentVersion)) {
+      throw const FormatException('Invalid replacement DBP3 component header.');
+    }
+    if (!_equal(
+      bytes.sublist(8, _profiledComponentHeaderSize),
+      profileDigest,
+    )) {
+      throw const FormatException(
+        'Replacement DBP3 component names a different bytecode profile.',
+      );
+    }
   }
   return _copyBytes(bytes).asUnmodifiableView();
 }
